@@ -30,6 +30,39 @@ from tkinter import ttk, filedialog, messagebox
 # -----------------------------
 NODE_EXE = "node"
 BRIDGE_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hc09-bridge", "bridge.js")
+
+# Recent-files list (QoL). Save files are always literally named "USR-DATA",
+# so the useful distinguishing part to show is the parent save folder name
+# (e.g. "BLUS30128-CAREER-TEST"), not the filename itself.
+RECENT_FILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_recent_files.json")
+RECENT_FILES_MAX = 6
+
+def load_recent_files():
+    try:
+        with open(RECENT_FILES_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return [p for p in data if isinstance(p, str)]
+    except Exception:
+        pass
+    return []
+
+def save_recent_file(path):
+    recents = [p for p in load_recent_files() if p != path]
+    recents.insert(0, path)
+    recents = recents[:RECENT_FILES_MAX]
+    try:
+        with open(RECENT_FILES_PATH, "w", encoding="utf-8") as f:
+            json.dump(recents, f)
+    except Exception:
+        pass
+    return recents
+
+def recent_file_display(path):
+    """Show the save folder name (e.g. BLUS30128-CAREER-TEST) since every
+    save file is literally named USR-DATA and wouldn't be distinguishable."""
+    folder = os.path.basename(os.path.dirname(path))
+    return folder or path
 DB_TABLE_FILES = {
     "PLAY": "play.csv",
     "DRPK": "drpk.csv",
@@ -910,6 +943,7 @@ class SwapTradeDialog(tk.Toplevel):
         n2 = self.model.player_name(p2)
 
         swap_players_safe(p1, p2, IMMUTABLE_KEYS)
+        self.parent.mark_dirty()
 
         messagebox.showinfo("Trade complete", f"✅ HC09-SAFE SWAP TRADE COMPLETED\n\n{n1}  ⇄  {n2}")
 
@@ -919,14 +953,18 @@ class SwapTradeDialog(tk.Toplevel):
         self.parent.refresh_picks()
 
 
+BASE_TITLE = "HC09 CSV Editor (GUI) - Safe Trades"
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("HC09 CSV Editor (GUI) - Safe Trades")
+        self.title(BASE_TITLE)
         self.geometry("1320x820")
         self.minsize(1180, 700)
 
         self.model = CSVModel()
+        self.dirty = False  # True whenever there are unsaved edits
 
         self.selected_team_id = tk.StringVar(value="")
         self.selected_player_index = None
@@ -936,6 +974,43 @@ class App(tk.Tk):
         self.contract_year_var = tk.StringVar(value="0")
 
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self.on_close_request)
+
+    # ---------- Unsaved-changes tracking ----------
+    def mark_dirty(self):
+        if not self.dirty:
+            self.dirty = True
+            self.title(BASE_TITLE + " *")
+
+    def clear_dirty(self):
+        if self.dirty:
+            self.dirty = False
+            self.title(BASE_TITLE)
+
+    def on_close_request(self):
+        if self.dirty:
+            choice = messagebox.askyesnocancel(
+                "Unsaved changes",
+                "You have unsaved changes. Save before closing?"
+            )
+            if choice is None:  # Cancel
+                return
+            if choice:  # Yes
+                try:
+                    self.model.save_to_db()
+                except Exception as e:
+                    messagebox.showerror("Save Error", str(e))
+                    return  # don't close if the save failed
+        self.destroy()
+
+    # ---------- Loading feedback ----------
+    def set_busy(self, text):
+        self.lbl_status.configure(text=text)
+        self.config(cursor="watch")
+        self.update_idletasks()
+
+    def clear_busy(self):
+        self.config(cursor="")
 
     # ---------- UI layout ----------
     def _build_ui(self):
@@ -944,6 +1019,17 @@ class App(tk.Tk):
 
         ttk.Button(top, text="Load Save File", command=self.on_load).pack(side="left")
         ttk.Button(top, text="Save to File", command=self.on_save).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Reload from File", command=self.on_reload).pack(side="left", padx=(8, 0))
+
+        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        ttk.Label(top, text="Recent:").pack(side="left")
+        self.recent_files_var = tk.StringVar()
+        self.cmb_recent = ttk.Combobox(top, width=26, state="readonly", textvariable=self.recent_files_var)
+        self.cmb_recent.pack(side="left", padx=(4, 0))
+        self.cmb_recent.bind("<<ComboboxSelected>>", self.on_load_recent)
+        self._recent_display_to_path = {}
+        self._refresh_recent_files_ui(load_recent_files())
 
         ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
 
@@ -991,7 +1077,18 @@ class App(tk.Tk):
         mid = ttk.Frame(root)
         mid.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=6)
 
-        ttk.Label(mid, text="Players on Team (play.csv)").pack(anchor="w")
+        search_frm = ttk.Frame(mid)
+        search_frm.pack(fill="x", pady=(0, 4))
+        ttk.Label(search_frm, text="Find player (any team):").pack(side="left")
+        self.player_search_var = tk.StringVar()
+        self._player_search_after_id = None
+        ent_player_search = ttk.Entry(search_frm, textvariable=self.player_search_var, width=18)
+        ent_player_search.pack(side="left", padx=(4, 4))
+        self.player_search_var.trace_add("write", self._on_player_search_changed)
+        ttk.Button(search_frm, text="Clear", command=self.on_clear_player_search).pack(side="left", padx=(4, 0))
+
+        self.lbl_players_header = ttk.Label(mid, text="Players on Team (play.csv)")
+        self.lbl_players_header.pack(anchor="w")
         self.lst_players = tk.Listbox(mid, height=28, exportselection=False)
         self.lst_players.pack(fill="both", expand=True)
         self.lst_players.bind("<<ListboxSelect>>", self.on_player_select)
@@ -1275,8 +1372,59 @@ class App(tk.Tk):
         self.tree_gm.bind("<Double-1>", lambda e: self._on_tree_double_click(e, self.tree_gm))
 
     # ---------- Load / Save ----------
+    def _confirm_discard_if_dirty(self, action_desc):
+        """If there are unsaved edits, confirm before an action that would discard
+        them (loading a different file, reloading). Returns True to proceed."""
+        if not self.dirty:
+            return True
+        return messagebox.askyesno(
+            "Unsaved changes",
+            f"You have unsaved changes that will be lost if you {action_desc}. Continue anyway?"
+        )
+
+    def _load_db_path(self, db_path):
+        """Shared load logic used by Load Save File, Reload from File, and the
+        recent-files list, so all three stay in sync."""
+        self.set_busy(f"Loading {recent_file_display(db_path)}...")
+        try:
+            self.model.load_all_from_db(db_path)
+        finally:
+            self.clear_busy()
+
+        if not self.model.team_col:
+            messagebox.showwarning(
+                "Team Column Not Found",
+                "Could not detect a team column in the player table (case-sensitive search: TID/TEAM/TMID/TGID)."
+            )
+
+        self.lbl_status.configure(
+            text=f"Loaded: {recent_file_display(db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
+        )
+
+        # enable/disable move-trade button
+        # If team col is TGID, we do NOT want to change it (your requirement).
+        if (self.model.team_col or "") == "TGID":
+            self.btn_move_trade.state(["disabled"])
+        else:
+            self.btn_move_trade.state(["!disabled"])
+
+        self.refresh_teams()
+        self.refresh_picks()
+        self.refresh_cap()
+        self.refresh_trainer()
+        self.refresh_coach()
+        self.refresh_gm()
+        self.refresh_raw_columns()
+        self._select_default_team()
+
+        self.clear_dirty()
+        self._refresh_recent_files_ui(save_recent_file(db_path))
+
     def on_load(self):
         try:
+            if not self._confirm_discard_if_dirty("load a different save"):
+                return
+
             db_path = filedialog.askopenfilename(
                 title="Select your career save file (USR-DATA)",
                 filetypes=[("All files", "*.*")]
@@ -1284,36 +1432,47 @@ class App(tk.Tk):
             if not db_path:
                 return
 
-            self.model.load_all_from_db(db_path)
-
-            if not self.model.team_col:
-                messagebox.showwarning(
-                    "Team Column Not Found",
-                    "Could not detect a team column in the player table (case-sensitive search: TID/TEAM/TMID/TGID)."
-                )
-
-            self.lbl_status.configure(
-                text=f"Loaded: {os.path.basename(db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
-            )
-
-            # enable/disable move-trade button
-            # If team col is TGID, we do NOT want to change it (your requirement).
-            if (self.model.team_col or "") == "TGID":
-                self.btn_move_trade.state(["disabled"])
-            else:
-                self.btn_move_trade.state(["!disabled"])
-
-            self.refresh_teams()
-            self.refresh_picks()
-            self.refresh_cap()
-            self.refresh_trainer()
-            self.refresh_coach()
-            self.refresh_gm()
-            self.refresh_raw_columns()
-            self._select_default_team()
+            self._load_db_path(db_path)
 
         except Exception as e:
+            self.clear_busy()
             messagebox.showerror("Load Error", str(e))
+
+    def on_reload(self):
+        try:
+            if not self.model.db_path:
+                messagebox.showinfo("Nothing loaded", "Load a save file first.")
+                return
+            if not self._confirm_discard_if_dirty("reload from disk"):
+                return
+            self._load_db_path(self.model.db_path)
+        except Exception as e:
+            self.clear_busy()
+            messagebox.showerror("Reload Error", str(e))
+
+    def on_load_recent(self, event=None):
+        display = self.recent_files_var.get()
+        path = self._recent_display_to_path.get(display)
+        if not path:
+            return
+        if not os.path.isfile(path):
+            messagebox.showerror("File not found", f"This save no longer exists:\n{path}")
+            self._refresh_recent_files_ui(load_recent_files())
+            return
+        try:
+            if not self._confirm_discard_if_dirty("load a different save"):
+                return
+            self._load_db_path(path)
+        except Exception as e:
+            self.clear_busy()
+            messagebox.showerror("Load Error", str(e))
+
+    def _refresh_recent_files_ui(self, recents):
+        self._recent_display_to_path = {recent_file_display(p): p for p in recents}
+        values = list(self._recent_display_to_path.keys())
+        self.cmb_recent["values"] = values
+        if values:
+            self.recent_files_var.set(values[0])
 
     def on_save(self):
         try:
@@ -1321,7 +1480,16 @@ class App(tk.Tk):
                 messagebox.showinfo("Nothing to save", "Load a save file first.")
                 return
 
-            backup_path = self.model.save_to_db()
+            self.set_busy("Saving...")
+            try:
+                backup_path = self.model.save_to_db()
+            finally:
+                self.clear_busy()
+
+            self.clear_dirty()
+            self.lbl_status.configure(
+                text=f"Saved: {recent_file_display(self.model.db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
+            )
 
             messagebox.showinfo(
                 "Saved",
@@ -1329,6 +1497,7 @@ class App(tk.Tk):
                 f"Backup of the previous version saved to:\n{backup_path}"
             )
         except Exception as e:
+            self.clear_busy()
             messagebox.showerror("Save Error", str(e))
 
     # ---------- Teams / Players ----------
@@ -1457,7 +1626,69 @@ class App(tk.Tk):
             f"GMs maxed (SKPT + skills): {gm_count}"
         )
 
+    def _on_player_search_changed(self, *_args):
+        """Live search: debounced so a full redraw doesn't happen on every
+        single keystroke while typing fast."""
+        if self._player_search_after_id is not None:
+            self.after_cancel(self._player_search_after_id)
+        self._player_search_after_id = self.after(150, self._run_player_search)
+
+    def _run_player_search(self):
+        self._player_search_after_id = None
+        query = (self.player_search_var.get() or "").strip().lower()
+
+        if not query:
+            self.lbl_players_header.configure(text="Players on Team (play.csv)")
+            self.refresh_players_for_team()
+            return
+
+        if not self.model.players:
+            return
+
+        parts = query.split()
+
+        def match(r):
+            fn = (r.get(PLAYER_FIRST_NAME_CODE, "") or "").lower()
+            ln = (r.get(PLAYER_LAST_NAME_CODE, "") or "").lower()
+            if len(parts) == 2:
+                return parts[0] in fn and parts[1] in ln
+            return query in fn or query in ln
+
+        matches = [(i, r) for i, r in enumerate(self.model.players) if match(r)]
+        matches = sorted(matches, key=lambda item: (
+            (item[1].get(self.model.team_col, "") or "") if self.model.team_col else "",
+            item[1].get(PLAYER_FIRST_NAME_CODE, "").strip(),
+            item[1].get(PLAYER_LAST_NAME_CODE, "").strip()
+        ))
+
+        self.lst_players.delete(0, tk.END)
+        self.selected_player_index = None
+        self.clear_stats_view()
+        self._player_index_map = [i for i, _ in matches]
+
+        for i, r in matches:
+            pos = self.model.player_pos(r)
+            name = self.model.player_name(r)
+            tid = self.model.player_team_id(r)
+            team_name = TEAM_NAMES.get(tid, tid) if tid else "?"
+            self.lst_players.insert(tk.END, f"{pos}  {name}   [{team_name}]")
+
+        self.lbl_players_header.configure(text=f"Search Results ({len(matches)})")
+
+        if self.lst_players.size() > 0:
+            self.lst_players.selection_set(0)
+            self.lst_players.activate(0)
+            self.on_player_select()
+
+    def on_clear_player_search(self):
+        if self._player_search_after_id is not None:
+            self.after_cancel(self._player_search_after_id)
+            self._player_search_after_id = None
+        self.player_search_var.set("")  # triggers _on_player_search_changed -> reverts to team view
+        self.refresh_players_for_team()
+
     def refresh_players_for_team(self):
+        self.lbl_players_header.configure(text="Players on Team (play.csv)")
         self.lst_players.delete(0, tk.END)
         self.selected_player_index = None
         self.clear_stats_view()
@@ -2456,6 +2687,7 @@ class App(tk.Tk):
                     bucket_idx = GM_POTENTIAL_EVAL_BUCKETS.index(bucket)
                     field = GM_POTENTIAL_EVAL_MAX_FIELD if is_max else GM_POTENTIAL_EVAL_CUR_FIELD
                     pe_rows[bucket_idx][field] = str(v)
+                    self.mark_dirty()
                     self.refresh_gm()
                     return
 
@@ -2477,6 +2709,7 @@ class App(tk.Tk):
                     target[idx][colname] = str(v)
                 except Exception:
                     return
+                self.mark_dirty()
                 # refresh appropriate view
                 if tree is self.tree_trainer:
                     self.refresh_trainer()
@@ -2572,6 +2805,38 @@ class App(tk.Tk):
         self.model.players[self.selected_player_index][col] = val
         self.refresh_stats_for_player()
         self.refresh_players_for_team()
+
+# -----------------------------
+# Unsaved-changes tracking: auto-wrap every editing entry point so App.dirty
+# gets set without having to hand-edit each method body. May mark dirty on a
+# no-op edge case (e.g. a validation error before any real change) - that's
+# an acceptable false positive, since under-marking (silently losing edits)
+# would be the far worse failure mode. _do_swap (SwapTradeDialog) and the
+# finish() closure inside _on_tree_double_click aren't App methods, so they
+# call self.mark_dirty()/self.parent.mark_dirty() directly instead - see above.
+# -----------------------------
+_MUTATING_APP_METHODS = [
+    "on_apply_name", "on_apply_stat", "on_apply_both", "on_apply_age_years",
+    "set_contract_salary_to_min", "set_contract_bonus_to_min", "on_apply_contract",
+    "on_move_trade_to_selected_team", "on_acquire_picks", "on_set_team_bonus_min",
+    "on_max_team_staff_skpt", "on_apply_cap", "on_apply_raw_column",
+    "_apply_trainer_skpt", "_apply_coach_skpt", "_apply_gm_skpt",
+    "set_trainer_skpt_to_max", "set_coach_skpt_to_max", "set_gm_skpt_to_max",
+    "on_max_selected_gm", "on_max_selected_trainer", "on_max_selected_coach",
+]
+
+def _wrap_mutating(method):
+    def wrapped(self, *args, **kwargs):
+        result = method(self, *args, **kwargs)
+        self.mark_dirty()
+        return result
+    wrapped.__name__ = method.__name__
+    return wrapped
+
+for _name in _MUTATING_APP_METHODS:
+    setattr(App, _name, _wrap_mutating(getattr(App, _name)))
+del _name
+
 
 if __name__ == "__main__":
     app = App()

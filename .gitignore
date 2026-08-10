@@ -10,3 +10,6 @@ __pycache__/
 USR-DATA*
 test-data/
 *.csv
+
+# Local recent-files list - personal file paths, not repo content
+.hc09_recent_files.json
