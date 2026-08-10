@@ -1,0 +1,15 @@
+{
+  "name": "hc09-bridge",
+  "version": "1.0.0",
+  "description": "Headless CLI for exporting/importing NFL Head Coach 09 (and other TDB-format EA) career save tables, using the madden-file-tools library.",
+  "main": "bridge.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["hc09", "madden", "tdb", "save-editor"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "madden-file-tools": "2.4.13"
+  }
+}

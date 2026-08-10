@@ -1,0 +1,12 @@
+# Node
+hc09-bridge/node_modules/
+
+# Python
+__pycache__/
+*.pyc
+
+# Save files / backups / test data - never commit real save data
+*.bak
+USR-DATA*
+test-data/
+*.csv
