@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 
-const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW'];
+const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK'];
 
 function csvEscape(value) {
     if (value === null || value === undefined) return '';
@@ -116,6 +116,27 @@ async function cmdInspect(args) {
         await table.readRecords();
         const fieldNames = table.fieldDefinitions.map((f) => f.name);
         console.log(`  ${name}: ${table.records.length} records, fields: ${fieldNames.join(', ')}`);
+    }
+}
+
+async function cmdFields(args) {
+    const dbPath = args.db;
+    const tableName = args.table;
+    const helper = await openDb(dbPath);
+    const table = helper.file[tableName];
+    if (!table) {
+        console.error(`No such table: ${tableName}`);
+        process.exit(1);
+    }
+    const defs = table.fieldDefinitions.map((f) => ({
+        name: f.name,
+        type: f.type,
+        offset: f.offset,
+        bits: f.bits,
+    }));
+    defs.sort((a, b) => a.offset - b.offset);
+    for (const d of defs) {
+        console.log(`${d.name}\ttype=${d.type}\toffset=${d.offset}\tbits=${d.bits}`);
     }
 }
 
@@ -276,6 +297,8 @@ async function main() {
     try {
         if (cmd === 'inspect') {
             await cmdInspect(args);
+        } else if (cmd === 'fields') {
+            await cmdFields(args);
         } else if (cmd === 'export') {
             await cmdExport(args);
         } else if (cmd === 'import') {
@@ -283,6 +306,7 @@ async function main() {
         } else {
             console.error('Usage:');
             console.error('  node bridge.js inspect --db <path>');
+            console.error('  node bridge.js fields --db <path> --table <name>');
             console.error('  node bridge.js export --db <path> --out <dir> [--tables PLAY,DRPK,...]');
             console.error('  node bridge.js import --db <path> --in <dir> [--out <path>] [--tables PLAY,DRPK,...]');
             process.exit(1);
