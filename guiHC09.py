@@ -985,7 +985,7 @@ class App(tk.Tk):
         self.lst_teams.pack(fill="y")
         self.lst_teams.bind("<<ListboxSelect>>", self.on_team_select)
         ttk.Button(left, text="Set Team Bonus Min", command=self.on_set_team_bonus_min).pack(anchor="w", pady=(8, 0))
-        ttk.Button(left, text="Max Team Staff SKPT", command=self.on_max_team_staff_skpt).pack(anchor="w", pady=(6, 0))
+        ttk.Button(left, text="Max Team Staff", command=self.on_max_team_staff_skpt).pack(anchor="w", pady=(6, 0))
 
         # Middle: Players
         mid = ttk.Frame(root)
@@ -1402,6 +1402,9 @@ class App(tk.Tk):
         )
 
     def on_max_team_staff_skpt(self):
+        """Max SKPT and every confirmed skill (Trainer/Coach/GM) for every staff
+        member on the selected team - the team-wide version of the per-row
+        'Max Selected X's Stats' buttons on each staff tab."""
         tid = self.selected_team_id.get().strip()
         if not tid:
             messagebox.showinfo("No team", "Select a team first.")
@@ -1410,12 +1413,12 @@ class App(tk.Tk):
         team_name = TEAM_NAMES.get(tid, tid)
         ok = messagebox.askyesno(
             "Confirm team staff max",
-            f"Set SKPT to {STAFF_SKPT_MAX_VALUE} for every trainer, coach, and GM on {team_name}?"
+            f"Max SKPT and all confirmed skills for every trainer, coach, and GM on {team_name}?"
         )
         if not ok:
             return
 
-        def apply_staff_max(rows, headers):
+        def apply_staff_max(rows, headers, field_names):
             headers = set(headers or [])
             if "TGID" not in headers or "SKPT" not in headers:
                 return 0
@@ -1424,12 +1427,23 @@ class App(tk.Tk):
                 if (row.get("TGID", "") or "").strip() != tid:
                     continue
                 row["SKPT"] = str(STAFF_SKPT_MAX_VALUE)
+                for f in field_names:
+                    if f in headers:
+                        _, hi = STAFF_NUMERIC_FIELDS.get(f, (0, 0))
+                        row[f] = str(hi)
                 count += 1
             return count
 
-        trainer_count = apply_staff_max(self.model.trainers, self.model.trainer_headers)
-        coach_count = apply_staff_max(self.model.coaches, self.model.coach_headers)
-        gm_count = apply_staff_max(self.model.gms, self.model.gm_headers)
+        trainer_count = apply_staff_max(self.model.trainers, self.model.trainer_headers, TRAINER_MAXABLE_SKILL_FIELDS)
+        coach_count = apply_staff_max(self.model.coaches, self.model.coach_headers, COACH_MAXABLE_SKILL_FIELDS)
+        gm_count = apply_staff_max(self.model.gms, self.model.gm_headers, GM_MAXABLE_SKILL_FIELDS)
+
+        # GM Potential Evaluation + Rookie Scouting live in a separate table (GMSK)
+        # keyed by row index, so they need their own pass rather than a simple
+        # field-name loop like the other staff types above.
+        for idx, row in enumerate(self.model.gms):
+            if (row.get("TGID", "") or "").strip() == tid:
+                self._max_out_gm_potential_eval(idx)
 
         self.refresh_trainer()
         self.refresh_coach()
@@ -1438,9 +1452,9 @@ class App(tk.Tk):
         messagebox.showinfo(
             "Team staff updated",
             f"{team_name}\n\n"
-            f"Trainers maxed: {trainer_count}\n"
-            f"Coaches maxed: {coach_count}\n"
-            f"GMs maxed: {gm_count}"
+            f"Trainers maxed (SKPT + skills): {trainer_count}\n"
+            f"Coaches maxed (SKPT + skills): {coach_count}\n"
+            f"GMs maxed (SKPT + skills): {gm_count}"
         )
 
     def refresh_players_for_team(self):
