@@ -300,6 +300,14 @@ STAT_META = {
     "PKAC": ("Kick Accuracy", "FG accuracy"),
     "PKRT": ("Kick Return", "Return ability"),
     "PLRN": ("Learning", "Development speed"),
+    # Found via a community reference spreadsheet (Discord: NFL Head Coach modding
+    # server, "HC09_DB_AttributeMapping_2.xlsx"), NOT yet independently in-game
+    # verified the way everything above was. Both are documented as "calculated"
+    # values (Morale from PLYR_EGO, Importance not documented) rather than plain
+    # stored ratings like the others - editing them may get silently overwritten
+    # by the game's own recalculation rather than sticking. Try at your own risk.
+    "PMOR": ("Morale", "Calculated from ego - editing may not persist, unverified"),
+    "PIMP": ("Importance", "Formula undocumented - editing may not persist, unverified"),
 }
 
 # -----------------------------
@@ -354,6 +362,18 @@ STAFF_NUMERIC_FIELDS = {
     # Rookie Scouting were (no test round run on these specifically), but the
     # naming pattern is identical to every other confirmed SK-prefixed pair.
     "SKPX": (1, 5), "SKSM": (1, 5), "SKCM": (1, 5),
+    # POVS (Overall): confirmed on COCH specifically - custom "New Coach" (PNid
+    # 977, save BLUS30128-CAREER-TEST), writing 64 showed as 64 on the coach's
+    # screen, range 0-99. POVS also exists as a column on GMVW/TRVW, but a live
+    # "Max Selected" test showed GM's and Trainer's Overall did NOT respond to
+    # writing/maxing it there - only added to COACH_MAXABLE_SKILL_FIELDS /
+    # refresh_coach's columns, deliberately left out of GM/Trainer's (see those
+    # lists' comments). The other 14 fields from the same "Coach Ratings" screen
+    # group in a third-party editor's config (CCHM/CKNW/CMOT/COFF/CDEF plus 9
+    # per-position CRxx ratings) were written in the same COCH test but NOT
+    # visibly confirmed on any screen checked - inconclusive, not disproven
+    # (could be AI-only backend inputs with no UI surface). Not implemented.
+    "POVS": (0, 99),
     "SKTD": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE), "SKTM": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE),
     "SKNG": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE), "SKNM": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE),
     "TSIE": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE), "TSIM": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE),
@@ -364,13 +384,18 @@ STAFF_NUMERIC_FIELDS = {
 
 # Skill fields maxed out per staff type when "Set to Max" is clicked (besides SKPT).
 # GM_SCOUTING_FIELDS deliberately excluded - their in-game effect is unknown (see note above).
+# POVS (Overall) is confirmed directly stored/displayed on COCH (see below), but
+# a live "Max Selected" test showed GM's and Trainer's Overall did NOT change in
+# response to writing/maxing POVS on their rows - it's evidently computed from
+# their other skills there instead of being a plain stored value like on COCH.
+# So POVS is Coach-only; deliberately excluded here.
 GM_MAXABLE_SKILL_FIELDS = ["SKTD", "SKTM", "SKNG", "SKNM"]
 TRAINER_MAXABLE_SKILL_FIELDS = ["TSIE", "TSIM", "TSRH", "TSRM", "TSFR", "TSFM"]
 # Maxing SKPA and SKPF to 5 also maxes Performance (MIN(SKPA,SKPF) = 5).
 # SKPX/SKSM/SKCM included alongside their current-value partners so maxing a
 # coach also raises the cap on Play Call/Strategy/Chemistry, not just the
 # current value (see STAFF_NUMERIC_FIELDS note above on their unverified status).
-COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPX", "SKPA", "SKPF", "SKST", "SKSM", "SKCR", "SKCM"]
+COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPX", "SKPA", "SKPF", "SKST", "SKSM", "SKCR", "SKCM", "POVS"]
 
 # =============================================================================
 # COACH SKILL INVESTIGATION LOG - ALL 4 NAMED SKILLS NOW CONFIRMED
@@ -455,6 +480,27 @@ COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPX", "SKPA", "SKPF", "SKST", "SKSM", "S
 #     rows deliberately set that way: TE/OL/K/P).
 #   - See COACH_DEV_CATEGORIES / get_coach_development_rows for the
 #     implementation.
+#
+# COACH RATINGS (from a "Coach Ratings" screen grouping found in a third-party
+# editor's own config file, not the community spreadsheet): CCHM (Coach
+# Chemistry), CKNW (Knowledge), CMOT (Motivation), POVS (Overall), COFF/CDEF
+# (Off/Def ratings), and 9 per-position CRxx ratings (CRQB/CRRB/CRWR/CROL/
+# CRDL/CRLB/CRDB/CRKS/CRPS - the same CRxx group already disproven above as a
+# Development candidate, evidently because that was the wrong screen to check
+# against, not because the fields don't do anything at all).
+#   - Tested live on New Coach (PNid 977): only POVS confirmed visible
+#     in-game (writing 64 showed as 64, range 0-99). The other 14 were written
+#     successfully to the file but not visibly confirmed on any screen
+#     checked - inconclusive, NOT disproven (could be backend/AI-only inputs
+#     with no UI surface, e.g. affecting CPU coach hiring/performance
+#     simulation rather than anything a human GM sees). Only POVS is
+#     implemented in the UI; the other 14 are left alone pending further
+#     investigation if picked back up.
+#   - POVS also exists as a column on GMVW and TRVW (GM/Trainer), but "Max
+#     Selected" was tried on both live and their displayed Overall did NOT
+#     change - unlike COCH, it's evidently computed from their other skills
+#     rather than a plain stored/displayed value there. POVS is Coach-only
+#     in the UI (COACH_MAXABLE_SKILL_FIELDS / refresh_coach) for this reason.
 # =============================================================================
 
 # Friendly column headers for the raw field codes above.
@@ -466,6 +512,7 @@ STAFF_FIELD_LABELS = {
     "TSFR": "Fatigue Rec Cur", "TSFM": "Fatigue Rec Max",
     "SKPC": "Play Call Cur", "SKST": "Strategy Cur", "SKCR": "Chemistry Cur",
     "SKPX": "Play Call Max", "SKSM": "Strategy Max", "SKCM": "Chemistry Max",
+    "POVS": "Overall",  # POVS also appears on GMVW/TRVW rows, not just COCH
     "SKPA": "Perf. Input A", "SKPF": "Perf. Input B",
     # GM_SCOUTING_FIELDS (CBMP, FBMP, etc.) intentionally have NO label here -
     # disproven as "Potential Evaluation" (see comment above), true purpose
@@ -535,6 +582,8 @@ PLAYER_MAX_HARDCODED = {
     "PKAC": "PKAX",
     "PKRT": "PKRX",
     "PLRN": "PLRX",
+    "PMOR": "PMOX",  # documented as fixed at 99 for everyone
+    "PIMP": "PIMX",
 }
 
 # -----------------------------
@@ -2547,7 +2596,7 @@ class App(tk.Tk):
         # (SKPC=Play Call, SKST=Strategy, SKCR=Team Chemistry all directly
         # editable; SKPA+SKPF feed Performance=MIN(SKPA,SKPF), not independently
         # meaningful). See the investigation log above COACH_MAXABLE_SKILL_FIELDS.
-        desired = ["TGID", "CFNM", "CLNM", "SKPT", "SKPC", "SKPX", "SKST", "SKSM", "SKCR", "SKCM", "SKPA", "SKPF"]
+        desired = ["TGID", "CFNM", "CLNM", "SKPT", "SKPC", "SKPX", "SKST", "SKSM", "SKCR", "SKCM", "SKPA", "SKPF", "POVS"]
         headers = [h for h in desired if h in (self.model.coach_headers or [])]
         if not headers:
             headers = self.model.coach_headers
