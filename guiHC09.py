@@ -1247,7 +1247,7 @@ class App(tk.Tk):
         self.ent_cap = ttk.Entry(frm, width=18)
         self.ent_cap.grid(row=0, column=1, sticky="w", padx=8)
         ttk.Button(frm, text="Set to Max", command=self.set_cap_to_max).grid(row=0, column=2, sticky="w", padx=4)
-        ttk.Button(frm, text="Click to apply changes (max 2,147,483,647)", command=self.on_apply_cap).grid(row=0, column=3, sticky="w", padx=4)
+        ttk.Button(frm, text="Click to apply changes (max 260,000,000 - higher freezes the game)", command=self.on_apply_cap).grid(row=0, column=3, sticky="w", padx=4)
 
         self.lbl_cap_status = ttk.Label(root, text="Load slri.csv to edit cap.")
         self.lbl_cap_status.pack(anchor="w", padx=10, pady=(8, 0))
@@ -2725,9 +2725,13 @@ class App(tk.Tk):
         entry.bind("<Escape>", lambda e: finish(False))
 
     def set_cap_to_max(self):
-        """Auto-fill the salary cap entry field with maximum value (signed 32-bit max; the unsigned max wraps negative in-game)."""
+        """Auto-fill the salary cap entry field with the real in-game max. NOT the
+        signed 32-bit ceiling (2,147,483,647) - confirmed via the NFL Head Coach
+        Discord server that going above 260,000,000 FREEZES THE GAME (worse than
+        the earlier-fixed negative-wrap issue). 260,000,000 is also what at least
+        one other community tool independently caps its salary cap editor at."""
         self.ent_cap.delete(0, tk.END)
-        self.ent_cap.insert(0, "2147483647")
+        self.ent_cap.insert(0, "260000000")
 
     def on_apply_cap(self):
         if not self.model.salaries:
@@ -2753,9 +2757,10 @@ class App(tk.Tk):
             # Remember original for comparison
             orig_v = v
             
-            # Clamp to allowed range (0–2,147,483,647 = 0x7FFFFFFF, the signed 32-bit max;
-            # going above this wraps negative since the field is read as a signed int)
-            v = max(0, min(2_147_483_647, v))
+            # Clamp to 0-260,000,000 - confirmed via the community Discord that going
+            # above 260 million FREEZES THE GAME (not just a display/wrap issue like
+            # the raw signed-int ceiling of 2,147,483,647 would allow past this point).
+            v = max(0, min(260_000_000, v))
             
             # Update model
             cap_row = self.model.salaries[0]
