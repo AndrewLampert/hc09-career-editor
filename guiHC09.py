@@ -71,12 +71,36 @@ DB_TABLE_FILES = {
     "COCH": "coch.csv",
     "GMVW": "gmvw.csv",
     "GMSK": "gmsk.csv",
+    "CSKL": "cskl.csv",
+}
+
+# PPGR ("Position Skill Map") is a literal position-bucket code stored on each
+# row of the GMSK and CSKL tables - NOT a row-storage-order convention. Cracked
+# via a community reference spreadsheet (Discord: NFL Head Coach modding
+# server, "HC EDITOR TRANSLATE.xlsx" -> VALUE TRANSLATION sheet's own
+# PPGR/TRANS code columns), then independently confirmed: cross-referencing
+# Jim Andrews' (Bears GM) GMSK PPGR values against his already-confirmed
+# Potential Evaluation bucket order reproduced the exact same 0-9 mapping the
+# spreadsheet documents. Further confirmed live (custom "New Coach" PNid 977 +
+# Falcons GM PNid 2061, save BLUS30128-CAREER-TEST): writing a distinct
+# 1-2-3-4-5-repeating pattern to every PPGR row across all 3 Coach Development
+# categories and both GM GMSK stats landed on exactly the right position on
+# every screen after a full RPCS3 restart (including confirming the game
+# clamps a displayed "current" down to "max" whenever current > max, which is
+# exactly what showed up on the rows deliberately set that way). Row STORAGE
+# order is NOT consistent between records (confirmed: Jauron's CSKL rows and
+# Andrews' GMSK rows were ordered differently despite both using this same
+# PPGR scheme) - always look up by each row's own PPGR field, never assume a
+# fixed position ordering.
+PPGR_TO_POSITION = {
+    "0": "QB", "1": "RB", "2": "WR", "3": "TE", "4": "OL",
+    "5": "DL", "6": "LB", "7": "DB", "8": "K", "9": "P",
 }
 
 # GM "Potential Evaluation" scouting skill, confirmed in-game (see conversation
 # history for the verification): lives in the separate GMSK table, joined to
 # GMVW via PNid. SKRE = current value, SKRM = max. Each GM has a fixed block of
-# 10 GMSK rows (one per position bucket) in this exact alphabetical order.
+# 10 GMSK rows (one per position bucket, identified via PPGR - see above).
 # Some GMs (freshly appointed, never invested in this skill) have zero rows.
 GM_POTENTIAL_EVAL_BUCKETS = ["DB", "DL", "K", "LB", "OL", "P", "QB", "RB", "TE", "WR"]
 GM_POTENTIAL_EVAL_CUR_FIELD = "SKRE"
@@ -86,27 +110,27 @@ GM_POTENTIAL_EVAL_MAX_VALUE = 5
 
 # GM "Rookie Scouting" - a SEPARATE stat from Potential Evaluation (confirmed:
 # they can differ, e.g. WR showed 5 vs 4 in one save). Lives in the same GMSK
-# table/row-block as Potential Evaluation, but SKSX = current value (confirmed:
-# the distribution of values written matched the distribution shown in-game
-# across two test rounds). SKSC was a candidate for "max" but couldn't be
-# confirmed independently - every test showed cur==max, likely because this
-# GM had SKPT=0 (no banked scouting points), so max may just equal current
-# whenever there's nothing to invest. The row-to-bucket ORDER for Rookie
-# Scouting is NOT the same as Potential Evaluation's (confirmed: writing the
-# same per-row test pattern produced different per-bucket results) and hasn't
-# been solved - so no per-bucket columns/editing here, only a reliable
-# "max everything uniformly" action (proven: setting all 10 rows to the same
-# value makes every bucket show that value, regardless of the unsolved order).
-GM_ROOKIE_SCOUTING_CUR_FIELD = "SKSX"
-GM_ROOKIE_SCOUTING_MAX_FIELD = "SKSC"
+# table/row-block as Potential Evaluation. Field pairing was originally coded
+# backwards (SKSX assumed current, SKSC assumed max) - corrected per the same
+# community reference spreadsheet that cracked PPGR (see above) and confirmed
+# live on the Falcons GM (PNid 2061): SKSC = current, SKSX = potential/max.
+# The row-to-bucket order question that used to block per-bucket editing is
+# moot now - PPGR gives the bucket directly (see PPGR_TO_POSITION).
+GM_ROOKIE_SCOUTING_CUR_FIELD = "SKSC"
+GM_ROOKIE_SCOUTING_MAX_FIELD = "SKSX"
+GM_ROOKIE_SCOUTING_MIN_VALUE = 1
 GM_ROOKIE_SCOUTING_MAX_VALUE = 5
 
 # Synthetic (not real file field codes) tree column keys for the GM tab's
-# Potential Evaluation cur/max columns, one pair per position bucket.
+# Potential Evaluation and Rookie Scouting cur/max columns, one pair per
+# position bucket.
 GM_POTENTIAL_EVAL_COLUMNS = []
+GM_ROOKIE_SCOUTING_COLUMNS = []
 for _b in GM_POTENTIAL_EVAL_BUCKETS:
     GM_POTENTIAL_EVAL_COLUMNS.append(f"PE_{_b}_C")
     GM_POTENTIAL_EVAL_COLUMNS.append(f"PE_{_b}_M")
+    GM_ROOKIE_SCOUTING_COLUMNS.append(f"RS_{_b}_C")
+    GM_ROOKIE_SCOUTING_COLUMNS.append(f"RS_{_b}_M")
 del _b
 
 def parse_pe_column(colname):
@@ -117,6 +141,49 @@ def parse_pe_column(colname):
     if len(parts) != 3 or parts[1] not in GM_POTENTIAL_EVAL_BUCKETS or parts[2] not in ("C", "M"):
         return None
     return parts[1], parts[2] == "M"
+
+def parse_rs_column(colname):
+    """Return (bucket, is_max) for a synthetic RS_xx_C/RS_xx_M column, else None."""
+    if not colname.startswith("RS_"):
+        return None
+    parts = colname.split("_")
+    if len(parts) != 3 or parts[1] not in GM_POTENTIAL_EVAL_BUCKETS or parts[2] not in ("C", "M"):
+        return None
+    return parts[1], parts[2] == "M"
+
+# Coach "Development" skills (Physical/Intangible/Learning), 3 categories x 10
+# position buckets, confirmed in-game via the same PPGR-keyed CSKL table used
+# by GM's Potential Evaluation/Rookie Scouting. Field pairs per the community
+# reference spreadsheet, confirmed live (custom "New Coach", PNid 977): a
+# distinct value pattern written to every position row across all 3
+# categories matched exactly in-game after a full restart, including the
+# current>max clamping behavior on the rows deliberately set that way.
+COACH_DEV_CATEGORIES = {
+    # 2-letter code -> (current field, max/potential field, display name)
+    "PH": ("SKPD", "SKPM", "Physical"),
+    "IN": ("SKID", "SKIM", "Intangible"),
+    "LR": ("SKLD", "SKLM", "Learning"),
+}
+COACH_DEV_MIN_VALUE = 1
+COACH_DEV_MAX_VALUE = 5
+
+# Synthetic tree column keys for the Coach tab's Development columns:
+# DV_<cat>_<bucket>_C / DV_<cat>_<bucket>_M, one pair per category per bucket.
+COACH_DEV_COLUMNS = []
+for _cat in COACH_DEV_CATEGORIES:
+    for _b in GM_POTENTIAL_EVAL_BUCKETS:
+        COACH_DEV_COLUMNS.append(f"DV_{_cat}_{_b}_C")
+        COACH_DEV_COLUMNS.append(f"DV_{_cat}_{_b}_M")
+del _cat, _b
+
+def parse_dev_column(colname):
+    """Return (cat, bucket, is_max) for a synthetic DV_xx_yy_C/M column, else None."""
+    if not colname.startswith("DV_"):
+        return None
+    parts = colname.split("_")
+    if len(parts) != 4 or parts[1] not in COACH_DEV_CATEGORIES or parts[2] not in GM_POTENTIAL_EVAL_BUCKETS or parts[3] not in ("C", "M"):
+        return None
+    return parts[1], parts[2], parts[3] == "M"
 
 # -----------------------------
 # CONSTANTS / METADATA
@@ -279,6 +346,14 @@ STAFF_NUMERIC_FIELDS = {
     # SKPA/SKPF: NOT independently meaningful - they're the two inputs to
     # Performance's real formula (Performance = MIN(SKPA, SKPF)).
     "SKPC": (1, 5), "SKPA": (1, 5), "SKPF": (1, 5), "SKST": (1, 5), "SKCR": (1, 5),
+    # SKPX/SKSM/SKCM: the "potential"/max partners for Play Call/Strategy/Team
+    # Chemistry - previously unknown to exist (the UI just showed a flat 5 for
+    # max on these 3). Found via the same community reference spreadsheet that
+    # cracked PPGR/CSKL/Rookie Scouting (see PPGR_TO_POSITION comment above).
+    # Not yet independently in-game verified the way the Development stats and
+    # Rookie Scouting were (no test round run on these specifically), but the
+    # naming pattern is identical to every other confirmed SK-prefixed pair.
+    "SKPX": (1, 5), "SKSM": (1, 5), "SKCM": (1, 5),
     "SKTD": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE), "SKTM": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE),
     "SKNG": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE), "SKNM": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE),
     "TSIE": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE), "TSIM": (STAFF_SKILL_MIN_VALUE, STAFF_SKILL_MAX_VALUE),
@@ -292,7 +367,10 @@ STAFF_NUMERIC_FIELDS = {
 GM_MAXABLE_SKILL_FIELDS = ["SKTD", "SKTM", "SKNG", "SKNM"]
 TRAINER_MAXABLE_SKILL_FIELDS = ["TSIE", "TSIM", "TSRH", "TSRM", "TSFR", "TSFM"]
 # Maxing SKPA and SKPF to 5 also maxes Performance (MIN(SKPA,SKPF) = 5).
-COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPA", "SKPF", "SKST", "SKCR"]
+# SKPX/SKSM/SKCM included alongside their current-value partners so maxing a
+# coach also raises the cap on Play Call/Strategy/Chemistry, not just the
+# current value (see STAFF_NUMERIC_FIELDS note above on their unverified status).
+COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPX", "SKPA", "SKPF", "SKST", "SKSM", "SKCR", "SKCM"]
 
 # =============================================================================
 # COACH SKILL INVESTIGATION LOG - ALL 4 NAMED SKILLS NOW CONFIRMED
@@ -343,44 +421,10 @@ COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPA", "SKPF", "SKST", "SKCR"]
 #     named skills).
 #   - "CHEM" (used in earlier versions of this script for Team Chemistry):
 #     doesn't exist as a real column in COCH at all. Was silently a no-op.
-#   - CSKL table (5040 rows, exactly 10 per coach, PNid-linked): looked
-#     exactly like GMSK's structure (which WAS the real answer for GM
-#     Potential Evaluation), same rigorous unique-(SKID,SKLM)-pair-per-row
-#     test as the one that cracked GMSK - zero effect in-game.
 #   - PH/FS/HS-suffix field groups in COCH (e.g. QBPH/QBFS/QBHS, one set of
 #     10 position-coded fields each): zero effect in-game.
 #   - CPSE and PSSK tables (also PNid-linked): New Coach has zero rows in
 #     either, can't even be tested against him.
-#   - PHYSICAL/INTANGIBLES/LEARNING DEVELOPMENT (per position, like GM's
-#     Potential Evaluation - 3 categories x 10 positions = 30 stats,
-#     confirmed via in-game UI to exist: Head Coach role sees all 10
-#     positions per category; OC sees offensive only, DC defensive only,
-#     position coaches see just their one position). EXHAUSTIVELY searched
-#     and NOT found:
-#       * Every position-coded field group that exists anywhere in COCH -
-#         MP, PP, PH, FP, FS, HS (each a full 10-position set) plus the
-#         7-member CRxx-suffix group (CRDB/CRLB/CRQB/CRRB/CRDL/CROL/CRWR) -
-#         tested individually AND all 80 fields combined at once, set to 5
-#         simultaneously for New Coach (Head Coach role). Zero effect on any
-#         of the 3 categories in-game, in every combination tried.
-#       * All other PNid-linked tables (CCAL, DEID, PRCO, QITM, CAPH, CAPP,
-#         OWNR, PLPR, TSCI): either empty for New Coach or don't fit (see
-#         above for CPSE/PSSK/CSKL specifically).
-#       * Whether CPID/CDID (other ID-looking fields on the COCH row) could
-#         be an alternate lookup key into some other table: both turned out
-#         to be identical across every coach on the same team (CPID=3,
-#         CDID=4 for all 11 Bills coaches) - not unique per-coach IDs, so
-#         not a valid lookup key at all.
-#       * A full scan of every table in the file for a record count that's a
-#         clean multiple of the coach roster size (352 in COACHTEST) - only
-#         CSKL matched, and it's separately disproven above.
-#     CONCLUSION: the field(s) backing these 30 stats were not found via any
-#     file-based/static approach tried so far. If picking this back up,
-#     static analysis of this file is likely exhausted - would need actual
-#     RPCS3 memory inspection while the game runs (a fundamentally different,
-#     much heavier investigation than everything else in this file, which
-#     was all done via save-file edits) to make further progress. Not
-#     implemented in the UI at all - there's nothing to point at yet.
 #   - CFDA, CFFA, CFUC, CFRE, CFDP, CFRP, CFFR, CFRR, CFEX: turned out to be
 #     1-bit boolean flags (writing 2-5 silently truncated to 0/1), ruling them
 #     out as 1-5 skill values entirely.
@@ -389,15 +433,28 @@ COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPA", "SKPF", "SKST", "SKCR"]
 #     2-5 correctly), all individually disproven once SKCR/SKST were isolated
 #     as the real answer via unique-value elimination rounds.
 #
-# GM Rookie Scouting (separate from this Coach investigation, see
-# GM_ROOKIE_SCOUTING_CUR_FIELD above) has a similar still-unsolved piece: SKSX
-# is confirmed as the current-value field, but its per-bucket row order within
-# GMSK is NOT the same as Potential Evaluation's (DB,DL,K,LB,OL,P,QB,RB,TE,WR)
-# and was never solved - "Set to Max" works around this by setting all 10
-# rows uniformly rather than needing to know which row is which bucket. If
-# resuming that search, the elimination method that cracked Strategy/Chemistry
-# above (unique value per candidate, then negative-control rounds to rule out
-# false positives) is the proven approach to reuse.
+# PHYSICAL/INTANGIBLE/LEARNING DEVELOPMENT - SOLVED (was "exhaustively
+# searched and not found" via COCH field scanning; the real answer was in
+# CSKL all along, just paired wrong in the first attempt):
+#   - The original CSKL test paired SKID (Intangible Development current)
+#     with SKLM (Learning Development *potential*) as a supposed unique
+#     current/max pair - two different stats' fields mismatched. Writing to a
+#     nonsense pairing like that produces exactly the kind of "zero visible
+#     effect" result that was observed, without CSKL itself being wrong.
+#   - Cracked via a community reference spreadsheet (Discord: NFL Head Coach
+#     modding server, "HC EDITOR TRANSLATE.xlsx"), which gives CSKL's real
+#     field layout: SKPD/SKPM (Physical current/max), SKID/SKIM (Intangible
+#     current/max), SKLD/SKLM (Learning current/max), plus PPGR (a literal
+#     position-bucket code, see PPGR_TO_POSITION above) and PNid.
+#   - CONFIRMED live: custom "New Coach" (PNid 977, save
+#     BLUS30128-CAREER-TEST), a distinct 1-2-3-4-5-repeating value pattern
+#     written identically across all 3 categories for every PPGR row (0-9)
+#     matched exactly on the in-game Development screens after a full RPCS3
+#     restart - including confirming the game clamps a displayed "current"
+#     down to "max" whenever current > max (exactly what showed up on the
+#     rows deliberately set that way: TE/OL/K/P).
+#   - See COACH_DEV_CATEGORIES / get_coach_development_rows for the
+#     implementation.
 # =============================================================================
 
 # Friendly column headers for the raw field codes above.
@@ -407,18 +464,27 @@ STAFF_FIELD_LABELS = {
     "TSIE": "Injury Eval Cur", "TSIM": "Injury Eval Max",
     "TSRH": "Rehab Cur", "TSRM": "Rehab Max",
     "TSFR": "Fatigue Rec Cur", "TSFM": "Fatigue Rec Max",
-    "SKPC": "Play Call", "SKST": "Strategy", "SKCR": "Team Chemistry",
+    "SKPC": "Play Call Cur", "SKST": "Strategy Cur", "SKCR": "Chemistry Cur",
+    "SKPX": "Play Call Max", "SKSM": "Strategy Max", "SKCM": "Chemistry Max",
     "SKPA": "Perf. Input A", "SKPF": "Perf. Input B",
     # GM_SCOUTING_FIELDS (CBMP, FBMP, etc.) intentionally have NO label here -
     # disproven as "Potential Evaluation" (see comment above), true purpose
     # unknown. Shown by raw field code via the STAFF_FIELD_LABELS.get(h, h)
     # fallback wherever they're displayed.
 }
-# Confirmed Potential Evaluation columns (from the separate GMSK table).
+# Confirmed Potential Evaluation + Rookie Scouting columns (from GMSK).
 for _b in GM_POTENTIAL_EVAL_BUCKETS:
     STAFF_FIELD_LABELS[f"PE_{_b}_C"] = f"{_b} PE Cur"
     STAFF_FIELD_LABELS[f"PE_{_b}_M"] = f"{_b} PE Max"
+    STAFF_FIELD_LABELS[f"RS_{_b}_C"] = f"{_b} RS Cur"
+    STAFF_FIELD_LABELS[f"RS_{_b}_M"] = f"{_b} RS Max"
 del _b
+# Confirmed Coach Development columns (from CSKL).
+for _cat, (_cur, _mx, _catname) in COACH_DEV_CATEGORIES.items():
+    for _b in GM_POTENTIAL_EVAL_BUCKETS:
+        STAFF_FIELD_LABELS[f"DV_{_cat}_{_b}_C"] = f"{_b} {_catname[:3]} Cur"
+        STAFF_FIELD_LABELS[f"DV_{_cat}_{_b}_M"] = f"{_b} {_catname[:3]} Max"
+del _cat, _cur, _mx, _catname, _b
 
 # -----------------------------
 # HARD-CODED MAX columns (matches YOUR header dump)
@@ -581,9 +647,12 @@ class CSVModel:
         self.coach_headers = []    # list[str]
         self.gms = []              # list[dict]
         self.gm_headers = []       # list[str]
-        self.gmsk = []              # list[dict] - GM "Potential Evaluation" scouting rows (joined via PNid)
+        self.gmsk = []              # list[dict] - GM "Potential Evaluation"/"Rookie Scouting" rows (joined via PNid)
         self.gmsk_headers = []      # list[str]
         self.gmsk_path = ""
+        self.cskl = []              # list[dict] - Coach "Development" (Physical/Intangible/Learning) rows (joined via PNid)
+        self.cskl_headers = []      # list[str]
+        self.cskl_path = ""
 
         self.team_col = None
         self.max_map = {}
@@ -630,6 +699,7 @@ class CSVModel:
         self.coach_path = os.path.join(tmp_dir, DB_TABLE_FILES["COCH"])
         self.gm_path = os.path.join(tmp_dir, DB_TABLE_FILES["GMVW"])
         self.gmsk_path = os.path.join(tmp_dir, DB_TABLE_FILES["GMSK"])
+        self.cskl_path = os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"])
 
         self._finish_load()
 
@@ -653,6 +723,8 @@ class CSVModel:
             self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["GMVW"]), self.gms, self.gm_headers)
         if self.gmsk:
             self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["GMSK"]), self.gmsk, self.gmsk_headers)
+        if self.cskl:
+            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"]), self.cskl, self.cskl_headers)
 
         backup_path = self.db_path + ".bak"
         shutil.copy2(self.db_path, backup_path)
@@ -732,6 +804,7 @@ class CSVModel:
         self.coaches, self.coach_headers = self.load_csv(self.coach_path) if self.coach_path else ([], [])
         self.gms, self.gm_headers = self.load_csv(self.gm_path) if self.gm_path else ([], [])
         self.gmsk, self.gmsk_headers = self.load_csv(self.gmsk_path) if self.gmsk_path else ([], [])
+        self.cskl, self.cskl_headers = self.load_csv(self.cskl_path) if self.cskl_path else ([], [])
 
         if not self.players:
             raise ValueError("play.csv loaded 0 players/rows.")
@@ -775,15 +848,39 @@ class CSVModel:
             return
         row[self.team_col] = str(tid)
 
-    def get_gm_potential_eval_rows(self, pnid):
-        """Return the GM's 10 GMSK rows in bucket order (DB,DL,K,LB,OL,P,QB,RB,TE,WR),
-        or [] if this GM has no rows populated yet (freshly appointed GMs can have none)."""
+    def _rows_by_position(self, table_rows, pnid):
+        """Return {position_bucket: row} for a PPGR-linked table (GMSK or CSKL),
+        keyed by each row's own PPGR field (see PPGR_TO_POSITION) - NOT by
+        file/insertion order, which is confirmed inconsistent between records
+        (e.g. Jauron's CSKL rows and Andrews' GMSK rows were stored in
+        different physical orders despite using the same PPGR scheme)."""
         if not pnid:
-            return []
-        matching = [r for r in self.gmsk if (r.get("PNid", "") or "").strip() == str(pnid)]
-        if len(matching) != len(GM_POTENTIAL_EVAL_BUCKETS):
-            return []
-        return matching
+            return {}
+        result = {}
+        for r in table_rows:
+            if (r.get("PNid", "") or "").strip() != str(pnid):
+                continue
+            bucket = PPGR_TO_POSITION.get((r.get("PPGR", "") or "").strip())
+            if bucket:
+                result[bucket] = r
+        return result
+
+    def get_gm_potential_eval_rows(self, pnid):
+        """Return {bucket: GMSK row} for this GM's Potential Evaluation + Rookie
+        Scouting data (both stats live on the same GMSK rows), or {} if this GM
+        has no rows populated yet (freshly appointed GMs can have none)."""
+        rows = self._rows_by_position(self.gmsk, pnid)
+        if len(rows) != len(GM_POTENTIAL_EVAL_BUCKETS):
+            return {}
+        return rows
+
+    def get_coach_development_rows(self, pnid):
+        """Return {bucket: CSKL row} for this coach's Physical/Intangible/Learning
+        Development data, or {} if not populated (see get_gm_potential_eval_rows)."""
+        rows = self._rows_by_position(self.cskl, pnid)
+        if len(rows) != len(GM_POTENTIAL_EVAL_BUCKETS):
+            return {}
+        return rows
 
 # -----------------------------
 # GUI
@@ -1310,12 +1407,14 @@ class App(tk.Tk):
 
         # Help text reflects what's actually confirmed in-game (verified via direct testing).
         help_text = (
-            "Play Call (SKPC), Strategy (SKST), Team Chemistry (SKCR): each confirmed - the exact value you "
-            "write is exactly what shows in-game. Range 1-5.\n\n"
+            "Play Call (SKPC/SKPX), Strategy (SKST/SKSM), Team Chemistry (SKCR/SKCM): current/max pairs, "
+            "confirmed - the exact value you write is exactly what shows in-game. Range 1-5.\n\n"
             "Performance is NOT a single stored field - it's computed as MIN(SKPA, SKPF), confirmed across "
             "multiple in-game tests. Set both to 5 to max Performance; 'Max Selected Coach's Stats' does this "
             "automatically. Editing SKPA/SKPF alone won't show a predictable Performance number unless both are "
-            "raised together."
+            "raised together.\n\n"
+            "Physical/Intangible/Learning Development (right side, 10 position buckets each): confirmed via "
+            "in-game testing. If current > max, the game clamps the displayed current value down to max."
         )
         # place the help below the top controls so it wraps across full width
         # place help in its own frame below the controls so it can span the full width
@@ -1349,9 +1448,10 @@ class App(tk.Tk):
         ttk.Button(top, text="Max Selected GM's Stats", command=self.on_max_selected_gm).pack(side="left", padx=(8, 0))
 
         help_text = (
-            "Trade/Contract and Potential Eval (per position) are editable below - double-click a cell, "
-            "or use 'Max Selected GM's Stats' to max everything (Trade, Contract, Potential Eval, and Rookie "
-            "Scouting) for the selected GM at once. Blank PE cells mean this GM has no data yet."
+            "Trade/Contract, Potential Eval (PE), and Rookie Scouting (RS) - each per position - are all "
+            "editable below, double-click a cell, or use 'Max Selected GM's Stats' to max everything at once "
+            "for the selected GM. Blank PE/RS cells mean this GM has no data yet. If current > max, the game "
+            "clamps the displayed current value down to max."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -1613,6 +1713,11 @@ class App(tk.Tk):
         for idx, row in enumerate(self.model.gms):
             if (row.get("TGID", "") or "").strip() == tid:
                 self._max_out_gm_potential_eval(idx)
+
+        # Same story for Coach Development, which lives in CSKL.
+        for idx, row in enumerate(self.model.coaches):
+            if (row.get("TGID", "") or "").strip() == tid:
+                self._max_out_coach_development(idx)
 
         self.refresh_trainer()
         self.refresh_coach()
@@ -2312,27 +2417,50 @@ class App(tk.Tk):
         self._reselect(self.tree_trainer, iid)
 
     def set_coach_skpt_to_max(self):
-        """Auto-fill coach SKPT entry field with maximum value (131071) and max out this coach's skills."""
+        """Auto-fill coach SKPT entry field with maximum value (131071) and max out this
+        coach's skills (including Development, for whichever position buckets are populated)."""
         self.ent_coach_skpt.delete(0, tk.END)
         self.ent_coach_skpt.insert(0, "131071")
         iid = self._max_out_staff_skills(self.tree_coach, self.model.coaches, COACH_MAXABLE_SKILL_FIELDS)
+
+        sel = self.tree_coach.selection()
+        if sel:
+            try:
+                self._max_out_coach_development(int(sel[0]))
+            except Exception:
+                pass
+
         self.refresh_coach()
         self._reselect(self.tree_coach, iid)
 
     def _max_out_gm_potential_eval(self, gm_idx):
-        """Max out the selected GM's Potential Evaluation AND Rookie Scouting (all 10 GMSK
-        rows), if populated. Rookie Scouting's per-bucket order isn't confirmed, but setting
-        every row to the max uniformly is reliable regardless (proven via in-game testing)."""
+        """Max out the selected GM's Potential Evaluation AND Rookie Scouting for
+        all 10 position buckets, if populated (confirmed via in-game testing,
+        including the correct SKSC/SKSX pairing - see GM_ROOKIE_SCOUTING_CUR_FIELD)."""
         try:
             gm_row = self.model.gms[gm_idx]
         except (IndexError, TypeError):
             return
         pe_rows = self.model.get_gm_potential_eval_rows(gm_row.get("PNid"))
-        for pe_row in pe_rows:
+        for pe_row in pe_rows.values():
             pe_row[GM_POTENTIAL_EVAL_CUR_FIELD] = str(GM_POTENTIAL_EVAL_MAX_VALUE)
             pe_row[GM_POTENTIAL_EVAL_MAX_FIELD] = str(GM_POTENTIAL_EVAL_MAX_VALUE)
             pe_row[GM_ROOKIE_SCOUTING_CUR_FIELD] = str(GM_ROOKIE_SCOUTING_MAX_VALUE)
             pe_row[GM_ROOKIE_SCOUTING_MAX_FIELD] = str(GM_ROOKIE_SCOUTING_MAX_VALUE)
+
+    def _max_out_coach_development(self, coach_idx):
+        """Max out the selected coach's Physical/Intangible/Learning Development
+        for all 10 position buckets, if populated (confirmed via in-game testing -
+        see COACH_DEV_CATEGORIES)."""
+        try:
+            coach_row = self.model.coaches[coach_idx]
+        except (IndexError, TypeError):
+            return
+        dev_rows = self.model.get_coach_development_rows(coach_row.get("PNid"))
+        for dev_row in dev_rows.values():
+            for cur_field, max_field, _name in COACH_DEV_CATEGORIES.values():
+                dev_row[cur_field] = str(COACH_DEV_MAX_VALUE)
+                dev_row[max_field] = str(COACH_DEV_MAX_VALUE)
 
     def set_gm_skpt_to_max(self):
         """Auto-fill GM SKPT entry field with maximum value (131071) and max out this GM's skills
@@ -2375,14 +2503,16 @@ class App(tk.Tk):
         self._reselect(self.tree_trainer, iid)
 
     def on_max_selected_coach(self):
-        """Max out ALL of this coach's confirmed stats: Play Call (SKPC), Strategy (SKST),
-        Team Chemistry (SKCR), and Performance (MIN(SKPA, SKPF), so setting both to 5 maxes
-        it). See the investigation log above COACH_MAXABLE_SKILL_FIELDS for how each was found."""
+        """Max out ALL of this coach's confirmed stats: Play Call (SKPC/SKPX), Strategy
+        (SKST/SKSM), Team Chemistry (SKCR/SKCM), Performance (MIN(SKPA, SKPF), so setting
+        both to 5 maxes it), and Physical/Intangible/Learning Development for all 10
+        position buckets. See the investigation log above COACH_MAXABLE_SKILL_FIELDS."""
         sel = self.tree_coach.selection()
         if not sel:
             messagebox.showinfo("No selection", "Select a coach row first.")
             return
         iid = self._max_out_staff_skills(self.tree_coach, self.model.coaches, COACH_MAXABLE_SKILL_FIELDS)
+        self._max_out_coach_development(int(sel[0]))
         self.refresh_coach()
         self._reselect(self.tree_coach, iid)
 
@@ -2417,10 +2547,16 @@ class App(tk.Tk):
         # (SKPC=Play Call, SKST=Strategy, SKCR=Team Chemistry all directly
         # editable; SKPA+SKPF feed Performance=MIN(SKPA,SKPF), not independently
         # meaningful). See the investigation log above COACH_MAXABLE_SKILL_FIELDS.
-        desired = ["TGID", "CFNM", "CLNM", "SKPT", "SKPC", "SKST", "SKCR", "SKPA", "SKPF"]
+        desired = ["TGID", "CFNM", "CLNM", "SKPT", "SKPC", "SKPX", "SKST", "SKSM", "SKCR", "SKCM", "SKPA", "SKPF"]
         headers = [h for h in desired if h in (self.model.coach_headers or [])]
         if not headers:
             headers = self.model.coach_headers
+
+        # Confirmed Development columns, joined from CSKL via PNid
+        has_pnid = "PNid" in (self.model.coach_headers or [])
+        show_dev = has_pnid and bool(self.model.cskl)
+        if show_dev:
+            headers = headers + COACH_DEV_COLUMNS
 
         # Build filtering predicate from search box (supports "first last" or just first or last)
         q = (self.coach_search_var.get() or "").strip().lower() if hasattr(self, 'coach_search_var') else ""
@@ -2458,15 +2594,21 @@ class App(tk.Tk):
         self.tree_coach["columns"] = headers or []
         for h in headers or []:
             self.tree_coach.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
-            self.tree_coach.column(h, width=140, anchor="w")
+            self.tree_coach.column(h, width=70 if h in COACH_DEV_COLUMNS else 140, anchor="w")
 
         # Insert rows using original model indices as iids
         for idx, r in rows:
             vals = []
+            dev_rows = self.model.get_coach_development_rows(r.get("PNid")) if show_dev else {}
             for h in headers or []:
                 if h == "TGID":
                     tid = (r.get("TGID", "") or "").strip()
                     vals.append(f"{tid}: {TEAM_NAMES.get(tid, tid)}" if tid else "")
+                elif h in COACH_DEV_COLUMNS:
+                    cat, bucket, is_max = parse_dev_column(h)
+                    cur_field, max_field, _name = COACH_DEV_CATEGORIES[cat]
+                    row = dev_rows.get(bucket)
+                    vals.append(row.get(max_field if is_max else cur_field, "") if row else "")
                 else:
                     vals.append((r.get(h, "") or ""))
             self.tree_coach.insert("", tk.END, iid=str(idx), values=vals)
@@ -2521,11 +2663,11 @@ class App(tk.Tk):
             self._populate_tree_with_rows(self.tree_gm, self.model.gm_headers, self.model.gms)
             return
 
-        # Confirmed Potential Evaluation columns, joined from GMSK via PNid
+        # Confirmed Potential Evaluation + Rookie Scouting columns, joined from GMSK via PNid
         has_pnid = "PNid" in (self.model.gm_headers or [])
         show_pe = has_pnid and bool(self.model.gmsk)
         if show_pe:
-            headers = headers + GM_POTENTIAL_EVAL_COLUMNS
+            headers = headers + GM_POTENTIAL_EVAL_COLUMNS + GM_ROOKIE_SCOUTING_COLUMNS
 
         # Prepare rows as (model_idx, row) for sorting
         rows = list(enumerate(self.model.gms))
@@ -2546,23 +2688,26 @@ class App(tk.Tk):
         self.tree_gm["columns"] = headers
         for h in headers:
             self.tree_gm.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
-            self.tree_gm.column(h, width=70 if h in GM_POTENTIAL_EVAL_COLUMNS else (110 if h in STAFF_FIELD_LABELS else 160), anchor="w")
+            is_bucket_col = h in GM_POTENTIAL_EVAL_COLUMNS or h in GM_ROOKIE_SCOUTING_COLUMNS
+            self.tree_gm.column(h, width=70 if is_bucket_col else (110 if h in STAFF_FIELD_LABELS else 160), anchor="w")
 
         for idx, r in rows:
             vals = []
-            pe_rows = self.model.get_gm_potential_eval_rows(r.get("PNid")) if show_pe else []
+            pe_rows = self.model.get_gm_potential_eval_rows(r.get("PNid")) if show_pe else {}
             for h in headers:
                 if h == "TGID":
                     tid = (r.get("TGID", "") or "").strip()
                     vals.append(f"{tid}: {TEAM_NAMES.get(tid, tid)}" if tid else "")
                 elif h in GM_POTENTIAL_EVAL_COLUMNS:
                     bucket, is_max = parse_pe_column(h)
-                    if pe_rows:
-                        bucket_idx = GM_POTENTIAL_EVAL_BUCKETS.index(bucket)
-                        field = GM_POTENTIAL_EVAL_MAX_FIELD if is_max else GM_POTENTIAL_EVAL_CUR_FIELD
-                        vals.append(pe_rows[bucket_idx].get(field, ""))
-                    else:
-                        vals.append("")  # this GM has no Potential Eval data yet
+                    row = pe_rows.get(bucket)
+                    field = GM_POTENTIAL_EVAL_MAX_FIELD if is_max else GM_POTENTIAL_EVAL_CUR_FIELD
+                    vals.append(row.get(field, "") if row else "")
+                elif h in GM_ROOKIE_SCOUTING_COLUMNS:
+                    bucket, is_max = parse_rs_column(h)
+                    row = pe_rows.get(bucket)
+                    field = GM_ROOKIE_SCOUTING_MAX_FIELD if is_max else GM_ROOKIE_SCOUTING_CUR_FIELD
+                    vals.append(row.get(field, "") if row else "")
                 else:
                     vals.append((r.get(h, "") or ""))
             self.tree_gm.insert("", tk.END, iid=str(idx), values=vals)
@@ -2625,9 +2770,12 @@ class App(tk.Tk):
             return
         colname = cols[col_idx]
         is_pe_column = tree is self.tree_gm and parse_pe_column(colname) is not None
+        is_rs_column = tree is self.tree_gm and parse_rs_column(colname) is not None
+        is_dev_column = tree is self.tree_coach and parse_dev_column(colname) is not None
         # Allow editing any known staff numeric column (SKPT, coach 1-7 fields, GM/trainer skill pairs)
-        # or a GM Potential Evaluation column (lives in a different table, handled specially below).
-        if not is_pe_column and colname not in STAFF_NUMERIC_FIELDS:
+        # or a GM Potential Evaluation/Rookie Scouting or Coach Development column (each lives in a
+        # different table, handled specially below).
+        if not is_pe_column and not is_rs_column and not is_dev_column and colname not in STAFF_NUMERIC_FIELDS:
             return
 
         bbox = tree.bbox(rowid, column=col)
@@ -2671,24 +2819,57 @@ class App(tk.Tk):
                 except Exception:
                     return
 
-                if is_pe_column:
-                    # Potential Evaluation lives in a different table (GMSK),
-                    # joined to this GM row via PNid - not a same-row field.
-                    v = max(GM_POTENTIAL_EVAL_MIN_VALUE, min(GM_POTENTIAL_EVAL_MAX_VALUE, v))
+                if is_pe_column or is_rs_column:
+                    # Potential Evaluation / Rookie Scouting live in a different table
+                    # (GMSK), joined to this GM row via PNid - not a same-row field.
+                    # Looked up by each row's own PPGR field, not by list position
+                    # (see get_gm_potential_eval_rows / PPGR_TO_POSITION).
                     gm_row = self.model.gms[idx]
                     pe_rows = self.model.get_gm_potential_eval_rows(gm_row.get("PNid"))
                     if not pe_rows:
                         messagebox.showinfo(
                             "No data",
-                            "This GM has no Potential Evaluation data populated yet (fresh/never-invested GMs have no GMSK rows)."
+                            "This GM has no Potential Evaluation / Rookie Scouting data populated yet (fresh/never-invested GMs have no GMSK rows)."
                         )
                         return
-                    bucket, is_max = parse_pe_column(colname)
-                    bucket_idx = GM_POTENTIAL_EVAL_BUCKETS.index(bucket)
-                    field = GM_POTENTIAL_EVAL_MAX_FIELD if is_max else GM_POTENTIAL_EVAL_CUR_FIELD
-                    pe_rows[bucket_idx][field] = str(v)
+                    if is_pe_column:
+                        bucket, is_max = parse_pe_column(colname)
+                        lo, hi = GM_POTENTIAL_EVAL_MIN_VALUE, GM_POTENTIAL_EVAL_MAX_VALUE
+                        field = GM_POTENTIAL_EVAL_MAX_FIELD if is_max else GM_POTENTIAL_EVAL_CUR_FIELD
+                    else:
+                        bucket, is_max = parse_rs_column(colname)
+                        lo, hi = GM_ROOKIE_SCOUTING_MIN_VALUE, GM_ROOKIE_SCOUTING_MAX_VALUE
+                        field = GM_ROOKIE_SCOUTING_MAX_FIELD if is_max else GM_ROOKIE_SCOUTING_CUR_FIELD
+                    v = max(lo, min(hi, v))
+                    row = pe_rows.get(bucket)
+                    if row is None:
+                        return
+                    row[field] = str(v)
                     self.mark_dirty()
                     self.refresh_gm()
+                    return
+
+                if is_dev_column:
+                    # Development lives in a different table (CSKL), joined to this
+                    # coach row via PNid, looked up by each row's own PPGR field
+                    # (see get_coach_development_rows / PPGR_TO_POSITION).
+                    v = max(COACH_DEV_MIN_VALUE, min(COACH_DEV_MAX_VALUE, v))
+                    coach_row = self.model.coaches[idx]
+                    dev_rows = self.model.get_coach_development_rows(coach_row.get("PNid"))
+                    if not dev_rows:
+                        messagebox.showinfo(
+                            "No data",
+                            "This coach has no Development data populated yet (fresh/never-invested coaches have no CSKL rows)."
+                        )
+                        return
+                    cat, bucket, is_max = parse_dev_column(colname)
+                    cur_field, max_field, _name = COACH_DEV_CATEGORIES[cat]
+                    row = dev_rows.get(bucket)
+                    if row is None:
+                        return
+                    row[max_field if is_max else cur_field] = str(v)
+                    self.mark_dirty()
+                    self.refresh_coach()
                     return
 
                 # Determine clamp range
