@@ -72,7 +72,31 @@ DB_TABLE_FILES = {
     "GMVW": "gmvw.csv",
     "GMSK": "gmsk.csv",
     "CSKL": "cskl.csv",
+    "TEAM": "team.csv",
 }
+
+# TMSA (Team Salary Cap, on the TEAM table, keyed by TGID): confirmed via a
+# live test - editing a player's contract updates their own displayed cap hit
+# correctly, but the team-wide "Team Salary Cap" / "Salary Cap Room" numbers
+# on the Team Roadmap screen do NOT update to match unless TMSA is updated too
+# (confirmed: bumped Keith Brooking's (Falcons LB) cap hit by +$3.0M in-game,
+# his own card correctly showed the new number after a restart, but Team
+# Salary Cap stayed frozen at the old value). TMSA is in units of $10,000
+# (confirmed: TMSA=4953 for the Falcons matches the displayed "$49.53M").
+# "Salary Cap Room" is NOT separately stored - it's NFL cap (SCAD, in the
+# SLRI table, raw dollars, e.g. 116000000) minus TMSA*10000, computed live
+# (confirmed: 11600 - 4953 = 6647, matching the displayed "$66.47M" exactly).
+TEAM_SALARY_CAP_FIELD = "TMSA"
+TEAM_SALARY_CAP_UNIT = 10000  # 1 TMSA unit = $10,000
+
+def format_cap_dollars(raw_units):
+    """Format a raw PSA/PSB/TMSA-style unit value (1 unit = $10,000) as a
+    plain comma-separated dollar amount, e.g. 40 -> '$400,000'."""
+    try:
+        dollars = int(raw_units) * TEAM_SALARY_CAP_UNIT
+    except (TypeError, ValueError):
+        return "?"
+    return f"${dollars:,}"
 
 # PPGR ("Position Skill Map") is a literal position-bucket code stored on each
 # row of the GMSK and CSKL tables - NOT a row-storage-order convention. Cracked
@@ -711,6 +735,9 @@ class CSVModel:
         self.cskl = []              # list[dict] - Coach "Development" (Physical/Intangible/Learning) rows (joined via PNid)
         self.cskl_headers = []      # list[str]
         self.cskl_path = ""
+        self.team = []              # list[dict] - one row per team (real teams + Free Agents/Secret/Draft/etc pools), keyed by TGID
+        self.team_headers = []      # list[str]
+        self.team_path = ""
 
         self.team_col = None
         self.max_map = {}
@@ -758,6 +785,7 @@ class CSVModel:
         self.gm_path = os.path.join(tmp_dir, DB_TABLE_FILES["GMVW"])
         self.gmsk_path = os.path.join(tmp_dir, DB_TABLE_FILES["GMSK"])
         self.cskl_path = os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"])
+        self.team_path = os.path.join(tmp_dir, DB_TABLE_FILES["TEAM"])
 
         self._finish_load()
 
@@ -783,6 +811,8 @@ class CSVModel:
             self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["GMSK"]), self.gmsk, self.gmsk_headers)
         if self.cskl:
             self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"]), self.cskl, self.cskl_headers)
+        if self.team:
+            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["TEAM"]), self.team, self.team_headers)
 
         backup_path = self.db_path + ".bak"
         shutil.copy2(self.db_path, backup_path)
@@ -863,6 +893,7 @@ class CSVModel:
         self.gms, self.gm_headers = self.load_csv(self.gm_path) if self.gm_path else ([], [])
         self.gmsk, self.gmsk_headers = self.load_csv(self.gmsk_path) if self.gmsk_path else ([], [])
         self.cskl, self.cskl_headers = self.load_csv(self.cskl_path) if self.cskl_path else ([], [])
+        self.team, self.team_headers = self.load_csv(self.team_path) if self.team_path else ([], [])
 
         if not self.players:
             raise ValueError("play.csv loaded 0 players/rows.")
@@ -939,6 +970,27 @@ class CSVModel:
         if len(rows) != len(GM_POTENTIAL_EVAL_BUCKETS):
             return {}
         return rows
+
+    def get_team_row(self, tgid):
+        """Return the TEAM table row for this TGID (holds TMSA, the team's
+        stored salary cap total - see TEAM_SALARY_CAP_FIELD), or None."""
+        if not tgid:
+            return None
+        for r in self.team:
+            if (r.get("TGID", "") or "").strip() == str(tgid):
+                return r
+        return None
+
+    def adjust_team_salary_cap(self, tgid, delta_units):
+        """Add delta_units (same $10,000 units as TMSA/PCSA/PTSA) to a team's
+        stored cap total, clamped at 0. No-op if the TEAM table isn't loaded
+        or this TGID has no row (e.g. TEAM table wasn't in the export)."""
+        row = self.get_team_row(tgid)
+        if row is None:
+            return False
+        cur = safe_int(row.get(TEAM_SALARY_CAP_FIELD, "0")) or 0
+        row[TEAM_SALARY_CAP_FIELD] = str(max(0, cur + delta_units))
+        return True
 
 # -----------------------------
 # GUI
@@ -1108,6 +1160,334 @@ class SwapTradeDialog(tk.Toplevel):
         self.parent.refresh_picks()
 
 
+# Source pools for signing - deliberately NOT the full 34-entry TEAM_NAMES list.
+# Moving a player directly between two REAL teams via raw TGID write is a
+# different, untested scenario (stale contract data, roster-size effects, etc.)
+# - this dialog is scoped to exactly what was confirmed: pulling a player out
+# of Free Agents/the Secret pool onto a real team, mirroring the exact fields
+# a real in-game "cut" reverses (see SIGN_CONTRACT_FIELDS comment below).
+SIGN_SOURCE_POOLS = [("1009", "Free Agents"), ("1013", "Secret/Hidden Pool")]
+SIGN_DEST_TEAMS = [(tid, name) for tid, name in TEAM_NAMES.items() if tid not in ("1009", "1013", "1015")]
+
+
+class SignFreeAgentDialog(tk.Toplevel):
+    """
+    Sign a player out of Free Agents / the Secret pool onto a real team with a
+    new contract - the reverse of an in-game "cut", confirmed field-for-field
+    two ways:
+      1. A live before/after diff (cut Jason Snelling, PGID 28126, in-game,
+         compared play.csv before vs after) confirmed the core fields: TGID
+         (team -> 1009 Free Agents), PPTI ("Acquired From" -> the releasing
+         team, i.e. it records who most recently let the player go), PCON
+         (contract length -> 0), PCYL (years left -> 0), and the used PSA
+         salary slots -> 0.
+      2. PCSA/PTSA/PVSB's exact formulas were reverse-engineered from a real
+         mid-contract player's data (Keith Brooking, Falcons LB: PCON=7,
+         PCYL=2). PCSA (649) exactly equals PSA[5]+PSB[5], where 5 =
+         PCON-PCYL (i.e. the CURRENT year's salary+bonus combined, not
+         always year 0 - a player mid-contract is past year 0). PTSA (3640)
+         exactly equals sum(all 7 PSA)+sum(all 7 PSB) - full contract value
+         including bonus, not just salary as the reference spreadsheet's
+         description implied. PVSB (1050) exactly equals sum(all 7 PSB).
+         For a BRAND NEW signing specifically, PCON==PCYL so the current-year
+         index is always 0 - which is exactly what this dialog writes to
+         PSA0/PSB0, so the "current year" formulas above reduce to using
+         index 0 here.
+    Bonus (PSB0-6) wasn't populated on the Snelling cut test (his contract had
+    none) so bullet 1 doesn't directly prove PSB also zeroes on a cut, but
+    it's assumed to follow the same per-year pattern as PSA (same field
+    layout/naming, same 7-year slot structure).
+    Signing reverses every one of the confirmed fields using the years/
+    salary/bonus you enter, and sets PPTI to the source pool's ID (mirroring
+    "acquired from"). NOT yet tested: whether the game's own cap-usage
+    display picks this up automatically (TEAM table has no obvious "cap
+    used" field - only TCP0/TCP1, the SEPARATE dead-cap-penalty mechanic -
+    suggesting cap usage is computed dynamically from active salaries, but
+    this needs an in-game check before relying on it for cap purposes).
+    """
+    # Remembers the last-used source pool / destination team across dialog
+    # opens within the same running session (class attributes, not instance -
+    # each "Sign Free Agent..." click creates a fresh Toplevel, so instance
+    # state wouldn't survive between opens).
+    _last_src_tid = SIGN_SOURCE_POOLS[0][0]
+    _last_dest_tid = SIGN_DEST_TEAMS[0][0]
+
+    def __init__(self, parent, model: CSVModel):
+        super().__init__(parent)
+        self.title("Sign Free Agent / Pool Player")
+        self.geometry("640x640")
+        self.minsize(600, 560)
+        self.parent = parent
+        self.model = model
+        self.idx_player = None
+        self.year_rows = []  # list of dicts: {salary_var, bonus_var, salary_lbl, bonus_lbl}
+
+        self._build()
+
+    def _build(self):
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=10, pady=10)
+        ttk.Label(
+            top,
+            text="Reverses an in-game 'cut' - confirmed field-for-field via a live before/after test.",
+            wraplength=600, justify="left",
+        ).pack(anchor="w")
+
+        src_frame = ttk.LabelFrame(self, text="Source pool")
+        src_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+
+        self.cmb_src = ttk.Combobox(src_frame, state="readonly", width=30)
+        self.cmb_src["values"] = [f"{tid}: {name}" for tid, name in SIGN_SOURCE_POOLS]
+        self._set_combo_to_tid(self.cmb_src, SignFreeAgentDialog._last_src_tid)
+        self.cmb_src.pack(anchor="w", padx=10, pady=(10, 6))
+        self.cmb_src.bind("<<ComboboxSelected>>", lambda e: self._refresh_roster())
+
+        self.lst_src = tk.Listbox(src_frame, exportselection=False)
+        self.lst_src.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.lst_src.bind("<<ListboxSelect>>", lambda e: self._on_pick_player())
+
+        contract = ttk.LabelFrame(self, text="New contract")
+        contract.pack(fill="x", padx=10, pady=(0, 8))
+
+        row1 = ttk.Frame(contract)
+        row1.pack(fill="x", padx=10, pady=6)
+        ttk.Label(row1, text="Sign to team:").pack(side="left")
+        self.cmb_dest = ttk.Combobox(row1, state="readonly", width=26)
+        self.cmb_dest["values"] = [f"{tid}: {name}" for tid, name in SIGN_DEST_TEAMS]
+        self._set_combo_to_tid(self.cmb_dest, SignFreeAgentDialog._last_dest_tid)
+        self.cmb_dest.pack(side="left", padx=(6, 0))
+
+        row2 = ttk.Frame(contract)
+        row2.pack(fill="x", padx=10, pady=6)
+        ttk.Label(row2, text="Contract years:").pack(side="left")
+        self.years_var = tk.StringVar(value="4")
+        self.spn_years = ttk.Spinbox(
+            row2, from_=1, to=7, width=4, textvariable=self.years_var,
+            state="readonly", command=self._rebuild_year_rows,
+        )
+        self.spn_years.pack(side="left", padx=(6, 16))
+        ttk.Button(row2, text="Reset", command=self._rebuild_year_rows).pack(side="left")
+
+        ttk.Label(
+            contract,
+            text=f"1 unit = $10,000 (max salary {PLAYER_SALARY_MAX_VALUE} = {format_cap_dollars(PLAYER_SALARY_MAX_VALUE)}, "
+                 f"max bonus {PLAYER_BONUS_MAX_VALUE} = {format_cap_dollars(PLAYER_BONUS_MAX_VALUE)})",
+            foreground="gray",
+        ).pack(anchor="w", padx=10)
+
+        self.years_frame = ttk.Frame(contract)
+        self.years_frame.pack(fill="x", padx=10, pady=(4, 8))
+
+        self.lbl_total = ttk.Label(contract, text="", foreground="gray")
+        self.lbl_total.pack(anchor="w", padx=10, pady=(0, 6))
+
+        bottom = ttk.Frame(self)
+        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(bottom, text="Sign Player", command=self._do_sign).pack(side="right")
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right", padx=(0, 8))
+
+        self._rebuild_year_rows()
+        self._refresh_roster()
+
+    def _combo_tid(self, cmb):
+        v = cmb.get()
+        return v.split(":", 1)[0].strip() if ":" in v else v.strip()
+
+    def _set_combo_to_tid(self, cmb, tid):
+        for i, label in enumerate(cmb["values"]):
+            if str(label).startswith(str(tid) + ":"):
+                cmb.current(i)
+                return
+        if cmb["values"]:
+            cmb.current(0)
+
+    def _rebuild_year_rows(self):
+        """Rebuild the per-year salary/bonus entry rows to match the current
+        'Contract years' spinner value, each with a live-updating formatted
+        dollar amount so it's unambiguous whether a number means $10K, $100K,
+        $1M, etc."""
+        for child in self.years_frame.winfo_children():
+            child.destroy()
+        self.year_rows = []
+
+        try:
+            years = int(self.years_var.get())
+        except Exception:
+            years = 4
+        years = max(1, min(7, years))
+
+        ttk.Label(self.years_frame, text="Year", foreground="gray").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(self.years_frame, text="Salary", foreground="gray").grid(row=0, column=1, sticky="w")
+        ttk.Label(self.years_frame, text="= $", foreground="gray").grid(row=0, column=2, sticky="w", padx=(6, 0))
+        ttk.Label(self.years_frame, text="Bonus", foreground="gray").grid(row=0, column=3, sticky="w", padx=(16, 0))
+        ttk.Label(self.years_frame, text="= $", foreground="gray").grid(row=0, column=4, sticky="w", padx=(6, 0))
+
+        for y in range(years):
+            r = y + 1
+            ttk.Label(self.years_frame, text=f"{y + 1}").grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
+
+            salary_var = tk.StringVar(value="40")
+            salary_ent = ttk.Entry(self.years_frame, width=8, textvariable=salary_var)
+            salary_ent.grid(row=r, column=1, sticky="w", pady=2)
+            salary_lbl = ttk.Label(self.years_frame, text=format_cap_dollars(40), width=14)
+            salary_lbl.grid(row=r, column=2, sticky="w", padx=(6, 0), pady=2)
+
+            bonus_var = tk.StringVar(value="0")
+            bonus_ent = ttk.Entry(self.years_frame, width=8, textvariable=bonus_var)
+            bonus_ent.grid(row=r, column=3, sticky="w", padx=(16, 0), pady=2)
+            bonus_lbl = ttk.Label(self.years_frame, text=format_cap_dollars(0), width=14)
+            bonus_lbl.grid(row=r, column=4, sticky="w", padx=(6, 0), pady=2)
+
+            entry = {"salary_var": salary_var, "bonus_var": bonus_var, "salary_lbl": salary_lbl, "bonus_lbl": bonus_lbl}
+            salary_var.trace_add("write", lambda *_a, e=entry: self._on_year_value_changed(e))
+            bonus_var.trace_add("write", lambda *_a, e=entry: self._on_year_value_changed(e))
+            self.year_rows.append(entry)
+
+            if y == 0 and years > 1:
+                ttk.Button(
+                    self.years_frame, text="Copy to rest →", command=self._copy_year1_to_rest,
+                ).grid(row=r, column=5, sticky="w", padx=(16, 0), pady=2)
+
+        self._update_total_label()
+
+    def _copy_year1_to_rest(self):
+        """Flat-contract shortcut (like OOTP's contract negotiation screen):
+        copy Year 1's salary/bonus to every other year in one click."""
+        if len(self.year_rows) < 2:
+            return
+        salary1 = self.year_rows[0]["salary_var"].get()
+        bonus1 = self.year_rows[0]["bonus_var"].get()
+        for entry in self.year_rows[1:]:
+            entry["salary_var"].set(salary1)
+            entry["bonus_var"].set(bonus1)
+
+    def _on_year_value_changed(self, entry):
+        entry["salary_lbl"].configure(text=format_cap_dollars(safe_int(entry["salary_var"].get()) or 0))
+        entry["bonus_lbl"].configure(text=format_cap_dollars(safe_int(entry["bonus_var"].get()) or 0))
+        self._update_total_label()
+
+    def _update_total_label(self):
+        total_units = sum(
+            (safe_int(e["salary_var"].get()) or 0) + (safe_int(e["bonus_var"].get()) or 0)
+            for e in self.year_rows
+        )
+        self.lbl_total.configure(text=f"Total contract value: {format_cap_dollars(total_units)}")
+
+    def _refresh_roster(self):
+        tid = self._combo_tid(self.cmb_src)
+        self.lst_src.delete(0, tk.END)
+        self.map_src = []
+        self.idx_player = None
+
+        team_col = self.model.team_col or "TGID"
+        filtered = [(i, r) for i, r in enumerate(self.model.players)
+                    if (r.get(team_col, "") or "").strip() == tid]
+        filtered.sort(key=lambda ir: POSITION_ORDER.get((ir[1].get(PLAYER_POS_CODE, "") or "").strip(), 999))
+
+        for i, r in filtered:
+            pos = self.model.player_pos(r)
+            name = self.model.player_name(r)
+            ovr = (r.get("POVR", "") or "").strip()
+            self.map_src.append(i)
+            self.lst_src.insert(tk.END, f"{pos}  {name}  (OVR {ovr})  (row#{i})")
+
+        if self.lst_src.size() > 0:
+            self.lst_src.selection_set(0)
+            self.lst_src.activate(0)
+            self._on_pick_player()
+
+    def _on_pick_player(self):
+        sel = self.lst_src.curselection()
+        if not sel:
+            return
+        lb_idx = sel[0]
+        if lb_idx < len(self.map_src):
+            self.idx_player = self.map_src[lb_idx]
+
+    def _do_sign(self):
+        # Re-derive from the listbox's own current selection rather than
+        # trusting the cached self.idx_player, so clicking a player and then
+        # immediately clicking "Sign Player" always targets whoever is
+        # actually highlighted, with no risk of stale state in between.
+        self._on_pick_player()
+        if self.idx_player is None:
+            messagebox.showwarning("Pick a player", "Select a player from the source pool first.")
+            return
+
+        src_tid_pool = self._combo_tid(self.cmb_src)
+        dest_tid = self._combo_tid(self.cmb_dest)
+        if not dest_tid:
+            return
+
+        years = len(self.year_rows)
+        salaries, bonuses = [], []
+        for i, e in enumerate(self.year_rows):
+            s = safe_int(e["salary_var"].get())
+            b = safe_int(e["bonus_var"].get())
+            if s is None or b is None:
+                messagebox.showerror("Invalid contract", f"Year {i + 1}: salary/bonus must be whole numbers.")
+                return
+            if not (0 <= s <= PLAYER_SALARY_MAX_VALUE):
+                messagebox.showerror("Invalid contract", f"Year {i + 1} salary must be 0-{PLAYER_SALARY_MAX_VALUE}.")
+                return
+            if not (0 <= b <= PLAYER_BONUS_MAX_VALUE):
+                messagebox.showerror("Invalid contract", f"Year {i + 1} bonus must be 0-{PLAYER_BONUS_MAX_VALUE}.")
+                return
+            salaries.append(s)
+            bonuses.append(b)
+
+        row = self.model.players[self.idx_player]
+        src_tid = self.model.player_team_id(row)
+        name = self.model.player_name(row)
+
+        for i, col in enumerate(PLAYER_CONTRACT_COLS):
+            row[col] = str(salaries[i]) if i < years else "0"
+        for i, col in enumerate(PLAYER_BONUS_COLS):
+            row[col] = str(bonuses[i]) if i < years else "0"
+
+        # PCSA/PTSA/PVSB formulas found by decoding a real mid-contract player
+        # (Keith Brooking, Falcons LB, PCON=7/PCYL=2: PCSA=649 exactly equals
+        # PSA[5]+PSB[5] where 5=PCON-PCYL, i.e. the CURRENT year's salary+bonus
+        # combined - and PTSA=3640 exactly equals sum(all PSA)+sum(all PSB)).
+        # For a brand-new signing, PCON==PCYL so the current-year index is 0,
+        # which is exactly what this dialog just wrote to PSA0/PSB0 - i.e.
+        # year 1's entered salary/bonus.
+        total_salary = sum(int(row.get(c, "0") or "0") for c in PLAYER_CONTRACT_COLS)
+        total_bonus = sum(int(row.get(c, "0") or "0") for c in PLAYER_BONUS_COLS)
+        year1_cap_hit = salaries[0] + bonuses[0]
+
+        self.model.set_player_team_id(row, dest_tid)
+        row["PCON"] = str(years)
+        row["PCYL"] = str(years)
+        row["PCSA"] = str(year1_cap_hit)
+        row["PTSA"] = str(total_salary + total_bonus)
+        row["PVSB"] = str(total_bonus)
+        row["PPTI"] = str(src_tid)
+
+        # Team-wide "Team Salary Cap" (TMSA) is a separately stored total, NOT
+        # dynamically computed from the roster - confirmed live (bumping a
+        # player's cap hit updated their own card correctly but left the
+        # Team Roadmap's cap number frozen until TMSA itself was updated).
+        # A freshly signed player's cap hit is exactly year 1's salary+bonus
+        # (same units as TMSA), so that's what gets added.
+        cap_updated = self.model.adjust_team_salary_cap(dest_tid, year1_cap_hit)
+
+        self.parent.mark_dirty()
+        SignFreeAgentDialog._last_src_tid = src_tid_pool
+        SignFreeAgentDialog._last_dest_tid = dest_tid
+        dest_name = TEAM_NAMES.get(dest_tid, dest_tid)
+        cap_note = "" if cap_updated else "\n\n(Team cap total not found/updated - load a save with the TEAM table.)"
+        messagebox.showinfo(
+            "Player signed",
+            f"{name} signed to {dest_tid}: {dest_name}\n"
+            f"{years} year(s), {format_cap_dollars(total_salary + total_bonus)} total.{cap_note}"
+        )
+
+        self.parent.refresh_players_for_team()
+        self.parent.refresh_stats_for_player()
+        self._refresh_roster()
+
+
 BASE_TITLE = "HC09 CSV Editor (GUI) - Safe Trades"
 
 
@@ -1191,6 +1571,7 @@ class App(tk.Tk):
         ttk.Button(top, text="HC09-SAFE SWAP TRADE", command=self.on_open_swap_trade).pack(side="left")
         self.btn_move_trade = ttk.Button(top, text="Move Player → Selected Team", command=self.on_move_trade_to_selected_team)
         self.btn_move_trade.pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
 
         self.lbl_status = ttk.Label(top, text="Load play.csv to begin.")
         self.lbl_status.pack(side="left", padx=12)
@@ -2196,6 +2577,12 @@ class App(tk.Tk):
             messagebox.showinfo("Load first", "Load play.csv first.")
             return
         SwapTradeDialog(self, self.model)
+
+    def on_open_sign_free_agent(self):
+        if not self.model.players:
+            messagebox.showinfo("Load first", "Load play.csv first.")
+            return
+        SignFreeAgentDialog(self, self.model)
 
     def on_move_trade_to_selected_team(self):
         """
