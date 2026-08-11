@@ -197,7 +197,16 @@ TEAM_NAMES = {
     "21": "Panthers (Carolina)", "22": "Patriots (New England)", "23": "Raiders (Las Vegas)", "24": "Rams (Los Angeles)",
     "25": "Ravens (Baltimore)", "26": "Commanders (Washington)", "27": "Saints (New Orleans)", "28": "Seahawks (Seattle)",
     "29": "Steelers (Pittsburgh)", "30": "Titans (Tennessee)", "31": "Vikings (Minnesota)", "32": "Texans (Houston)",
-    "33": "Free Agents", "1015": "Draft Class"
+    # Free Agents was wrongly coded as TGID 33 - confirmed against real save data
+    # (checked via the community reference spreadsheet's own team table, then
+    # cross-verified in the actual save file: 412 real players carry TGID 1009,
+    # zero carry 33). Fixed to the real value.
+    "1009": "Free Agents", "1015": "Draft Class",
+    # "SECRET" per the same spreadsheet's team table - confirmed 15 real players
+    # sit in this pool in the test save. Purpose unclear (possibly a hidden/
+    # not-yet-revealed roster pool), but labeling it means these players show up
+    # correctly instead of a bare, unexplained "1013" team ID.
+    "1013": "Secret/Hidden Pool",
 }
 
 PLAYER_FIRST_NAME_CODE = "PFNA"
@@ -947,7 +956,7 @@ class SwapTradeDialog(tk.Toplevel):
         self.parent = parent
         self.model = model
 
-        self.team1 = tk.StringVar(value="33")
+        self.team1 = tk.StringVar(value="1009")
         self.team2 = tk.StringVar(value="1")
 
         self.idx1 = None  # real index into model.players
@@ -983,7 +992,7 @@ class SwapTradeDialog(tk.Toplevel):
         self.cmb_t2["values"] = team_vals
 
         # default selections
-        self._set_combo_to_tid(self.cmb_t1, "33")
+        self._set_combo_to_tid(self.cmb_t1, "1009")
         self._set_combo_to_tid(self.cmb_t2, "1")
 
         self.cmb_t1.pack(anchor="w", padx=10, pady=(10, 6))
@@ -1656,7 +1665,7 @@ class App(tk.Tk):
             self.lst_teams.insert(tk.END, f"{tid}: {name}")
 
     def _select_default_team(self):
-        target = "33"  # Free Agents
+        target = "1009"  # Free Agents (confirmed against real save data, see TEAM_NAMES)
         idx = None
         for i in range(self.lst_teams.size()):
             if self.lst_teams.get(i).startswith(target + ":"):
