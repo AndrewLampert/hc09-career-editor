@@ -1308,6 +1308,27 @@ class TeamAutocompleteCombo:
 # 1013) - those pools are never listed on any real team's DCHT depth chart,
 # so there's no stale reference to leave behind on the source side, unlike a
 # real team-to-team move.
+#
+# FOLLOW-UP (via a real in-game player-for-picks trade, before/after diffed
+# directly - Joe Thomas, Browns to Texans, for 2 draft picks, save
+# BLUS30128-CAREER-QQETBROWNS): confirms WHY the earlier DCHT-sync attempt
+# (giving Calvin Johnson's own DCHT row the correct new TGID) still crashed.
+# A real trade doesn't just update the moved player's own DCHT row - it
+# CASCADES across the losing team's entire affected position group (70 DCHT
+# rows changed, all still TGID=5/Browns, spanning multiple PPOS values -
+# likely the whole O-line, not just Joe Thomas's own LT slot), reshuffling
+# who's promoted into which depth-chart slot to backfill the vacancy. That's
+# a full depth-chart recalculation, not a single-row edit - a fundamentally
+# bigger operation than anything attempted in the Calvin Johnson test.
+# Also confirmed: a real trade updates TEAM.TMSA on BOTH sides (Browns
+# 10127->9709, Texans 13488->13906, matching Joe Thomas's cap hit moving
+# from one team to the other) - something no player-moving feature in this
+# file currently does (Sign Free Agent only ever adds to one team's TMSA,
+# since it pulls from a pool with no real cap to lose). If a "trade a player
+# for picks" feature is ever attempted, both of these would need solving:
+# the depth-chart reshuffle algorithm (not yet reverse-engineered - unclear
+# if it's as simple as "shift everyone below up one slot" or something more
+# position-specific) and dual-team TMSA adjustment.
 # =============================================================================
 
 # -----------------------------
