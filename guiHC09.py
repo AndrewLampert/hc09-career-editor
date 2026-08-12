@@ -1302,6 +1302,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.idx_players = []  # all currently-selected source rows (ctrl/shift-click multi-select)
         self.year_rows = []  # list of dicts: {salary_var, bonus_var, salary_lbl, bonus_lbl}
         self._dest_popup = None  # custom floating suggestion list for the team combo (see _show_dest_popup)
+        self._dest_popup_active_idx = -1  # keyboard-highlighted row in the popup, if any
 
         # If a player was already selected on the Players tab and they're
         # sitting in Free Agents/the Secret pool, preselect them here instead
@@ -1365,6 +1366,13 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.cmb_dest.bind("<FocusIn>", self._select_all_dest_text)
         self.cmb_dest.bind("<Button-1>", self._select_all_dest_text)
         self.cmb_dest.bind("<FocusOut>", lambda e: self.after(150, self._hide_dest_popup))
+        # Bound directly (not via <KeyRelease>) and return "break" when the
+        # popup is open, so these move the highlighted suggestion instead of
+        # the native Combobox's default Up/Down/Return handling running too
+        # (which would open its own separate dropdown or do nothing useful).
+        self.cmb_dest.bind("<Down>", lambda e: self._on_dest_arrow(1))
+        self.cmb_dest.bind("<Up>", lambda e: self._on_dest_arrow(-1))
+        self.cmb_dest.bind("<Return>", self._on_dest_return)
 
         row2 = ttk.Frame(contract)
         row2.pack(fill="x", padx=10, pady=6)
@@ -1421,21 +1429,14 @@ class SignFreeAgentDialog(tk.Toplevel):
 
     def _select_all_dest_text(self, event):
         """Click/tab into 'Sign to team' selects all existing text, like a
-        browser address bar, so you can immediately start typing to replace it."""
+        browser address bar, so you can immediately start typing to replace
+        it - and re-shows the filtered popup for whatever text is already
+        there (clicking away and back shouldn't lose your filter)."""
         widget = event.widget
         widget.after(1, lambda: (widget.selection_range(0, tk.END), widget.icursor(tk.END)))
+        self._refresh_dest_popup_from_text()
 
-    def _on_dest_typed(self, event):
-        """Live-filter 'Sign to team' as you type. Uses a custom floating
-        suggestion popup instead of the native ttk Combobox dropdown -
-        opening the real dropdown (via <Down> or Post) steals keyboard focus
-        into its listbox, which blocks further typing in the entry. This
-        popup never takes focus, so you can keep typing continuously and only
-        interact with it (click, or Down+Return) when you're ready to confirm."""
-        if event.keysym in ("Return", "Escape", "Tab"):
-            if event.keysym == "Escape":
-                self._hide_dest_popup()
-            return
+    def _refresh_dest_popup_from_text(self):
         typed = self.cmb_dest.get().strip().lower()
         self.cmb_dest["values"] = self._dest_all_values
         if not typed:
@@ -1443,6 +1444,50 @@ class SignFreeAgentDialog(tk.Toplevel):
             return
         matches = [v for v in self._dest_all_values if typed in v.lower()]
         self._show_dest_popup(matches)
+
+    def _on_dest_typed(self, event):
+        """Live-filter 'Sign to team' as you type. Uses a custom floating
+        suggestion popup instead of the native ttk Combobox dropdown -
+        opening the real dropdown steals keyboard focus into its listbox,
+        which blocks further typing in the entry. This popup never takes
+        focus, so you can keep typing continuously; Up/Down move a highlighted
+        suggestion (see _on_dest_arrow) and Enter confirms it."""
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+            if event.keysym == "Escape":
+                self._hide_dest_popup()
+            return
+        self._refresh_dest_popup_from_text()
+
+    def _on_dest_arrow(self, direction):
+        """Up/Down: move the highlighted suggestion in the popup instead of
+        letting the native Combobox binding open its own dropdown (returning
+        'break' stops that default handler from also running)."""
+        if self._dest_popup is None or str(self._dest_popup.state()) != "normal":
+            return None  # popup not showing - let the key behave normally
+        size = self._dest_popup_list.size()
+        if size == 0:
+            return "break"
+        self._dest_popup_active_idx = max(0, min(size - 1, self._dest_popup_active_idx + direction))
+        self._highlight_dest_popup_row(self._dest_popup_active_idx)
+        return "break"
+
+    def _on_dest_return(self, event):
+        """Enter: confirm the highlighted popup suggestion, if the popup is
+        open and something is highlighted; otherwise let Enter behave normally."""
+        if self._dest_popup is None or str(self._dest_popup.state()) != "normal":
+            return None
+        if 0 <= self._dest_popup_active_idx < self._dest_popup_list.size():
+            self._pick_dest_value(self._dest_popup_list.get(self._dest_popup_active_idx))
+            return "break"
+        return None
+
+    def _highlight_dest_popup_row(self, idx):
+        self._dest_popup_list.selection_clear(0, tk.END)
+        if 0 <= idx < self._dest_popup_list.size():
+            self._dest_popup_list.selection_set(idx)
+            self._dest_popup_list.activate(idx)
+            self._dest_popup_list.see(idx)
+        self._dest_popup_active_idx = idx
 
     def _show_dest_popup(self, matches):
         if not matches:
@@ -1455,11 +1500,14 @@ class SignFreeAgentDialog(tk.Toplevel):
             self._dest_popup_list = tk.Listbox(self._dest_popup, exportselection=False, activestyle="none")
             self._dest_popup_list.pack(fill="both", expand=True)
             self._dest_popup_list.bind("<Button-1>", self._on_dest_popup_click)
+            self._dest_popup_list.bind("<Motion>", self._on_dest_popup_hover)
+            self._dest_popup_active_idx = -1
 
         shown = matches[:10]
         self._dest_popup_list.delete(0, tk.END)
         for m in shown:
             self._dest_popup_list.insert(tk.END, m)
+        self._dest_popup_active_idx = -1
 
         x = self.cmb_dest.winfo_rootx()
         y = self.cmb_dest.winfo_rooty() + self.cmb_dest.winfo_height()
@@ -1472,12 +1520,20 @@ class SignFreeAgentDialog(tk.Toplevel):
     def _hide_dest_popup(self):
         if self._dest_popup is not None:
             self._dest_popup.withdraw()
+            self._dest_popup_active_idx = -1
+
+    def _on_dest_popup_hover(self, event):
+        idx = self._dest_popup_list.nearest(event.y)
+        if 0 <= idx < self._dest_popup_list.size():
+            self._highlight_dest_popup_row(idx)
 
     def _on_dest_popup_click(self, event):
         idx = self._dest_popup_list.nearest(event.y)
         if idx < 0 or idx >= self._dest_popup_list.size():
             return
-        value = self._dest_popup_list.get(idx)
+        self._pick_dest_value(self._dest_popup_list.get(idx))
+
+    def _pick_dest_value(self, value):
         self.cmb_dest.delete(0, tk.END)
         self.cmb_dest.insert(0, value)
         self._hide_dest_popup()
