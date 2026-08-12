@@ -1301,6 +1301,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.idx_player = None
         self.idx_players = []  # all currently-selected source rows (ctrl/shift-click multi-select)
         self.year_rows = []  # list of dicts: {salary_var, bonus_var, salary_lbl, bonus_lbl}
+        self._dest_popup = None  # custom floating suggestion list for the team combo (see _show_dest_popup)
 
         # If a player was already selected on the Players tab and they're
         # sitting in Free Agents/the Secret pool, preselect them here instead
@@ -1363,6 +1364,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.cmb_dest.bind("<KeyRelease>", self._on_dest_typed)
         self.cmb_dest.bind("<FocusIn>", self._select_all_dest_text)
         self.cmb_dest.bind("<Button-1>", self._select_all_dest_text)
+        self.cmb_dest.bind("<FocusOut>", lambda e: self.after(150, self._hide_dest_popup))
 
         row2 = ttk.Frame(contract)
         row2.pack(fill="x", padx=10, pady=6)
@@ -1396,6 +1398,15 @@ class SignFreeAgentDialog(tk.Toplevel):
         self._rebuild_year_rows()
         self._refresh_roster()
 
+    def destroy(self):
+        # Clean up the custom suggestion popup Toplevel (see _show_dest_popup) -
+        # it isn't a child widget of this dialog's normal widget tree, so it
+        # wouldn't otherwise get torn down automatically. Covers both the
+        # "Close" button and the window's own X button (both call destroy()).
+        if self._dest_popup is not None:
+            self._dest_popup.destroy()
+        super().destroy()
+
     def _combo_tid(self, cmb):
         v = cmb.get()
         return v.split(":", 1)[0].strip() if ":" in v else v.strip()
@@ -1415,20 +1426,62 @@ class SignFreeAgentDialog(tk.Toplevel):
         widget.after(1, lambda: (widget.selection_range(0, tk.END), widget.icursor(tk.END)))
 
     def _on_dest_typed(self, event):
-        """Live-filter the 'Sign to team' dropdown's value list to teams whose
-        id or name contains what's typed so far, and actually pop the dropdown
-        open to show the filtered suggestions (matching list) without altering
-        the typed text or moving keyboard focus off the entry."""
-        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+        """Live-filter 'Sign to team' as you type. Uses a custom floating
+        suggestion popup instead of the native ttk Combobox dropdown -
+        opening the real dropdown (via <Down> or Post) steals keyboard focus
+        into its listbox, which blocks further typing in the entry. This
+        popup never takes focus, so you can keep typing continuously and only
+        interact with it (click, or Down+Return) when you're ready to confirm."""
+        if event.keysym in ("Return", "Escape", "Tab"):
+            if event.keysym == "Escape":
+                self._hide_dest_popup()
             return
         typed = self.cmb_dest.get().strip().lower()
+        self.cmb_dest["values"] = self._dest_all_values
         if not typed:
-            self.cmb_dest["values"] = self._dest_all_values
+            self._hide_dest_popup()
             return
         matches = [v for v in self._dest_all_values if typed in v.lower()]
-        self.cmb_dest["values"] = matches or self._dest_all_values
-        if matches:
-            self.cmb_dest.event_generate("<Down>")
+        self._show_dest_popup(matches)
+
+    def _show_dest_popup(self, matches):
+        if not matches:
+            self._hide_dest_popup()
+            return
+        if self._dest_popup is None:
+            self._dest_popup = tk.Toplevel(self)
+            self._dest_popup.overrideredirect(True)
+            self._dest_popup.attributes("-topmost", True)
+            self._dest_popup_list = tk.Listbox(self._dest_popup, exportselection=False, activestyle="none")
+            self._dest_popup_list.pack(fill="both", expand=True)
+            self._dest_popup_list.bind("<Button-1>", self._on_dest_popup_click)
+
+        shown = matches[:10]
+        self._dest_popup_list.delete(0, tk.END)
+        for m in shown:
+            self._dest_popup_list.insert(tk.END, m)
+
+        x = self.cmb_dest.winfo_rootx()
+        y = self.cmb_dest.winfo_rooty() + self.cmb_dest.winfo_height()
+        w = max(self.cmb_dest.winfo_width(), 220)
+        h = min(20 * len(shown) + 4, 200)
+        self._dest_popup.geometry(f"{w}x{h}+{x}+{y}")
+        self._dest_popup.deiconify()
+        self.cmb_dest.focus_set()  # keep typing focus on the entry, never the popup
+
+    def _hide_dest_popup(self):
+        if self._dest_popup is not None:
+            self._dest_popup.withdraw()
+
+    def _on_dest_popup_click(self, event):
+        idx = self._dest_popup_list.nearest(event.y)
+        if idx < 0 or idx >= self._dest_popup_list.size():
+            return
+        value = self._dest_popup_list.get(idx)
+        self.cmb_dest.delete(0, tk.END)
+        self.cmb_dest.insert(0, value)
+        self._hide_dest_popup()
+        self.cmb_dest.focus_set()
 
     def _resolve_dest_tid(self):
         """Resolve whatever's in the 'Sign to team' box to a TGID: exact
