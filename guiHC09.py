@@ -8,8 +8,14 @@ HC09 / Franchise CSV Editor (GUI) - HC09 Safe Trade Edition
 - Name editor (PFNA/PLNA) is ON the Players + Stats screen (with sanitizing to avoid crashes)
 - Raw Column Editor lets you edit ANY column for the selected player
 - Trading:
-    * If team column is NOT TGID -> you can "Move player to selected team"
-    * ALWAYS available: "HC09-SAFE SWAP TRADE" (swap player data across teams WITHOUT changing TGID)
+    * "Trade Players (Safe Swap)": swaps player data across two teams WITHOUT
+      changing TGID - the only confirmed-safe way to move a player between two
+      REAL teams (a bare TGID overwrite crashes the game on day-advance, even
+      with a perfectly consistent depth chart on both sides - see the comment
+      above the toolbar buttons in App._build for the full test history).
+    * "Sign Free Agent...": pulls a player out of Free Agents/the Secret pool
+      onto a real team with a new contract - confirmed safe (pools aren't part
+      of the same roster/depth-chart bookkeeping a real team is).
 
 Run:
   python guiHC09.py
@@ -227,10 +233,14 @@ TEAM_NAMES = {
     # zero carry 33). Fixed to the real value.
     "1009": "Free Agents", "1015": "Draft Class",
     # "SECRET" per the same spreadsheet's team table - confirmed 15 real players
-    # sit in this pool in the test save. Purpose unclear (possibly a hidden/
-    # not-yet-revealed roster pool), but labeling it means these players show up
-    # correctly instead of a bare, unexplained "1013" team ID.
-    "1013": "Secret/Hidden Pool",
+    # sit in this pool in the test save. Per the user (NFL Head Coach 09 player,
+    # not independently verified in-game by us): these are "Game Changers" -
+    # special unlockable players that are meant to show up in-game with a
+    # distinct visual treatment, separate from the normal Free Agents pool.
+    # Signing one via Sign Free Agent is confirmed to work (safe, same as any
+    # other free agent) - whether the special "Game Changers" presentation
+    # still shows correctly for a signed one hasn't specifically been checked.
+    "1013": "Secret/Hidden Pool (Game Changers)",
 }
 
 PLAYER_FIRST_NAME_CODE = "PFNA"
@@ -992,6 +1002,65 @@ class CSVModel:
         row[TEAM_SALARY_CAP_FIELD] = str(max(0, cur + delta_units))
         return True
 
+# =============================================================================
+# "MOVE PLAYER -> SELECTED TEAM" INVESTIGATION LOG - REMOVED, CONFIRMED UNSAFE
+# =============================================================================
+# This used to be a toolbar button that moved the selected player to whichever
+# team was highlighted in the Teams list, by directly overwriting their TGID
+# field (and nothing else) - a simpler one-click alternative to Trade Players
+# (Safe Swap). It was ALREADY hard-blocked for TGID-only files (this project's
+# actual file format) before this investigation even started, with a warning
+# telling the user to use Safe Swap instead. That block looked like leftover
+# caution from before the direct-DB-write bridge existed - it turned out to be
+# a correctly-founded safety rail, confirmed the hard way:
+#
+# CONFIRMED (via live in-game testing, save BLUS30128-CAREER-TEST):
+#   - A bare TGID overwrite (Calvin Johnson, Lions WR, PGID 27903, moved to
+#     the Falcons) displays PERFECTLY FINE immediately - shows up correctly on
+#     the new team's roster, cap page, and Evaluate Roster screen, with his
+#     existing contract intact. The game CRASHES the moment you advance to the
+#     next day. Reproduced twice.
+#   - Ruled out roster headcount: did a reciprocal two-way move (Calvin to the
+#     Falcons AND a Falcons player to the Lions simultaneously, via the same
+#     bare-TGID method) so neither team's roster size actually changed. Still
+#     crashed at the same point.
+#   - Found the DCHT table (2897 records, fields PGID/TGID/DCLK/PPOS/ddep) -
+#     a depth chart, completely separate from PLAY.TGID. Directly confirmed
+#     (captured live, before any revert) that after the bare TGID move, DCHT
+#     still listed Calvin under the Lions (TGID=19) as their starting WR
+#     (ddep=1) even though PLAY said Falcons - a real, proven stale reference.
+#   - Ruled out depth-chart staleness alone: updated just his DCHT row's TGID
+#     to match (14). Still crashed.
+#   - Ruled out depth-chart slot conflicts/gaps: did a full reciprocal swap
+#     with a real Falcons WR (Michael Jenkins, PGID 17320) who was already
+#     sitting at the exact slot (ddep=1) that Calvin would occupy - swapped
+#     both players' TGID AND their DCHT row's TGID, so each team's WR depth
+#     chart stayed perfectly sequential (0-5) on both sides with zero gaps or
+#     duplicates the whole time (independently verified: the in-game Depth
+#     Chart screen for both teams matched the raw DCHT data exactly). STILL
+#     crashed, at the same point, every time.
+#   - Checked every other table found containing both a PGID and TGID field
+#     (AWPL, PFTA, PSAC, ACAG, DPLP, DRPP, INJY, PSRC, PSRG, PSRS, RPGR - 11
+#     tables, one with 11,550 records) for any row referencing Calvin
+#     Johnson's PGID (27903). NONE of them did.
+#
+# CONCLUSION: whatever actually causes the crash was not found via any
+# save-file diffing/inspection approach tried (3 separate ruled-out
+# hypotheses, 13 tables checked total including DCHT). It may be something
+# computed at load time rather than stored in any single field, a caching/
+# GameFlow issue, or something else that would need live RPCS3 memory
+# inspection to find - a fundamentally heavier investigation than everything
+# else in this file, which was all done via save-file edits. Given this,
+# "Trade Players (Safe Swap)" (which never touches TGID at all - it swaps
+# player DATA between two rows while both stay in their own team's slot) is
+# the ONLY confirmed-safe way to move a player between two REAL teams. Sign
+# Free Agent remains safe (confirmed via the same day-advance test) because
+# it only ever pulls a player OUT of a pool (Free Agents/Secret, TGID 1009/
+# 1013) - those pools are never listed on any real team's DCHT depth chart,
+# so there's no stale reference to leave behind on the source side, unlike a
+# real team-to-team move.
+# =============================================================================
+
 # -----------------------------
 # GUI
 # -----------------------------
@@ -1002,7 +1071,7 @@ class SwapTradeDialog(tk.Toplevel):
     """
     def __init__(self, parent, model: CSVModel):
         super().__init__(parent)
-        self.title("HC09-SAFE SWAP TRADE (does not change TGID)")
+        self.title("Trade Players (Safe Swap - does not change TGID)")
         self.geometry("980x520")
         self.minsize(900, 480)
         self.parent = parent
@@ -1152,7 +1221,7 @@ class SwapTradeDialog(tk.Toplevel):
         swap_players_safe(p1, p2, IMMUTABLE_KEYS)
         self.parent.mark_dirty()
 
-        messagebox.showinfo("Trade complete", f"✅ HC09-SAFE SWAP TRADE COMPLETED\n\n{n1}  ⇄  {n2}")
+        messagebox.showinfo("Trade complete", f"✅ TRADE COMPLETED (Safe Swap)\n\n{n1}  ⇄  {n2}")
 
         # Refresh the parent's views
         self.parent.refresh_players_for_team()
@@ -1166,7 +1235,7 @@ class SwapTradeDialog(tk.Toplevel):
 # - this dialog is scoped to exactly what was confirmed: pulling a player out
 # of Free Agents/the Secret pool onto a real team, mirroring the exact fields
 # a real in-game "cut" reverses (see SIGN_CONTRACT_FIELDS comment below).
-SIGN_SOURCE_POOLS = [("1009", "Free Agents"), ("1013", "Secret/Hidden Pool")]
+SIGN_SOURCE_POOLS = [("1009", "Free Agents"), ("1013", "Secret/Hidden Pool (Game Changers)")]
 SIGN_DEST_TEAMS = [(tid, name) for tid, name in TEAM_NAMES.items() if tid not in ("1009", "1013", "1015")]
 
 
@@ -1598,9 +1667,7 @@ class App(tk.Tk):
 
         ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        ttk.Button(top, text="HC09-SAFE SWAP TRADE", command=self.on_open_swap_trade).pack(side="left")
-        self.btn_move_trade = ttk.Button(top, text="Move Player → Selected Team", command=self.on_move_trade_to_selected_team)
-        self.btn_move_trade.pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
         ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
 
         self.lbl_status = ttk.Label(top, text="Load play.csv to begin.")
@@ -1969,13 +2036,6 @@ class App(tk.Tk):
         self.lbl_status.configure(
             text=f"Loaded: {recent_file_display(db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
         )
-
-        # enable/disable move-trade button
-        # If team col is TGID, we do NOT want to change it (your requirement).
-        if (self.model.team_col or "") == "TGID":
-            self.btn_move_trade.state(["disabled"])
-        else:
-            self.btn_move_trade.state(["!disabled"])
 
         self.refresh_teams()
         self.refresh_picks()
@@ -2613,38 +2673,6 @@ class App(tk.Tk):
             messagebox.showinfo("Load first", "Load play.csv first.")
             return
         SignFreeAgentDialog(self, self.model)
-
-    def on_move_trade_to_selected_team(self):
-        """
-        Only works if we have a non-TGID team column.
-        Your export: TGID only -> button disabled.
-        """
-        if not self.model.players or self.selected_player_index is None:
-            return
-        if not self.model.team_col:
-            messagebox.showwarning("No team column", "Team column not detected.")
-            return
-        if self.model.team_col == "TGID":
-            messagebox.showwarning(
-                "TGID-only file",
-                "Your play.csv only has TGID as the team column.\n\n"
-                "Use 'HC09-SAFE SWAP TRADE' instead (it does NOT change TGID)."
-            )
-            return
-
-        dest_tid = self.selected_team_id.get()
-        if not dest_tid:
-            return
-
-        r = self.model.players[self.selected_player_index]
-        src_tid = self.model.player_team_id(r)
-
-        if src_tid == dest_tid:
-            messagebox.showinfo("No change", "Player already on that team.")
-            return
-
-        self.model.set_player_team_id(r, dest_tid)
-        self.refresh_players_for_team()
 
     # ---------- Picks ----------
     def refresh_picks(self):
@@ -3479,7 +3507,7 @@ class App(tk.Tk):
 _MUTATING_APP_METHODS = [
     "on_apply_name", "on_apply_stat", "on_apply_both", "on_apply_age_years",
     "set_contract_salary_to_min", "set_contract_bonus_to_min", "on_apply_contract",
-    "on_move_trade_to_selected_team", "on_acquire_picks", "on_set_team_bonus_min",
+    "on_acquire_picks", "on_set_team_bonus_min",
     "on_max_team_staff_skpt", "on_apply_cap", "on_apply_raw_column",
     "_apply_trainer_skpt", "_apply_coach_skpt", "_apply_gm_skpt",
     "set_trainer_skpt_to_max", "set_coach_skpt_to_max", "set_gm_skpt_to_max",
