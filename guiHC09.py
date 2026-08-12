@@ -64,6 +64,15 @@ def save_recent_file(path):
         pass
     return recents
 
+def remove_recent_file(path):
+    recents = [p for p in load_recent_files() if p != path]
+    try:
+        with open(RECENT_FILES_PATH, "w", encoding="utf-8") as f:
+            json.dump(recents, f)
+    except Exception:
+        pass
+    return recents
+
 def recent_file_display(path):
     """Show the save folder name (e.g. BLUS30128-CAREER-TEST) since every
     save file is literally named USR-DATA and wouldn't be distinguishable."""
@@ -1928,6 +1937,10 @@ class App(tk.Tk):
         self.cmb_recent = ttk.Combobox(top, width=26, state="readonly", textvariable=self.recent_files_var)
         self.cmb_recent.pack(side="left", padx=(4, 0))
         self.cmb_recent.bind("<<ComboboxSelected>>", self.on_load_recent)
+        # ttk.Combobox can't show a per-row "x" inside its own dropdown - this
+        # opens a small separate list that can, so entries can be individually
+        # removed instead of only ever appending/aging out at RECENT_FILES_MAX.
+        ttk.Button(top, text="Manage...", command=self.on_manage_recent_files).pack(side="left", padx=(4, 0))
         self._recent_display_to_path = {}
         self._refresh_recent_files_ui(load_recent_files())
 
@@ -2437,6 +2450,42 @@ class App(tk.Tk):
         self.cmb_recent["values"] = values
         if values:
             self.recent_files_var.set(values[0])
+
+    def on_manage_recent_files(self):
+        """Small standalone list (not the main Combobox - ttk.Combobox can't
+        show a per-row button inside its own dropdown) where each recent file
+        has its own X button to remove it individually."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Manage Recent Files")
+        dlg.geometry("420x260")
+        dlg.minsize(360, 200)
+
+        ttk.Label(dlg, text="Click X to remove an entry from the recent files list.").pack(
+            anchor="w", padx=10, pady=(10, 6)
+        )
+
+        rows_frame = ttk.Frame(dlg)
+        rows_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        def rebuild():
+            for child in rows_frame.winfo_children():
+                child.destroy()
+            recents = load_recent_files()
+            if not recents:
+                ttk.Label(rows_frame, text="No recent files.", foreground="gray").pack(anchor="w", pady=6)
+                return
+            for path in recents:
+                row = ttk.Frame(rows_frame)
+                row.pack(fill="x", pady=2)
+                ttk.Label(row, text=recent_file_display(path)).pack(side="left")
+                ttk.Button(row, text="X", width=3, command=lambda p=path: remove_one(p)).pack(side="right")
+
+        def remove_one(path):
+            self._refresh_recent_files_ui(remove_recent_file(path))
+            rebuild()
+
+        rebuild()
+        ttk.Button(dlg, text="Close", command=dlg.destroy).pack(pady=(0, 10))
 
     def on_save(self):
         try:
