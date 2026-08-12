@@ -1222,6 +1222,18 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.idx_player = None
         self.year_rows = []  # list of dicts: {salary_var, bonus_var, salary_lbl, bonus_lbl}
 
+        # If a player was already selected on the Players tab and they're
+        # sitting in Free Agents/the Secret pool, preselect them here instead
+        # of defaulting to the first row of the last-used pool.
+        self._preselect_row_idx = None
+        self._preselect_src_tid = None
+        sel_idx = getattr(parent, "selected_player_index", None)
+        if sel_idx is not None and 0 <= sel_idx < len(model.players):
+            ptid = model.player_team_id(model.players[sel_idx])
+            if ptid in dict(SIGN_SOURCE_POOLS):
+                self._preselect_row_idx = sel_idx
+                self._preselect_src_tid = ptid
+
         self._build()
 
     def _build(self):
@@ -1238,7 +1250,7 @@ class SignFreeAgentDialog(tk.Toplevel):
 
         self.cmb_src = ttk.Combobox(src_frame, state="readonly", width=30)
         self.cmb_src["values"] = [f"{tid}: {name}" for tid, name in SIGN_SOURCE_POOLS]
-        self._set_combo_to_tid(self.cmb_src, SignFreeAgentDialog._last_src_tid)
+        self._set_combo_to_tid(self.cmb_src, self._preselect_src_tid or SignFreeAgentDialog._last_src_tid)
         self.cmb_src.pack(anchor="w", padx=10, pady=(10, 6))
         self.cmb_src.bind("<<ComboboxSelected>>", lambda e: self._refresh_roster())
 
@@ -1395,8 +1407,13 @@ class SignFreeAgentDialog(tk.Toplevel):
             self.lst_src.insert(tk.END, f"{pos}  {name}  (OVR {ovr})  (row#{i})")
 
         if self.lst_src.size() > 0:
-            self.lst_src.selection_set(0)
-            self.lst_src.activate(0)
+            lb_idx = 0
+            if self._preselect_row_idx is not None and self._preselect_row_idx in self.map_src:
+                lb_idx = self.map_src.index(self._preselect_row_idx)
+            self._preselect_row_idx = None  # only honor it on the first refresh
+            self.lst_src.selection_set(lb_idx)
+            self.lst_src.activate(lb_idx)
+            self.lst_src.see(lb_idx)
             self._on_pick_player()
 
     def _on_pick_player(self):
