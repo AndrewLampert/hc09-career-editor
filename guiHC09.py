@@ -1249,6 +1249,9 @@ class SignFreeAgentDialog(tk.Toplevel):
         contract = ttk.LabelFrame(self, text="New contract")
         contract.pack(fill="x", padx=10, pady=(0, 8))
 
+        self.lbl_signing = ttk.Label(contract, text="No player selected", font=("TkDefaultFont", 10, "bold"))
+        self.lbl_signing.pack(anchor="w", padx=10, pady=(8, 4))
+
         row1 = ttk.Frame(contract)
         row1.pack(fill="x", padx=10, pady=6)
         ttk.Label(row1, text="Sign to team:").pack(side="left")
@@ -1403,6 +1406,16 @@ class SignFreeAgentDialog(tk.Toplevel):
         lb_idx = sel[0]
         if lb_idx < len(self.map_src):
             self.idx_player = self.map_src[lb_idx]
+            self._update_signing_label()
+
+    def _update_signing_label(self):
+        if self.idx_player is None or not hasattr(self, "lbl_signing"):
+            return
+        row = self.model.players[self.idx_player]
+        pos = self.model.player_pos(row)
+        name = self.model.player_name(row)
+        ovr = (row.get("POVR", "") or "").strip()
+        self.lbl_signing.configure(text=f"Signing: {name} ({pos}, OVR {ovr})")
 
     def _do_sign(self):
         # Re-derive from the listbox's own current selection rather than
