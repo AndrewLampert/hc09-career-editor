@@ -258,7 +258,24 @@ PLAYER_LAST_NAME_CODE = "PLNA"
 PLAYER_POS_CODE = "PPOS"
 PREFERRED_TEAM_COLS = ["TID", "TEAM", "TMID", "TGID"]  # TGID last as fallback
 
+# DRPK field meanings, per the NFL Head Coach modding Discord (independently
+# corroborated: someone else there changed DPID directly and got their picks
+# back successfully, the same approach used here):
+#   DPID = current owning team, DPOD = ORIGINAL owning team, DPNM/DPIX
+#   together are described as the pick's "ID". DPNM is confirmed 0-indexed
+#   for the CURRENT year only (1st overall = 0, 45th = 44); for FUTURE years
+#   it's not a pick number at all (see refresh_picks's comment). DPYO = year
+#   offset (0 = current year, matching PPGR-style small-int-offset fields
+#   elsewhere in this file).
+#   CAUTION from the same Discord thread, not further investigated here:
+#   there may be a SEPARATE table tracking trade history/details that isn't
+#   touched by editing DPID alone - reported to work fine on a fresh/new
+#   game, but with a "might mess up the game later" caveat for an
+#   already-in-progress save with real trade history. Only DPID is written
+#   by on_assign_picks (matching the community's confirmed-working approach);
+#   DPOD is display-only here (see DRAFT_PICK_ORIGINAL_TEAM), never written.
 DRAFT_PICK_ID = "DPID"
+DRAFT_PICK_ORIGINAL_TEAM = "DPOD"
 DRAFT_PICK_NUM = "DPNM"
 DRAFT_PICK_YEAR = "DPYO"
 
@@ -2088,8 +2105,11 @@ class App(tk.Tk):
         help_frame.pack(fill="x", padx=10)
         tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray").pack(fill="x", pady=(4, 6))
 
-        cols = ("team", "round", "pick_num", "year")
-        headings = {"team": ("Team", 260), "round": ("Round", 70), "pick_num": ("Pick #", 70), "year": ("Year", 60)}
+        cols = ("team", "orig_team", "round", "pick_num", "year")
+        headings = {
+            "team": ("Team (current)", 220), "orig_team": ("Originally", 220),
+            "round": ("Round", 70), "pick_num": ("Pick #", 70), "year": ("Year", 60),
+        }
         self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=20, selectmode="extended")
         for c in cols:
             text, width = headings[c]
@@ -2972,9 +2992,13 @@ class App(tk.Tk):
                 pick_disp = "-"
                 round_disp = "Future"
 
+            orig_tid = (p.get(DRAFT_PICK_ORIGINAL_TEAM, "") or "").strip()
+            orig_name = TEAM_NAMES.get(orig_tid, orig_tid or "-")
+            orig_disp = "(own pick)" if orig_tid == tid else f"{orig_tid}: {orig_name}"
+
             self.tree_picks.insert(
                 "", tk.END, iid=str(orig_idx),
-                values=(f"{tid}: {team_name}", round_disp, pick_disp, str(year_display)),
+                values=(f"{tid}: {team_name}", orig_disp, round_disp, pick_disp, str(year_display)),
             )
 
         self._update_pick_selection_label()
