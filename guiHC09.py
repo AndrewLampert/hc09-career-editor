@@ -1012,6 +1012,189 @@ class CSVModel:
         row[TEAM_SALARY_CAP_FIELD] = str(max(0, cur + delta_units))
         return True
 
+class TeamAutocompleteCombo:
+    """A ttk.Combobox with type-to-filter team selection, backed by a custom
+    floating suggestion popup instead of the native ttk dropdown - opening the
+    real dropdown (via <Down> or Post) steals keyboard focus into its own
+    listbox, which blocks further typing in the entry. This popup never takes
+    focus, so you can keep typing continuously to narrow the list. Up/Down
+    move a highlighted suggestion, Enter/Tab confirm it (Tab still moves
+    focus on afterward, unlike Enter), clicking a row confirms it, hovering
+    highlights it, clicking away and back preserves the current filter, and
+    clicking/focusing the entry selects all its text (like a browser address
+    bar) so typing immediately replaces it.
+
+    Extracted from the Sign Free Agent dialog (where this exact behavior was
+    built and tuned against real user feedback) so the Draft Picks tab (and
+    anywhere else that needs "type or pick a team") doesn't duplicate it.
+    """
+    def __init__(self, parent, options, width=26, initial_tid=None):
+        self.options = list(options)  # [(tid, name), ...]
+        self.all_values = [f"{tid}: {name}" for tid, name in self.options]
+
+        self.combo = ttk.Combobox(parent, width=width)
+        self.combo["values"] = self.all_values
+        if initial_tid is not None:
+            self.set_tid(initial_tid)
+        elif self.all_values:
+            self.combo.current(0)
+
+        self._popup = None
+        self._popup_list = None
+        self._popup_active_idx = -1
+
+        self.combo.bind("<KeyRelease>", self._on_typed)
+        self.combo.bind("<FocusIn>", self._select_all)
+        self.combo.bind("<Button-1>", self._select_all)
+        self.combo.bind("<FocusOut>", lambda e: self.combo.after(150, self._hide_popup))
+        # Bound directly (not via <KeyRelease>) and return "break" when the
+        # popup is open, so these move the highlighted suggestion instead of
+        # the native Combobox's default Up/Down/Return handling running too.
+        self.combo.bind("<Down>", lambda e: self._on_arrow(1))
+        self.combo.bind("<Up>", lambda e: self._on_arrow(-1))
+        self.combo.bind("<Return>", self._on_return)
+        self.combo.bind("<Tab>", self._on_tab)
+
+    def pack(self, **kw):
+        self.combo.pack(**kw)
+        return self
+
+    def get_tid(self):
+        """Resolve whatever's typed/selected to a TID: exact 'id: name' match
+        first (picking from the dropdown), else a case-insensitive substring
+        match against team names (typing "falcons" and not picking from the
+        list), else None."""
+        typed = self.combo.get().strip()
+        if not typed:
+            return None
+        exact = typed.split(":", 1)[0].strip() if ":" in typed else typed
+        if any(tid == exact for tid, _name in self.options):
+            return exact
+        typed_lower = typed.lower()
+        for tid, name in self.options:
+            if typed_lower in name.lower():
+                return tid
+        return None
+
+    def set_tid(self, tid):
+        for i, label in enumerate(self.combo["values"]):
+            if str(label).startswith(str(tid) + ":"):
+                self.combo.current(i)
+                return
+        if self.combo["values"]:
+            self.combo.current(0)
+
+    def destroy_popup(self):
+        """Call from the owning window's destroy()/close handler - the popup
+        is a separate Toplevel, not a child of the normal widget tree, so it
+        won't be torn down automatically."""
+        if self._popup is not None:
+            self._popup.destroy()
+            self._popup = None
+
+    def _select_all(self, event):
+        widget = event.widget
+        widget.after(1, lambda: (widget.selection_range(0, tk.END), widget.icursor(tk.END)))
+        self._refresh_popup_from_text()
+
+    def _refresh_popup_from_text(self):
+        typed = self.combo.get().strip().lower()
+        self.combo["values"] = self.all_values
+        if not typed:
+            self._hide_popup()
+            return
+        matches = [v for v in self.all_values if typed in v.lower()]
+        self._show_popup(matches)
+
+    def _on_typed(self, event):
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+            if event.keysym == "Escape":
+                self._hide_popup()
+            return
+        self._refresh_popup_from_text()
+
+    def _on_arrow(self, direction):
+        if self._popup is None or str(self._popup.state()) != "normal":
+            return None  # popup not showing - let the key behave normally
+        size = self._popup_list.size()
+        if size == 0:
+            return "break"
+        self._popup_active_idx = max(0, min(size - 1, self._popup_active_idx + direction))
+        self._highlight_popup_row(self._popup_active_idx)
+        return "break"
+
+    def _on_return(self, event):
+        if self._popup is None or str(self._popup.state()) != "normal":
+            return None
+        if 0 <= self._popup_active_idx < self._popup_list.size():
+            self._pick_value(self._popup_list.get(self._popup_active_idx))
+            return "break"
+        return None
+
+    def _on_tab(self, event):
+        if self._popup is not None and str(self._popup.state()) == "normal":
+            if 0 <= self._popup_active_idx < self._popup_list.size():
+                self._pick_value(self._popup_list.get(self._popup_active_idx))
+        return None
+
+    def _highlight_popup_row(self, idx):
+        self._popup_list.selection_clear(0, tk.END)
+        if 0 <= idx < self._popup_list.size():
+            self._popup_list.selection_set(idx)
+            self._popup_list.activate(idx)
+            self._popup_list.see(idx)
+        self._popup_active_idx = idx
+
+    def _show_popup(self, matches):
+        if not matches:
+            self._hide_popup()
+            return
+        if self._popup is None:
+            self._popup = tk.Toplevel(self.combo)
+            self._popup.overrideredirect(True)
+            self._popup.attributes("-topmost", True)
+            self._popup_list = tk.Listbox(self._popup, exportselection=False, activestyle="none")
+            self._popup_list.pack(fill="both", expand=True)
+            self._popup_list.bind("<Button-1>", self._on_popup_click)
+            self._popup_list.bind("<Motion>", self._on_popup_hover)
+            self._popup_active_idx = -1
+
+        shown = matches[:10]
+        self._popup_list.delete(0, tk.END)
+        for m in shown:
+            self._popup_list.insert(tk.END, m)
+        self._popup_active_idx = -1
+
+        x = self.combo.winfo_rootx()
+        y = self.combo.winfo_rooty() + self.combo.winfo_height()
+        w = max(self.combo.winfo_width(), 220)
+        h = min(20 * len(shown) + 4, 200)
+        self._popup.geometry(f"{w}x{h}+{x}+{y}")
+        self._popup.deiconify()
+        self.combo.focus_set()  # keep typing focus on the entry, never the popup
+
+    def _hide_popup(self):
+        if self._popup is not None:
+            self._popup.withdraw()
+            self._popup_active_idx = -1
+
+    def _on_popup_hover(self, event):
+        idx = self._popup_list.nearest(event.y)
+        if 0 <= idx < self._popup_list.size():
+            self._highlight_popup_row(idx)
+
+    def _on_popup_click(self, event):
+        idx = self._popup_list.nearest(event.y)
+        if idx < 0 or idx >= self._popup_list.size():
+            return
+        self._pick_value(self._popup_list.get(idx))
+
+    def _pick_value(self, value):
+        self.combo.delete(0, tk.END)
+        self.combo.insert(0, value)
+        self._hide_popup()
+        self.combo.focus_set()
+
 # =============================================================================
 # "MOVE PLAYER -> SELECTED TEAM" INVESTIGATION LOG - REMOVED, CONFIRMED UNSAFE
 # =============================================================================
@@ -1301,8 +1484,6 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.idx_player = None
         self.idx_players = []  # all currently-selected source rows (ctrl/shift-click multi-select)
         self.year_rows = []  # list of dicts: {salary_var, bonus_var, salary_lbl, bonus_lbl}
-        self._dest_popup = None  # custom floating suggestion list for the team combo (see _show_dest_popup)
-        self._dest_popup_active_idx = -1  # keyboard-highlighted row in the popup, if any
 
         # If a player was already selected on the Players tab and they're
         # sitting in Free Agents/the Secret pool, preselect them here instead
@@ -1352,30 +1533,9 @@ class SignFreeAgentDialog(tk.Toplevel):
         row1 = ttk.Frame(contract)
         row1.pack(fill="x", padx=10, pady=6)
         ttk.Label(row1, text="Sign to team:").pack(side="left")
-        # Editable (not readonly) so you can type a team name directly instead
-        # of only picking from the dropdown - the value list live-filters to
-        # matching teams as you type (see _on_dest_typed), and _resolve_dest_tid
-        # falls back to a name-substring match at sign-time if what's typed
-        # isn't an exact "id: name" match.
-        self._dest_all_values = [f"{tid}: {name}" for tid, name in SIGN_DEST_TEAMS]
-        self.cmb_dest = ttk.Combobox(row1, width=26)
-        self.cmb_dest["values"] = self._dest_all_values
-        self._set_combo_to_tid(self.cmb_dest, SignFreeAgentDialog._last_dest_tid)
-        self.cmb_dest.pack(side="left", padx=(6, 0))
-        self.cmb_dest.bind("<KeyRelease>", self._on_dest_typed)
-        self.cmb_dest.bind("<FocusIn>", self._select_all_dest_text)
-        self.cmb_dest.bind("<Button-1>", self._select_all_dest_text)
-        self.cmb_dest.bind("<FocusOut>", lambda e: self.after(150, self._hide_dest_popup))
-        # Bound directly (not via <KeyRelease>) and return "break" when the
-        # popup is open, so these move the highlighted suggestion instead of
-        # the native Combobox's default Up/Down/Return handling running too
-        # (which would open its own separate dropdown or do nothing useful).
-        self.cmb_dest.bind("<Down>", lambda e: self._on_dest_arrow(1))
-        self.cmb_dest.bind("<Up>", lambda e: self._on_dest_arrow(-1))
-        self.cmb_dest.bind("<Return>", self._on_dest_return)
-        # Tab should also confirm the highlighted suggestion (like Enter),
-        # but must NOT "break" - Tab still needs to move focus on afterward.
-        self.cmb_dest.bind("<Tab>", self._on_dest_tab)
+        self.dest_combo = TeamAutocompleteCombo(
+            row1, SIGN_DEST_TEAMS, width=26, initial_tid=SignFreeAgentDialog._last_dest_tid
+        ).pack(side="left", padx=(6, 0))
 
         row2 = ttk.Frame(contract)
         row2.pack(fill="x", padx=10, pady=6)
@@ -1410,12 +1570,10 @@ class SignFreeAgentDialog(tk.Toplevel):
         self._refresh_roster()
 
     def destroy(self):
-        # Clean up the custom suggestion popup Toplevel (see _show_dest_popup) -
-        # it isn't a child widget of this dialog's normal widget tree, so it
-        # wouldn't otherwise get torn down automatically. Covers both the
-        # "Close" button and the window's own X button (both call destroy()).
-        if self._dest_popup is not None:
-            self._dest_popup.destroy()
+        # The team combo's suggestion popup is a separate Toplevel, not a
+        # child of this dialog's normal widget tree, so it needs explicit
+        # cleanup. Covers both the "Close" button and the window's X button.
+        self.dest_combo.destroy_popup()
         super().destroy()
 
     def _combo_tid(self, cmb):
@@ -1429,144 +1587,6 @@ class SignFreeAgentDialog(tk.Toplevel):
                 return
         if cmb["values"]:
             cmb.current(0)
-
-    def _select_all_dest_text(self, event):
-        """Click/tab into 'Sign to team' selects all existing text, like a
-        browser address bar, so you can immediately start typing to replace
-        it - and re-shows the filtered popup for whatever text is already
-        there (clicking away and back shouldn't lose your filter)."""
-        widget = event.widget
-        widget.after(1, lambda: (widget.selection_range(0, tk.END), widget.icursor(tk.END)))
-        self._refresh_dest_popup_from_text()
-
-    def _refresh_dest_popup_from_text(self):
-        typed = self.cmb_dest.get().strip().lower()
-        self.cmb_dest["values"] = self._dest_all_values
-        if not typed:
-            self._hide_dest_popup()
-            return
-        matches = [v for v in self._dest_all_values if typed in v.lower()]
-        self._show_dest_popup(matches)
-
-    def _on_dest_typed(self, event):
-        """Live-filter 'Sign to team' as you type. Uses a custom floating
-        suggestion popup instead of the native ttk Combobox dropdown -
-        opening the real dropdown steals keyboard focus into its listbox,
-        which blocks further typing in the entry. This popup never takes
-        focus, so you can keep typing continuously; Up/Down move a highlighted
-        suggestion (see _on_dest_arrow) and Enter confirms it."""
-        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
-            if event.keysym == "Escape":
-                self._hide_dest_popup()
-            return
-        self._refresh_dest_popup_from_text()
-
-    def _on_dest_arrow(self, direction):
-        """Up/Down: move the highlighted suggestion in the popup instead of
-        letting the native Combobox binding open its own dropdown (returning
-        'break' stops that default handler from also running)."""
-        if self._dest_popup is None or str(self._dest_popup.state()) != "normal":
-            return None  # popup not showing - let the key behave normally
-        size = self._dest_popup_list.size()
-        if size == 0:
-            return "break"
-        self._dest_popup_active_idx = max(0, min(size - 1, self._dest_popup_active_idx + direction))
-        self._highlight_dest_popup_row(self._dest_popup_active_idx)
-        return "break"
-
-    def _on_dest_return(self, event):
-        """Enter: confirm the highlighted popup suggestion, if the popup is
-        open and something is highlighted; otherwise let Enter behave normally."""
-        if self._dest_popup is None or str(self._dest_popup.state()) != "normal":
-            return None
-        if 0 <= self._dest_popup_active_idx < self._dest_popup_list.size():
-            self._pick_dest_value(self._dest_popup_list.get(self._dest_popup_active_idx))
-            return "break"
-        return None
-
-    def _on_dest_tab(self, event):
-        """Tab: also confirm the highlighted suggestion (like Enter), but
-        must NOT return "break" - Tab still needs to move focus to the next
-        field afterward, unlike Enter which just closes the popup in place."""
-        if self._dest_popup is not None and str(self._dest_popup.state()) == "normal":
-            if 0 <= self._dest_popup_active_idx < self._dest_popup_list.size():
-                self._pick_dest_value(self._dest_popup_list.get(self._dest_popup_active_idx))
-        return None
-
-    def _highlight_dest_popup_row(self, idx):
-        self._dest_popup_list.selection_clear(0, tk.END)
-        if 0 <= idx < self._dest_popup_list.size():
-            self._dest_popup_list.selection_set(idx)
-            self._dest_popup_list.activate(idx)
-            self._dest_popup_list.see(idx)
-        self._dest_popup_active_idx = idx
-
-    def _show_dest_popup(self, matches):
-        if not matches:
-            self._hide_dest_popup()
-            return
-        if self._dest_popup is None:
-            self._dest_popup = tk.Toplevel(self)
-            self._dest_popup.overrideredirect(True)
-            self._dest_popup.attributes("-topmost", True)
-            self._dest_popup_list = tk.Listbox(self._dest_popup, exportselection=False, activestyle="none")
-            self._dest_popup_list.pack(fill="both", expand=True)
-            self._dest_popup_list.bind("<Button-1>", self._on_dest_popup_click)
-            self._dest_popup_list.bind("<Motion>", self._on_dest_popup_hover)
-            self._dest_popup_active_idx = -1
-
-        shown = matches[:10]
-        self._dest_popup_list.delete(0, tk.END)
-        for m in shown:
-            self._dest_popup_list.insert(tk.END, m)
-        self._dest_popup_active_idx = -1
-
-        x = self.cmb_dest.winfo_rootx()
-        y = self.cmb_dest.winfo_rooty() + self.cmb_dest.winfo_height()
-        w = max(self.cmb_dest.winfo_width(), 220)
-        h = min(20 * len(shown) + 4, 200)
-        self._dest_popup.geometry(f"{w}x{h}+{x}+{y}")
-        self._dest_popup.deiconify()
-        self.cmb_dest.focus_set()  # keep typing focus on the entry, never the popup
-
-    def _hide_dest_popup(self):
-        if self._dest_popup is not None:
-            self._dest_popup.withdraw()
-            self._dest_popup_active_idx = -1
-
-    def _on_dest_popup_hover(self, event):
-        idx = self._dest_popup_list.nearest(event.y)
-        if 0 <= idx < self._dest_popup_list.size():
-            self._highlight_dest_popup_row(idx)
-
-    def _on_dest_popup_click(self, event):
-        idx = self._dest_popup_list.nearest(event.y)
-        if idx < 0 or idx >= self._dest_popup_list.size():
-            return
-        self._pick_dest_value(self._dest_popup_list.get(idx))
-
-    def _pick_dest_value(self, value):
-        self.cmb_dest.delete(0, tk.END)
-        self.cmb_dest.insert(0, value)
-        self._hide_dest_popup()
-        self.cmb_dest.focus_set()
-
-    def _resolve_dest_tid(self):
-        """Resolve whatever's in the 'Sign to team' box to a TGID: exact
-        'id: name' match first (picking from the dropdown), else a
-        case-insensitive substring match against team names (typing "falcons"
-        or "atlanta" and not picking from the list), else None."""
-        typed = self.cmb_dest.get().strip()
-        if not typed:
-            return None
-        exact = self._combo_tid(self.cmb_dest)
-        if any(tid == exact for tid, _name in SIGN_DEST_TEAMS):
-            return exact
-        typed_lower = typed.lower()
-        for tid, name in SIGN_DEST_TEAMS:
-            if typed_lower in name.lower():
-                return tid
-        return None
 
     def _rebuild_year_rows(self):
         """Rebuild the per-year salary/bonus entry rows to match the current
@@ -1704,9 +1724,9 @@ class SignFreeAgentDialog(tk.Toplevel):
             return
 
         src_tid_pool = self._combo_tid(self.cmb_src)
-        dest_tid = self._resolve_dest_tid()
+        dest_tid = self.dest_combo.get_tid()
         if not dest_tid:
-            messagebox.showerror("Unknown team", f"'{self.cmb_dest.get()}' doesn't match any team.")
+            messagebox.showerror("Unknown team", f"'{self.dest_combo.combo.get()}' doesn't match any team.")
             return
 
         years = len(self.year_rows)
@@ -1804,7 +1824,6 @@ class App(tk.Tk):
         self.selected_player_index = None
         self.selected_stat_key = None
         self._player_index_map = []
-        self._pick_index_map = []  # For acquire picks dropdown mapping
         self.contract_year_var = tk.StringVar(value="0")
 
         self._build_ui()
@@ -2036,6 +2055,14 @@ class App(tk.Tk):
         ttk.Button(raw, text="Apply", command=self.on_apply_raw_column).grid(row=0, column=4, sticky="w", padx=8)
 
     def _build_picks_tab(self):
+        # Redesigned for a much simpler workflow: click pick(s) directly in
+        # the list (ctrl/shift-click for multiple - Treeview multi-select is
+        # the default "extended" mode already), pick a destination team, hit
+        # Assign. The old version required navigating 3 separate, disconnected
+        # dropdowns (From Team / To Team / Pick) just to move ONE pick, with
+        # its own parallel local-index-mapping system - all replaced here by
+        # just reading the tree's own selection directly (iid = model index,
+        # already true of how refresh_picks inserts rows).
         root = self.tab_picks
         top = ttk.Frame(root)
         top.pack(fill="x", padx=10, pady=10)
@@ -2043,33 +2070,46 @@ class App(tk.Tk):
         ttk.Label(top, text="Draft Picks (drpk.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_picks).pack(side="left", padx=8)
 
-        cols = ("team", "pick", "year_offset")
-        self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=22)
-        for c, w in zip(cols, [320, 120, 120]):
-            self.tree_picks.heading(c, text=c)
-            self.tree_picks.column(c, width=w, anchor="w")
-        self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        ttk.Label(top, text="Filter by team:").pack(side="left", padx=(16, 4))
+        self.pick_filter_var = tk.StringVar()
+        ttk.Entry(top, textvariable=self.pick_filter_var, width=20).pack(side="left")
+        self.pick_filter_var.trace_add("write", lambda *_a: self.refresh_picks())
+        ttk.Button(top, text="Clear", command=lambda: self.pick_filter_var.set("")).pack(side="left", padx=(6, 0))
+
+        help_text = (
+            "Click a pick to select it (ctrl/shift-click for multiple), pick a destination team below, then "
+            "Assign. Per the Discord community: DPNM (raw pick number) is 0-indexed for the CURRENT year only "
+            "(pick #1 overall = 0) - Round/Pick# below are already converted to the real, 1-indexed value you'd "
+            "see in-game. For FUTURE years, DPNM isn't a pick number at all (the draft order isn't determined "
+            "yet) - shown as \"Future\" rather than a fabricated round/pick. \"Year\" is a sequential 1/2/3... "
+            "display of the save's real year-offset values (this year, next year, etc.), not a literal calendar year."
+        )
+        help_frame = ttk.Frame(root)
+        help_frame.pack(fill="x", padx=10)
+        tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray").pack(fill="x", pady=(4, 6))
+
+        cols = ("team", "round", "pick_num", "year")
+        headings = {"team": ("Team", 260), "round": ("Round", 70), "pick_num": ("Pick #", 70), "year": ("Year", 60)}
+        self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=20, selectmode="extended")
+        for c in cols:
+            text, width = headings[c]
+            self.tree_picks.heading(c, text=text)
+            self.tree_picks.column(c, width=width, anchor="w")
+        self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        self.tree_picks.bind("<<TreeviewSelect>>", lambda e: self._update_pick_selection_label())
 
         bottom = ttk.Frame(root)
         bottom.pack(fill="x", padx=10, pady=(0, 10))
+        self.lbl_pick_selection = ttk.Label(bottom, text="No picks selected")
+        self.lbl_pick_selection.pack(side="left")
 
-        ttk.Label(bottom, text="Acquire picks: From Team").pack(side="left")
-        self.cmb_pick_from = ttk.Combobox(bottom, width=24, state="readonly")
-        team_vals = [f"{tid}: {name}" for tid, name in TEAM_NAMES.items()]
-        self.cmb_pick_from["values"] = team_vals
-        self.cmb_pick_from.pack(side="left", padx=6)
-        self.cmb_pick_from.bind("<<ComboboxSelected>>", self._on_from_team_changed)
+        ttk.Label(bottom, text="Assign to:").pack(side="left", padx=(16, 4))
+        # Draft picks can only be owned by real teams (confirmed: DPID values
+        # in every save checked are always 1-32, never a pool ID) - same
+        # 32-team list as Sign Free Agent's destination combo.
+        self.pick_dest_combo = TeamAutocompleteCombo(bottom, SIGN_DEST_TEAMS, width=26).pack(side="left")
 
-        ttk.Label(bottom, text="→ To Team").pack(side="left", padx=(10, 0))
-        self.cmb_pick_to = ttk.Combobox(bottom, width=24, state="readonly")
-        self.cmb_pick_to["values"] = team_vals
-        self.cmb_pick_to.pack(side="left", padx=6)
-
-        ttk.Label(bottom, text="Pick(s)").pack(side="left", padx=(10, 0))
-        self.cmb_pick_idxs = ttk.Combobox(bottom, width=30, state="readonly")
-        self.cmb_pick_idxs.pack(side="left", padx=6)
-
-        ttk.Button(bottom, text="Acquire", command=self.on_acquire_picks).pack(side="left", padx=8)
+        ttk.Button(bottom, text="Assign", command=self.on_assign_picks).pack(side="left", padx=8)
 
     def _build_cap_tab(self):
         root = self.tab_cap
@@ -2879,125 +2919,99 @@ class App(tk.Tk):
         for iid in self.tree_picks.get_children():
             self.tree_picks.delete(iid)
         if not self.model.picks:
-            self.cmb_pick_from.set("")
-            self.cmb_pick_to.set("")
-            self.cmb_pick_idxs.set("")
-            self.cmb_pick_idxs["values"] = []
+            self._update_pick_selection_label()
             return
 
-        # Sort picks by team, then by year offset (0, 1, 3...), then by round
+        query = (self.pick_filter_var.get() or "").strip().lower() if hasattr(self, "pick_filter_var") else ""
+
+        # Sort by team, then by year offset (0, 1, 3...), then by round/pick
         sorted_picks = sorted(
             enumerate(self.model.picks),
             key=lambda item: (
-                int((item[1].get(DRAFT_PICK_ID, "") or "").strip() or "99999"),  # Team ID first
-                y if (y := safe_int(item[1].get(DRAFT_PICK_YEAR, ""))) is not None else 999,  # Year offset (0, 1, 3...)
-                (safe_int(item[1].get(DRAFT_PICK_NUM, "")) or 0) // 32  # Round number
+                int((item[1].get(DRAFT_PICK_ID, "") or "").strip() or "99999"),
+                y if (y := safe_int(item[1].get(DRAFT_PICK_YEAR, ""))) is not None else 999,
+                safe_int(item[1].get(DRAFT_PICK_NUM, "")) or 0,
             )
         )
 
-        # Create a mapping of year offsets to sequential display numbers (1, 2, 3...)
+        # Sequential display mapping for year offsets: 0->1, 1->2, 3->3, etc.
+        # (see _build_picks_tab's help text - the real values aren't literal years)
         unique_years = sorted(set(
-            safe_int(p.get(DRAFT_PICK_YEAR, "")) 
-            for _, p in sorted_picks 
+            safe_int(p.get(DRAFT_PICK_YEAR, ""))
+            for _, p in sorted_picks
             if safe_int(p.get(DRAFT_PICK_YEAR, "")) is not None
         ))
         year_map = {y: i + 1 for i, y in enumerate(unique_years)}
+        current_year_off = unique_years[0] if unique_years else None
 
-        for i, (orig_idx, p) in enumerate(sorted_picks):
+        for orig_idx, p in sorted_picks:
             tid = (p.get(DRAFT_PICK_ID, "") or "").strip()
+            team_name = TEAM_NAMES.get(tid, tid or "Unknown")
+            if query and query not in team_name.lower() and query not in tid.lower():
+                continue
+
             pick_num = safe_int(p.get(DRAFT_PICK_NUM, ""))
             year_off = safe_int(p.get(DRAFT_PICK_YEAR, ""))
-
-            pick_disp = "-" if pick_num is None else str(pick_num + 1)
-            team_name = TEAM_NAMES.get(tid, tid or "Unknown")
-            round_num = (pick_num + 1 - 1) // 32 + 1 if pick_num is not None else "-"
-            
-            # Display year using sequential mapping: 0→1, 1→2, 3→3, etc.
             year_display = year_map.get(year_off, "-") if year_off is not None else "-"
 
-            self.tree_picks.insert("", tk.END, iid=str(orig_idx),
-                                  values=(f"{tid}: {team_name}", f"R{round_num}:{pick_disp}", str(year_display)))
-        
-        # Reset dropdowns
-        if self.cmb_pick_from["values"]:
-            self.cmb_pick_from.current(0)
-            self._on_from_team_changed()
+            # DPNM's meaning is confirmed to change by year (per the Discord
+            # community): for the CURRENT year (the lowest DPYO value), it's
+            # 0-indexed pick number - 1st overall = 0, 45th overall = 44 - so
+            # +1 gives the real in-game pick number, and round = DPNM // 32 + 1.
+            # For FUTURE years, DPNM is NOT a pick number at all (the actual
+            # draft order isn't determined yet) - at least for 1st-rounders,
+            # it's confirmed to instead be (original owning team's TGID - 1).
+            # Showing a computed round/pick for those would be confidently
+            # wrong, not just imprecise, so future-year picks show "Future"
+            # instead of a fabricated round/pick number.
+            if year_off is not None and year_off == current_year_off:
+                pick_disp = "-" if pick_num is None else str(pick_num + 1)
+                round_num = (pick_num // 32) + 1 if pick_num is not None else "-"
+                round_disp = f"R{round_num}"
+            else:
+                pick_disp = "-"
+                round_disp = "Future"
 
-    def _on_from_team_changed(self, event=None):
-        """Populate picks dropdown when 'from team' is selected."""
-        from_combo_val = self.cmb_pick_from.get()
-        if not from_combo_val or ":" not in from_combo_val:
-            self.cmb_pick_idxs["values"] = []
+            self.tree_picks.insert(
+                "", tk.END, iid=str(orig_idx),
+                values=(f"{tid}: {team_name}", round_disp, pick_disp, str(year_display)),
+            )
+
+        self._update_pick_selection_label()
+
+    def _update_pick_selection_label(self):
+        if not hasattr(self, "lbl_pick_selection"):
             return
+        n = len(self.tree_picks.selection())
+        self.lbl_pick_selection.configure(text="No picks selected" if n == 0 else f"{n} pick(s) selected")
 
-        from_tid = from_combo_val.split(":", 1)[0].strip()
-        
-        # Get all picks for this team
-        team_picks_raw = []
-        for model_idx, p in enumerate(self.model.picks):
-            if (p.get(DRAFT_PICK_ID, "") or "").strip() == from_tid:
-                pick_num = safe_int(p.get(DRAFT_PICK_NUM, ""))
-                year_off = safe_int(p.get(DRAFT_PICK_YEAR, ""))
-                round_num = (pick_num + 1 - 1) // 32 + 1 if pick_num is not None else 999
-                team_picks_raw.append((model_idx, pick_num, year_off, round_num))
-        
-        # Sort by year offset (ascending = most recent first), then round, then pick number
-        # This ensures consistent ordering: all Yr:0 first, then Yr:1, etc.
-        team_picks_raw.sort(key=lambda x: (
-            y if (y := x[2]) is not None else 999,  # year_off
-            x[3],  # round_num
-            p if (p := x[1]) is not None else 999  # pick_num
-        ))
-        
-        # Create a mapping of year offsets to sequential display numbers (1, 2, 3...)
-        unique_years = sorted(set(y for _, _, y, _ in team_picks_raw if y is not None))
-        year_map = {y: i + 1 for i, y in enumerate(unique_years)}
-        
-        # Create display list with indexes and store model indices
-        pick_displays = []
-        self._pick_index_map = []  # Store model indices for later reference
-        for local_idx, (model_idx, pick_num, year_off, round_num) in enumerate(team_picks_raw):
-            # Display year using sequential mapping: 0→1, 1→2, 3→3, etc.
-            year_display = year_map.get(year_off, "?") if year_off is not None else "?"
-            pick_display = f"R{round_num}:{pick_num + 1 if pick_num is not None else '-'} (Yr:{year_display})  [Idx:{local_idx}]"
-            pick_displays.append(pick_display)
-            self._pick_index_map.append(model_idx)  # Store the actual model index
-        
-        self.cmb_pick_idxs["values"] = pick_displays
-        if pick_displays:
-            self.cmb_pick_idxs.current(0)
-
-    def on_acquire_picks(self):
+    def on_assign_picks(self):
         if not self.model.picks:
             messagebox.showinfo("No picks", "Load drpk.csv to edit picks.")
             return
 
-        from_combo_val = self.cmb_pick_from.get()
-        to_combo_val = self.cmb_pick_to.get()
-        pick_display = self.cmb_pick_idxs.get()
-
-        if not from_combo_val or not to_combo_val or not pick_display:
-            messagebox.showwarning("Missing selection", "Select from team, to team, and pick(s).")
+        sel = self.tree_picks.selection()
+        if not sel:
+            messagebox.showwarning("No picks selected", "Select one or more picks in the list first.")
             return
 
-        from_tid = from_combo_val.split(":", 1)[0].strip() if ":" in from_combo_val else from_combo_val
-        to_tid = to_combo_val.split(":", 1)[0].strip() if ":" in to_combo_val else to_combo_val
-
-        # Get the current index from the dropdown
-        current_display_idx = self.cmb_pick_idxs.current()
-        if current_display_idx < 0 or current_display_idx >= len(self._pick_index_map):
-            messagebox.showwarning("Invalid selection", "Please select a valid pick.")
+        dest_tid = self.pick_dest_combo.get_tid()
+        if not dest_tid:
+            messagebox.showerror("Unknown team", f"'{self.pick_dest_combo.combo.get()}' doesn't match any team.")
             return
 
-        # Get the actual model index from the mapping
-        model_idx = self._pick_index_map[current_display_idx]
+        count = 0
+        for iid in sel:
+            try:
+                model_idx = int(iid)
+            except ValueError:
+                continue
+            self.model.picks[model_idx][DRAFT_PICK_ID] = dest_tid
+            count += 1
 
-        # Modify the pick directly in model.picks
-        self.model.picks[model_idx][DRAFT_PICK_ID] = to_tid
-
-        messagebox.showinfo("Acquired", f"Moved pick from {from_tid} → {to_tid}")
+        dest_name = TEAM_NAMES.get(dest_tid, dest_tid)
+        messagebox.showinfo("Picks assigned", f"Assigned {count} pick(s) to {dest_tid}: {dest_name}")
         self.refresh_picks()
-        self._on_from_team_changed()  # Refresh picks dropdown
 
     # ---------- Salary Cap ----------
     def refresh_cap(self):
@@ -3707,7 +3721,7 @@ class App(tk.Tk):
 _MUTATING_APP_METHODS = [
     "on_apply_name", "on_apply_stat", "on_apply_both", "on_apply_age_years",
     "set_contract_salary_to_min", "set_contract_bonus_to_min", "on_apply_contract",
-    "on_acquire_picks", "on_set_team_bonus_min",
+    "on_assign_picks", "on_set_team_bonus_min",
     "on_max_team_staff_skpt", "on_apply_cap", "on_apply_raw_column",
     "_apply_trainer_skpt", "_apply_coach_skpt", "_apply_gm_skpt",
     "set_trainer_skpt_to_max", "set_coach_skpt_to_max", "set_gm_skpt_to_max",
