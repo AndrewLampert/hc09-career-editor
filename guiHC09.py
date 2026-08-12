@@ -1970,10 +1970,11 @@ def load_ui_prefs():
             data = json.load(f)
             if isinstance(data, dict):
                 data.setdefault("mode", "light")
+                data.setdefault("facelift_enabled", True)
                 return data
     except Exception:
         pass
-    return {"mode": "light"}
+    return {"mode": "light", "facelift_enabled": True}
 
 def save_ui_prefs(prefs):
     try:
@@ -2137,6 +2138,15 @@ class App(tk.Tk):
 
         self.ui_prefs = load_ui_prefs()
         self.dark_mode_var = tk.BooleanVar(value=(self.ui_prefs.get("mode") == "dark"))
+        # Master switch: every feature added alongside the visual facelift
+        # (Motivator boost, contract dialog, staff filters, per-save team
+        # memory, background-thread load/save, etc.) works identically
+        # either way - this only controls whether the custom colors/fonts/
+        # dark-mode styling get applied, or the app just uses plain Tk/ttk
+        # defaults. Takes effect on next launch (not live) since cleanly
+        # undoing every style/option-database override without one would be
+        # more fragile than just re-reading the preference at startup.
+        self.facelift_var = tk.BooleanVar(value=self.ui_prefs.get("facelift_enabled", True))
         self._help_labels = []  # plain tk.Label help-text widgets, retheme target for Dark Mode toggle
         self._apply_theme(self.ui_prefs.get("mode", "light"))
 
@@ -2235,6 +2245,15 @@ class App(tk.Tk):
         if mode is None:
             mode = getattr(self, "ui_mode", "light")
         self.ui_mode = mode
+
+        if not self.ui_prefs.get("facelift_enabled", True):
+            # Classic mode: leave Tk/ttk at their plain platform defaults.
+            # self._ui_palette stays None - every dialog/widget that checks
+            # it (contract editor, team picker, canvas theming, etc.) already
+            # guards on that and just skips its custom colors when it's unset.
+            self._ui_palette = None
+            return
+
         p = UI_PALETTE_DARK if mode == "dark" else UI_PALETTE_LIGHT
         self._ui_palette = p
 
@@ -2332,6 +2351,8 @@ class App(tk.Tk):
         a Dark Mode toggle, since the Tk option database only affects widgets
         created after it's set."""
         p = self._ui_palette
+        if p is None:
+            return  # facelift disabled - nothing to retheme
         for name in ("lst_teams", "lst_players"):
             w = getattr(self, name, None)
             if w:
@@ -2353,6 +2374,25 @@ class App(tk.Tk):
         self._retheme_raw_widgets()
         self.ui_prefs["mode"] = mode
         save_ui_prefs(self.ui_prefs)
+
+    def on_toggle_facelift(self):
+        """Master switch: every feature works the same regardless, this only
+        controls whether the custom theme/colors/dark-mode get applied.
+        Doesn't try to live-undo the current styling - restarting is simpler
+        and more reliable than writing a matching 'un-theme' pass for every
+        style/option-database override _apply_theme makes."""
+        enabled = self.facelift_var.get()
+        self.ui_prefs["facelift_enabled"] = enabled
+        save_ui_prefs(self.ui_prefs)
+        if enabled:
+            self.chk_dark_mode.state(["!disabled"])
+        else:
+            self.chk_dark_mode.state(["disabled"])
+        messagebox.showinfo(
+            "Restart required",
+            "This takes effect the next time you launch the app. Nothing else changes - "
+            "every feature works the same either way, this only affects the look."
+        )
 
     # ---------- UI layout ----------
     def _build_ui(self):
@@ -2382,12 +2422,19 @@ class App(tk.Tk):
         ttk.Button(top, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
         ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
 
-        # Packed before the status label (both docking to the right) so it
-        # always claims its space regardless of how long the status text
-        # gets - previously a long "Loaded: ..." string could push this
+        # Packed before the status label (both docking to the right) so they
+        # always claim their space regardless of how long the status text
+        # gets - previously a long "Loaded: ..." string could push these
         # entirely off the visible window.
-        ttk.Checkbutton(
+        self.chk_dark_mode = ttk.Checkbutton(
             top, text="Dark Mode", variable=self.dark_mode_var, command=self.on_toggle_dark_mode
+        )
+        self.chk_dark_mode.pack(side="right", padx=(8, 0))
+        if not self.facelift_var.get():
+            self.chk_dark_mode.state(["disabled"])
+
+        ttk.Checkbutton(
+            top, text="Modern UI", variable=self.facelift_var, command=self.on_toggle_facelift
         ).pack(side="right", padx=(8, 0))
 
         self.lbl_status = ttk.Label(top, text="Load play.csv to begin.", style="Status.TLabel", width=40, anchor="w")
@@ -2455,7 +2502,10 @@ class App(tk.Tk):
         right_outer = ttk.Frame(root)
         right_outer.pack(side="left", fill="both", expand=True, pady=6)
 
-        right_canvas = tk.Canvas(right_outer, highlightthickness=0, bd=0, background=self._ui_palette["bg"])
+        canvas_kwargs = dict(highlightthickness=0, bd=0)
+        if self._ui_palette:
+            canvas_kwargs["background"] = self._ui_palette["bg"]
+        right_canvas = tk.Canvas(right_outer, **canvas_kwargs)
         self._themed_canvases = getattr(self, "_themed_canvases", [])
         self._themed_canvases.append(right_canvas)
         right_scroll = ttk.Scrollbar(right_outer, orient="vertical", command=right_canvas.yview)
@@ -3064,7 +3114,7 @@ class App(tk.Tk):
 
     def _prompt_first_team_choice(self):
         p = self._ui_palette
-        dlg = tk.Toplevel(self, background=p["bg"])
+        dlg = tk.Toplevel(self, background=p["bg"] if p else None)
         dlg.title("Choose Your Team")
         dlg.transient(self)
         dlg.grab_set()
@@ -3077,13 +3127,16 @@ class App(tk.Tk):
             justify="left", wraplength=380, padding=(12, 12, 12, 6),
         ).pack(anchor="w", fill="x")
 
-        lb = tk.Listbox(
-            dlg, exportselection=False, font=(UI_FONT_FAMILY, 10),
-            background=p["surface"], foreground=p["text"],
-            selectbackground=p["accent"], selectforeground=p["accent_text"],
-            highlightthickness=1, highlightbackground=p["border"], highlightcolor=p["accent"],
-            relief="flat", borderwidth=1,
-        )
+        lb_kwargs = dict(exportselection=False)
+        if p:
+            lb_kwargs.update(
+                font=(UI_FONT_FAMILY, 10),
+                background=p["surface"], foreground=p["text"],
+                selectbackground=p["accent"], selectforeground=p["accent_text"],
+                highlightthickness=1, highlightbackground=p["border"], highlightcolor=p["accent"],
+                relief="flat", borderwidth=1,
+            )
+        lb = tk.Listbox(dlg, **lb_kwargs)
         lb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         for tid, name in TEAM_NAMES.items():
             lb.insert(tk.END, f"{tid}: {name}")
