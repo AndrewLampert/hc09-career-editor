@@ -1361,6 +1361,8 @@ class SignFreeAgentDialog(tk.Toplevel):
         self._set_combo_to_tid(self.cmb_dest, SignFreeAgentDialog._last_dest_tid)
         self.cmb_dest.pack(side="left", padx=(6, 0))
         self.cmb_dest.bind("<KeyRelease>", self._on_dest_typed)
+        self.cmb_dest.bind("<FocusIn>", self._select_all_dest_text)
+        self.cmb_dest.bind("<Button-1>", self._select_all_dest_text)
 
         row2 = ttk.Frame(contract)
         row2.pack(fill="x", padx=10, pady=6)
@@ -1406,10 +1408,17 @@ class SignFreeAgentDialog(tk.Toplevel):
         if cmb["values"]:
             cmb.current(0)
 
+    def _select_all_dest_text(self, event):
+        """Click/tab into 'Sign to team' selects all existing text, like a
+        browser address bar, so you can immediately start typing to replace it."""
+        widget = event.widget
+        widget.after(1, lambda: (widget.selection_range(0, tk.END), widget.icursor(tk.END)))
+
     def _on_dest_typed(self, event):
         """Live-filter the 'Sign to team' dropdown's value list to teams whose
-        id or name contains what's typed so far, without touching the typed
-        text itself (only the underlying dropdown suggestions change)."""
+        id or name contains what's typed so far, and actually pop the dropdown
+        open to show the filtered suggestions (matching list) without altering
+        the typed text or moving keyboard focus off the entry."""
         if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
             return
         typed = self.cmb_dest.get().strip().lower()
@@ -1418,6 +1427,8 @@ class SignFreeAgentDialog(tk.Toplevel):
             return
         matches = [v for v in self._dest_all_values if typed in v.lower()]
         self.cmb_dest["values"] = matches or self._dest_all_values
+        if matches:
+            self.cmb_dest.event_generate("<Down>")
 
     def _resolve_dest_tid(self):
         """Resolve whatever's in the 'Sign to team' box to a TGID: exact
