@@ -82,15 +82,15 @@ DB_TABLE_FILES = {
     "cINF": "cinf.csv",
 }
 
-# cINF (1 row, global/save-level state) has SEYR ("Season Year") - the
-# current in-game season, confirmed directly by the user against their save's
-# actual displayed year: SEYR=255 -> real year 2008, so the offset is 1753.
-# (An earlier cross-reference against a community spreadsheet's team/playbook
-# history rows suggested +1752 from a different SEYR=255->2007 pairing - that
-# turned out to be a coincidental match from an unrelated context, not the
-# same field/table, and was wrong for cINF specifically. Only trust the
-# directly-confirmed +1753 offset for this field.)
-CINF_SEASON_YEAR_OFFSET = 1753
+# cINF (1 row, global/save-level state) has a SEYR field ("Season Year" per
+# the reference spreadsheet). DISPROVEN as a live "current season" indicator:
+# initially looked confirmed (one save, confirmed in-game as showing 2008,
+# had SEYR=255, and SEYR+1753=2008) - but a SECOND save, independently
+# confirmed in-game as showing 2009, ALSO has SEYR=255. It isn't dynamically
+# tracking the season the way it first appeared to; that first match was a
+# coincidence. NOT used anywhere anymore (see refresh_picks's comment) - left
+# defined only in case cINF's real meaning gets solved later.
+CINF_SEASON_YEAR_OFFSET = 1753  # UNRELIABLE - do not use for a "current year" display, see comment above
 
 # TMSA (Team Salary Cap, on the TEAM table, keyed by TGID): confirmed via a
 # live test - editing a player's contract updates their own displayed cap hit
@@ -1048,9 +1048,11 @@ class CSVModel:
         return True
 
     def get_current_season_year(self):
-        """Return the save's current in-game season year (e.g. 2008), or None
-        if cINF isn't loaded. See CINF_SEASON_YEAR_OFFSET for how this is
-        derived from the raw SEYR value."""
+        """UNRELIABLE - see CINF_SEASON_YEAR_OFFSET. Disproven as a live
+        "current season" indicator (two saves independently confirmed as
+        different in-game years both have the same raw SEYR value). Not
+        called anywhere; kept only in case cINF's real meaning is solved
+        later."""
         if not self.cinf:
             return None
         seyr = safe_int(self.cinf[0].get("SEYR", ""))
@@ -2127,10 +2129,9 @@ class App(tk.Tk):
             "Assign. Per the Discord community: DPNM (raw pick number) is 0-indexed for the CURRENT year only "
             "(pick #1 overall = 0) - Round/Pick# below are already converted to the real, 1-indexed value you'd "
             "see in-game. For FUTURE years, DPNM isn't a pick number at all (the draft order isn't determined "
-            "yet) - shown as \"Future\" rather than a fabricated round/pick. \"Year\" shows the real in-game "
-            "calendar year (e.g. 2008), computed from the save's current season (cINF/SEYR) - confirmed directly "
-            "against an actual save's displayed year. Falls back to a sequential 1/2/3... display if that table "
-            "isn't available."
+            "yet) - shown as \"Future\" rather than a fabricated round/pick. \"Year\" is a sequential 1/2/3... "
+            "display of the save's real year-offset values (this year, next year, etc.) - a real calendar year "
+            "was tried but disproven (two saves confirmed as different real years had the same raw value)."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -2985,22 +2986,23 @@ class App(tk.Tk):
             )
         )
 
+        # Sequential display mapping for year offsets: 0->1, 1->2, 3->3, etc.
+        # NOT real calendar years - cINF.SEYR was tried for that (see
+        # CSVModel.get_current_season_year / CINF_SEASON_YEAR_OFFSET) and
+        # briefly shipped, but DISPROVEN: two different saves independently
+        # confirmed as showing 2008 and 2009 in-game both have SEYR=255. It
+        # isn't dynamically tracking the season the way it appeared to on the
+        # first save - that match was a coincidence, not a real relationship.
+        # get_current_season_year()/CINF_SEASON_YEAR_OFFSET are left in place
+        # (documented as unreliable) in case cINF's real meaning gets solved
+        # later, but nothing here uses them anymore.
         unique_years = sorted(set(
             safe_int(p.get(DRAFT_PICK_YEAR, ""))
             for _, p in sorted_picks
             if safe_int(p.get(DRAFT_PICK_YEAR, "")) is not None
         ))
+        year_map = {y: i + 1 for i, y in enumerate(unique_years)}
         current_year_off = unique_years[0] if unique_years else None
-
-        # Prefer real calendar years (e.g. 2008, 2009) using cINF's current
-        # season year (see CSVModel.get_current_season_year) plus each pick's
-        # DPYO offset from the earliest/current DPYO value seen. Falls back
-        # to a sequential 1/2/3... display if cINF wasn't loaded.
-        real_current_year = self.model.get_current_season_year()
-        if real_current_year is not None:
-            year_map = {y: real_current_year + (y - current_year_off) for y in unique_years}
-        else:
-            year_map = {y: i + 1 for i, y in enumerate(unique_years)}
 
         for orig_idx, p in sorted_picks:
             tid = (p.get(DRAFT_PICK_ID, "") or "").strip()
