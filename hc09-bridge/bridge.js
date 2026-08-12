@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 
-const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM'];
+const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM', 'cINF'];
 
 function csvEscape(value) {
     if (value === null || value === undefined) return '';

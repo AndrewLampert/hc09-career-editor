@@ -79,7 +79,18 @@ DB_TABLE_FILES = {
     "GMSK": "gmsk.csv",
     "CSKL": "cskl.csv",
     "TEAM": "team.csv",
+    "cINF": "cinf.csv",
 }
+
+# cINF (1 row, global/save-level state) has SEYR ("Season Year") - the
+# current in-game season, confirmed directly by the user against their save's
+# actual displayed year: SEYR=255 -> real year 2008, so the offset is 1753.
+# (An earlier cross-reference against a community spreadsheet's team/playbook
+# history rows suggested +1752 from a different SEYR=255->2007 pairing - that
+# turned out to be a coincidental match from an unrelated context, not the
+# same field/table, and was wrong for cINF specifically. Only trust the
+# directly-confirmed +1753 offset for this field.)
+CINF_SEASON_YEAR_OFFSET = 1753
 
 # TMSA (Team Salary Cap, on the TEAM table, keyed by TGID): confirmed via a
 # live test - editing a player's contract updates their own displayed cap hit
@@ -775,6 +786,9 @@ class CSVModel:
         self.team = []              # list[dict] - one row per team (real teams + Free Agents/Secret/Draft/etc pools), keyed by TGID
         self.team_headers = []      # list[str]
         self.team_path = ""
+        self.cinf = []               # list[dict] - single global row, has SEYR (current season year, see CINF_SEASON_YEAR_OFFSET)
+        self.cinf_headers = []       # list[str]
+        self.cinf_path = ""
 
         self.team_col = None
         self.max_map = {}
@@ -823,6 +837,7 @@ class CSVModel:
         self.gmsk_path = os.path.join(tmp_dir, DB_TABLE_FILES["GMSK"])
         self.cskl_path = os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"])
         self.team_path = os.path.join(tmp_dir, DB_TABLE_FILES["TEAM"])
+        self.cinf_path = os.path.join(tmp_dir, DB_TABLE_FILES["cINF"])
 
         self._finish_load()
 
@@ -850,6 +865,8 @@ class CSVModel:
             self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"]), self.cskl, self.cskl_headers)
         if self.team:
             self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["TEAM"]), self.team, self.team_headers)
+        if self.cinf:
+            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["cINF"]), self.cinf, self.cinf_headers)
 
         backup_path = self.db_path + ".bak"
         shutil.copy2(self.db_path, backup_path)
@@ -931,6 +948,7 @@ class CSVModel:
         self.gmsk, self.gmsk_headers = self.load_csv(self.gmsk_path) if self.gmsk_path else ([], [])
         self.cskl, self.cskl_headers = self.load_csv(self.cskl_path) if self.cskl_path else ([], [])
         self.team, self.team_headers = self.load_csv(self.team_path) if self.team_path else ([], [])
+        self.cinf, self.cinf_headers = self.load_csv(self.cinf_path) if self.cinf_path else ([], [])
 
         if not self.players:
             raise ValueError("play.csv loaded 0 players/rows.")
@@ -1028,6 +1046,17 @@ class CSVModel:
         cur = safe_int(row.get(TEAM_SALARY_CAP_FIELD, "0")) or 0
         row[TEAM_SALARY_CAP_FIELD] = str(max(0, cur + delta_units))
         return True
+
+    def get_current_season_year(self):
+        """Return the save's current in-game season year (e.g. 2008), or None
+        if cINF isn't loaded. See CINF_SEASON_YEAR_OFFSET for how this is
+        derived from the raw SEYR value."""
+        if not self.cinf:
+            return None
+        seyr = safe_int(self.cinf[0].get("SEYR", ""))
+        if seyr is None:
+            return None
+        return seyr + CINF_SEASON_YEAR_OFFSET
 
 class TeamAutocompleteCombo:
     """A ttk.Combobox with type-to-filter team selection, backed by a custom
@@ -2098,8 +2127,10 @@ class App(tk.Tk):
             "Assign. Per the Discord community: DPNM (raw pick number) is 0-indexed for the CURRENT year only "
             "(pick #1 overall = 0) - Round/Pick# below are already converted to the real, 1-indexed value you'd "
             "see in-game. For FUTURE years, DPNM isn't a pick number at all (the draft order isn't determined "
-            "yet) - shown as \"Future\" rather than a fabricated round/pick. \"Year\" is a sequential 1/2/3... "
-            "display of the save's real year-offset values (this year, next year, etc.), not a literal calendar year."
+            "yet) - shown as \"Future\" rather than a fabricated round/pick. \"Year\" shows the real in-game "
+            "calendar year (e.g. 2008), computed from the save's current season (cINF/SEYR) - confirmed directly "
+            "against an actual save's displayed year. Falls back to a sequential 1/2/3... display if that table "
+            "isn't available."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -2954,15 +2985,22 @@ class App(tk.Tk):
             )
         )
 
-        # Sequential display mapping for year offsets: 0->1, 1->2, 3->3, etc.
-        # (see _build_picks_tab's help text - the real values aren't literal years)
         unique_years = sorted(set(
             safe_int(p.get(DRAFT_PICK_YEAR, ""))
             for _, p in sorted_picks
             if safe_int(p.get(DRAFT_PICK_YEAR, "")) is not None
         ))
-        year_map = {y: i + 1 for i, y in enumerate(unique_years)}
         current_year_off = unique_years[0] if unique_years else None
+
+        # Prefer real calendar years (e.g. 2008, 2009) using cINF's current
+        # season year (see CSVModel.get_current_season_year) plus each pick's
+        # DPYO offset from the earliest/current DPYO value seen. Falls back
+        # to a sequential 1/2/3... display if cINF wasn't loaded.
+        real_current_year = self.model.get_current_season_year()
+        if real_current_year is not None:
+            year_map = {y: real_current_year + (y - current_year_off) for y in unique_years}
+        else:
+            year_map = {y: i + 1 for i, y in enumerate(unique_years)}
 
         for orig_idx, p in sorted_picks:
             tid = (p.get(DRAFT_PICK_ID, "") or "").strip()
