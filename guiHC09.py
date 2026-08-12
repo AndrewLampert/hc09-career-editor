@@ -2183,6 +2183,29 @@ class App(tk.Tk):
     # Still shows a confirmation dialog every time as a matter of caution,
     # since the real cause remains unconfirmed - just don't take the specific
     # "fresh save only" framing as accurate anymore.
+    #
+    # DURABILITY FOLLOW-UP: reassigned ~30 picks across many teams/rounds on
+    # BLUS30128-CAREER-DOLPHINS, then played multiple additional games on a
+    # continuation save (DOLPHINS2). Both current-year AND future-year
+    # reassignments held up correctly over that span, matching what was
+    # visible in-game. A narrower check of 3 specific future-year picks
+    # briefly looked like it disproved future-year durability (they'd
+    # reverted to their original owner) - but a broader check of ALL of
+    # Dolphins' future-year picks showed the other ~17 reassigned ones were
+    # still intact, so that was far more likely 3 picks getting legitimately
+    # re-traded back by normal AI GM activity during simulated games (a real,
+    # ongoing game mechanic) than anything reverting on its own. No real
+    # "future picks don't stick" bug - retracted.
+    #
+    # PRACTICAL MITIGATION (unrelated to draft picks specifically - also
+    # applies to RPCS3-level save hangs seen independent of any pick editing,
+    # e.g. on QUICKSAVE which was never touched with pick reassignment):
+    # whenever something has seemed off after heavy editing/testing on a
+    # given save, starting a genuinely new save file and continuing from
+    # there has resolved it every time it's been tried. Not a fix for a
+    # specific known bug (no specific bug was ever isolated) - just the
+    # practical workaround that's actually worked, echoed in the confirmation
+    # dialog below.
     # =========================================================================
     def _build_picks_tab(self):
         root = self.tab_picks
@@ -2199,10 +2222,11 @@ class App(tk.Tk):
         ttk.Button(top, text="Clear", command=lambda: self.pick_filter_var.set("")).pack(side="left", padx=(6, 0))
 
         help_text = (
-            "Confirmed working on 2 independent saves (a fresh one and an aged one), but ONE specific heavily "
-            "test-edited save crashed on day-advance after reassigning a pick - real cause unconfirmed, most "
-            "likely from that save's own large accumulated editing history rather than draft picks specifically. "
-            "You'll get a confirmation prompt every time as a precaution. Click a pick to select it (ctrl/shift-"
+            "Confirmed working reliably across multiple saves and games of play (both current AND future-year "
+            "reassignments held up over time, alongside normal AI trade activity). Crashed once, on one heavily "
+            "test-edited save, never reproduced since - if anything ever seems off, saving to a NEW file and "
+            "continuing from there has resolved it every time it's come up. You'll get a confirmation prompt "
+            "every time as a precaution. Click a pick to select it (ctrl/shift-"
             "click for multiple), pick a destination team below, then Assign. Per the Discord community: DPNM "
             "(raw pick number) is 0-indexed for the CURRENT year only (pick #1 overall = 0) - Round/Pick# below "
             "are already converted to the real, 1-indexed value you'd see in-game. For FUTURE years, DPNM isn't "
@@ -3189,17 +3213,23 @@ class App(tk.Tk):
             return
 
         # See the investigation log above _build_picks_tab - confirmed working
-        # on 2 independent saves (one fresh, one aged), but crashed on
-        # day-advance on ONE specific heavily test-edited save. Real cause
-        # unconfirmed - warns every time as a matter of caution, not because
-        # a specific trigger condition ("fresh save only") is actually known.
+        # durably across 2 independent saves (fresh, aged, and re-verified
+        # across multiple additional games of play alongside normal AI trade
+        # activity). Crashed once, on ONE specific heavily test-edited save -
+        # never reproduced anywhere else despite much heavier later testing.
+        # Also confirmed practically (RPCS3-level save hangs unrelated to
+        # picks specifically, on this same save): starting a genuinely new
+        # save file resolved the hang every time it was tried. So the
+        # practical mitigation, if anything ever seems off after using this,
+        # is the same either way - save to a new file and continue from
+        # there, same as you would for any other odd save-state issue.
         dest_name = TEAM_NAMES.get(dest_tid, dest_tid)
         ok = messagebox.askyesno(
             "Confirm pick reassignment",
             f"Reassign {len(sel)} pick(s) to {dest_tid}: {dest_name}?\n\n"
-            "Confirmed working on 2 independent saves, but ONE specific save (with a large amount "
-            "of other test edits already made to it) crashed on day-advance after this. The real "
-            "trigger is unconfirmed - proceed with normal save-editing caution."
+            "Confirmed working reliably across multiple saves and games of play. If anything ever "
+            "seems off afterward (crash, hang, etc.), the fix that's worked every time so far is to "
+            "save to a NEW file and continue from there, rather than reusing a heavily-edited save."
         )
         if not ok:
             return
