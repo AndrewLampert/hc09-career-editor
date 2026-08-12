@@ -240,7 +240,7 @@ TEAM_NAMES = {
     # Signing one via Sign Free Agent is confirmed to work (safe, same as any
     # other free agent) - whether the special "Game Changers" presentation
     # still shows correctly for a signed one hasn't specifically been checked.
-    "1013": "Secret/Hidden Pool (Game Changers)",
+    "1013": "Game Changer Players",
 }
 
 PLAYER_FIRST_NAME_CODE = "PFNA"
@@ -1235,7 +1235,7 @@ class SwapTradeDialog(tk.Toplevel):
 # - this dialog is scoped to exactly what was confirmed: pulling a player out
 # of Free Agents/the Secret pool onto a real team, mirroring the exact fields
 # a real in-game "cut" reverses (see SIGN_CONTRACT_FIELDS comment below).
-SIGN_SOURCE_POOLS = [("1009", "Free Agents"), ("1013", "Secret/Hidden Pool (Game Changers)")]
+SIGN_SOURCE_POOLS = [("1009", "Free Agents"), ("1013", "Game Changer Players")]
 SIGN_DEST_TEAMS = [(tid, name) for tid, name in TEAM_NAMES.items() if tid not in ("1009", "1013", "1015")]
 
 
