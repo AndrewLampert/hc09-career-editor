@@ -28,6 +28,7 @@ import json
 import random
 import shutil
 import tempfile
+import threading
 import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -1940,6 +1941,192 @@ class SignFreeAgentDialog(tk.Toplevel):
 
 BASE_TITLE = "HC09 CSV Editor (GUI) - Safe Trades"
 
+# -----------------------------
+# Visual theme (cosmetic only - no functional change).
+# Applied via App._apply_theme() using ttk.Style + the Tk option database, so
+# plain tk widgets (Listbox/Text, still used in several places for
+# performance/simplicity) pick up matching colors/fonts without having to
+# edit every widget construction site individually. Light/dark are both full
+# palettes so the "Dark Mode" toggle can just swap which one is active.
+# -----------------------------
+UI_FONT_FAMILY = "Segoe UI"
+
+UI_PALETTE_LIGHT = {
+    "bg": "#f4f6fb", "surface": "#ffffff", "text": "#1c2430", "subtle": "#68707d",
+    "border": "#d7dbe3", "accent": "#2f6fed", "accent_hover": "#255ed1",
+    "accent_text": "#ffffff", "header_bg": "#eef1f7",
+}
+UI_PALETTE_DARK = {
+    "bg": "#191c20", "surface": "#23262c", "text": "#f2f4f8", "subtle": "#aab0bb",
+    "border": "#42474f", "accent": "#5b9bff", "accent_hover": "#7cadff",
+    "accent_text": "#0b0e12", "header_bg": "#2c3038",
+}
+
+UI_PREFS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_ui_prefs.json")
+
+def load_ui_prefs():
+    try:
+        with open(UI_PREFS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                data.setdefault("mode", "light")
+                return data
+    except Exception:
+        pass
+    return {"mode": "light"}
+
+def save_ui_prefs(prefs):
+    try:
+        with open(UI_PREFS_PATH, "w", encoding="utf-8") as f:
+            json.dump(prefs, f, indent=2)
+    except Exception:
+        pass
+
+
+class PlayerContractDialog(tk.Toplevel):
+    """Contract editor for an existing player - same all-years grid style as
+    SignFreeAgentDialog's contract section, but pre-filled with the player's
+    actual current PSA0-6/PSB0-6 values instead of defaults for a brand-new
+    signing. Opened from the Players + Stats tab's 'Edit Contract...' button,
+    replacing what used to be an always-expanded inline grid on that screen."""
+
+    def __init__(self, parent, model: CSVModel, player_index: int):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Edit Contract")
+        # No explicit geometry - let it size itself snugly to its actual
+        # content instead of guessing a fixed height (a hardcoded 640px left
+        # a large empty gap below the buttons on most players' contracts).
+        self.minsize(420, 460)
+        self.transient(parent)
+        self.grab_set()
+
+        self.parent = parent
+        self.model = model
+        self.player_index = player_index
+        self.rows = []  # [{salary_var, bonus_var, salary_lbl, bonus_lbl, salary_col, bonus_col}]
+
+        row = self.model.players[player_index]
+        name = self.model.player_name(row) if hasattr(self.model, "player_name") else ""
+        ttk.Label(self, text=f"Player: {name}", font=("", 10, "bold"), padding=(12, 12, 12, 4)).pack(anchor="w")
+
+        ttk.Label(
+            self,
+            text=f"1 unit = $10,000 (max salary {PLAYER_SALARY_MAX_VALUE} = {format_cap_dollars(PLAYER_SALARY_MAX_VALUE)}, "
+                 f"max bonus {PLAYER_BONUS_MAX_VALUE} = {format_cap_dollars(PLAYER_BONUS_MAX_VALUE)})",
+            foreground="gray", wraplength=420, justify="left",
+        ).pack(anchor="w", padx=12)
+
+        years_frame = ttk.Frame(self)
+        years_frame.pack(fill="x", padx=12, pady=(8, 4))
+
+        ttk.Label(years_frame, text="Year", foreground="gray").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(years_frame, text="Salary", foreground="gray").grid(row=0, column=1, sticky="w")
+        ttk.Label(years_frame, text="= $", foreground="gray").grid(row=0, column=2, sticky="w", padx=(6, 0))
+        ttk.Label(years_frame, text="Bonus", foreground="gray").grid(row=0, column=3, sticky="w", padx=(16, 0))
+        ttk.Label(years_frame, text="= $", foreground="gray").grid(row=0, column=4, sticky="w", padx=(6, 0))
+
+        for y in range(7):
+            r = y + 1
+            salary_col, bonus_col = f"PSA{y}", f"PSB{y}"
+            salary_now = safe_int(row.get(salary_col, "")) or 0
+            bonus_now = safe_int(row.get(bonus_col, "")) or 0
+
+            ttk.Label(years_frame, text=f"{y}").grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
+
+            salary_var = tk.StringVar(value=str(salary_now))
+            ttk.Entry(years_frame, width=8, textvariable=salary_var).grid(row=r, column=1, sticky="w", pady=2)
+            salary_lbl = ttk.Label(years_frame, text=format_cap_dollars(salary_now), width=14)
+            salary_lbl.grid(row=r, column=2, sticky="w", padx=(6, 0), pady=2)
+
+            bonus_var = tk.StringVar(value=str(bonus_now))
+            ttk.Entry(years_frame, width=8, textvariable=bonus_var).grid(row=r, column=3, sticky="w", padx=(16, 0), pady=2)
+            bonus_lbl = ttk.Label(years_frame, text=format_cap_dollars(bonus_now), width=14)
+            bonus_lbl.grid(row=r, column=4, sticky="w", padx=(6, 0), pady=2)
+
+            entry = {
+                "salary_var": salary_var, "bonus_var": bonus_var,
+                "salary_lbl": salary_lbl, "bonus_lbl": bonus_lbl,
+                "salary_col": salary_col, "bonus_col": bonus_col,
+            }
+            salary_var.trace_add("write", lambda *_a, e=entry: self._on_row_changed(e))
+            bonus_var.trace_add("write", lambda *_a, e=entry: self._on_row_changed(e))
+            self.rows.append(entry)
+
+            if y == 0:
+                ttk.Button(years_frame, text="Copy to rest →", command=self._copy_year0_to_rest).grid(
+                    row=r, column=5, sticky="w", padx=(16, 0), pady=2
+                )
+
+        self.lbl_total = ttk.Label(self, text="", foreground="gray")
+        self.lbl_total.pack(anchor="w", padx=12, pady=(4, 8))
+        self._update_total_label()
+
+        min_btns = ttk.Frame(self)
+        min_btns.pack(fill="x", padx=12, pady=(0, 4))
+        ttk.Button(min_btns, text="Set All Salary Min", command=self._set_salary_min).pack(side="left")
+        ttk.Button(min_btns, text="Set All Bonus Min", command=self._set_bonus_min).pack(side="left", padx=(8, 0))
+
+        bottom = ttk.Frame(self)
+        bottom.pack(fill="x", padx=12, pady=(8, 12), side="bottom")
+        ttk.Button(bottom, text="Apply", style="Accent.TButton", command=self._on_apply).pack(side="right")
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right", padx=(0, 8))
+
+    def _on_row_changed(self, entry):
+        entry["salary_lbl"].configure(text=format_cap_dollars(safe_int(entry["salary_var"].get()) or 0))
+        entry["bonus_lbl"].configure(text=format_cap_dollars(safe_int(entry["bonus_var"].get()) or 0))
+        self._update_total_label()
+
+    def _update_total_label(self):
+        total_units = sum(
+            (safe_int(e["salary_var"].get()) or 0) + (safe_int(e["bonus_var"].get()) or 0)
+            for e in self.rows
+        )
+        self.lbl_total.configure(text=f"Total contract value (all 7 years): {format_cap_dollars(total_units)}")
+
+    def _copy_year0_to_rest(self):
+        salary0 = self.rows[0]["salary_var"].get()
+        bonus0 = self.rows[0]["bonus_var"].get()
+        for entry in self.rows[1:]:
+            entry["salary_var"].set(salary0)
+            entry["bonus_var"].set(bonus0)
+
+    def _set_salary_min(self):
+        # 1 (the lowest non-zero unit, $10,000/yr) rather than 0 - some
+        # in-game behavior around a literal $0 salary is untested/unclear,
+        # so defaulting to the lowest non-zero value avoids the risk.
+        for entry in self.rows:
+            entry["salary_var"].set("1")
+
+    def _set_bonus_min(self):
+        for entry in self.rows:
+            entry["bonus_var"].set("0")
+
+    def _on_apply(self):
+        row = self.model.players[self.player_index]
+        headers = set(self.model.player_headers or [])
+        try:
+            updates = 0
+            for entry in self.rows:
+                salary_col, bonus_col = entry["salary_col"], entry["bonus_col"]
+                if salary_col in headers:
+                    salary_val = max(0, min(PLAYER_SALARY_MAX_VALUE, int(entry["salary_var"].get() or "0")))
+                    row[salary_col] = str(salary_val)
+                    updates += 1
+                if bonus_col in headers:
+                    bonus_val = max(0, min(PLAYER_BONUS_MAX_VALUE, int(entry["bonus_var"].get() or "0")))
+                    row[bonus_col] = str(bonus_val)
+                    updates += 1
+            self.parent.mark_dirty()
+            self.parent.refresh_players_for_team(preselect_model_idx=self.player_index)
+            self.parent.refresh_stats_for_player()
+            messagebox.showinfo("Contract updated", f"Updated {updates} field(s) across all 7 years.")
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Contract Error", str(e))
+
 
 class App(tk.Tk):
     def __init__(self):
@@ -1948,6 +2135,11 @@ class App(tk.Tk):
         self.geometry("1320x820")
         self.minsize(1180, 700)
 
+        self.ui_prefs = load_ui_prefs()
+        self.dark_mode_var = tk.BooleanVar(value=(self.ui_prefs.get("mode") == "dark"))
+        self._help_labels = []  # plain tk.Label help-text widgets, retheme target for Dark Mode toggle
+        self._apply_theme(self.ui_prefs.get("mode", "light"))
+
         self.model = CSVModel()
         self.dirty = False  # True whenever there are unsaved edits
 
@@ -1955,7 +2147,11 @@ class App(tk.Tk):
         self.selected_player_index = None
         self.selected_stat_key = None
         self._player_index_map = []
-        self.contract_year_var = tk.StringVar(value="0")
+
+        # Shared by the Trainer/Coach/GM tabs: those tables have 300+ league-
+        # wide rows, which is what made those tabs slow to render/scroll -
+        # defaulting to "my team only" cuts that by ~30x and is remembered.
+        self.staff_filter_var = tk.StringVar(value=self.ui_prefs.get("staff_filter", "my_team"))
 
         self.motivator_state = load_motivator_state()
         # Boosts applied since the last successful Save. Kept separate from
@@ -2004,16 +2200,170 @@ class App(tk.Tk):
     def clear_busy(self):
         self.config(cursor="")
 
+    def run_in_thread_with_busy(self, busy_text, work_fn, on_success, error_title="Error"):
+        """Runs work_fn() (e.g. a slow bridge.js export/import) on a background
+        thread so the window keeps painting/responding instead of Windows
+        marking it "(Not Responding)" for the duration. work_fn must only
+        touch self.model (plain data), never Tk widgets - those are only
+        touched again in on_success, which runs back on the main thread."""
+        self.set_busy(busy_text)
+        result_box = {}
+
+        def worker():
+            try:
+                result_box["value"] = work_fn()
+            except Exception as e:
+                result_box["error"] = e
+            self.after(0, finish)
+
+        def finish():
+            self.clear_busy()
+            if "error" in result_box:
+                messagebox.showerror(error_title, str(result_box["error"]))
+            else:
+                on_success(result_box.get("value"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ---------- Visual theme ----------
+    def _apply_theme(self, mode=None):
+        """Cosmetic-only pass: consistent colors/fonts/spacing across every
+        tab, no behavior change. Safe to skip (falls back to Tk defaults) if
+        anything here isn't supported on a given platform. Call again with a
+        different mode ("light"/"dark") to live-switch - existing ttk widgets
+        re-render automatically; raw tk widgets need _retheme_raw_widgets."""
+        if mode is None:
+            mode = getattr(self, "ui_mode", "light")
+        self.ui_mode = mode
+        p = UI_PALETTE_DARK if mode == "dark" else UI_PALETTE_LIGHT
+        self._ui_palette = p
+
+        try:
+            self.configure(bg=p["bg"])
+
+            import tkinter.font as tkfont
+            for font_name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+                try:
+                    tkfont.nametofont(font_name).configure(family=UI_FONT_FAMILY, size=9)
+                except Exception:
+                    pass
+
+            # Plain tk widgets (Listbox/Text) aren't ttk-themeable, so set
+            # their look via the option database instead. This only affects
+            # widgets created AFTER this call - already-built ones need
+            # _retheme_raw_widgets() to pick up a mode change live.
+            self.option_add("*Listbox.background", p["surface"])
+            self.option_add("*Listbox.foreground", p["text"])
+            self.option_add("*Listbox.selectBackground", p["accent"])
+            self.option_add("*Listbox.selectForeground", p["accent_text"])
+            self.option_add("*Listbox.relief", "flat")
+            self.option_add("*Listbox.borderWidth", 1)
+            self.option_add("*Listbox.highlightThickness", 1)
+            self.option_add("*Listbox.highlightBackground", p["border"])
+            self.option_add("*Listbox.highlightColor", p["accent"])
+            self.option_add("*Text.background", p["surface"])
+            self.option_add("*Text.foreground", p["text"])
+            self.option_add("*Text.relief", "flat")
+            self.option_add("*Text.borderWidth", 1)
+            self.option_add("*Text.highlightThickness", 1)
+            self.option_add("*Text.highlightBackground", p["border"])
+            self.option_add("*Label.background", p["bg"])
+            self.option_add("*Label.foreground", p["text"])
+
+            style = ttk.Style(self)
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
+
+            style.configure(".", background=p["bg"], foreground=p["text"], font=(UI_FONT_FAMILY, 9))
+            style.configure("TFrame", background=p["bg"])
+            style.configure("TLabel", background=p["bg"], foreground=p["text"])
+            style.configure("TCheckbutton", background=p["bg"], foreground=p["text"])
+            style.configure("TLabelframe", background=p["bg"], foreground=p["text"], bordercolor=p["border"])
+            style.configure("TLabelframe.Label", background=p["bg"], foreground=p["text"], font=(UI_FONT_FAMILY, 9, "bold"))
+
+            style.configure("TButton", padding=(10, 5), background=p["surface"], foreground=p["text"], bordercolor=p["border"])
+            style.map(
+                "TButton",
+                background=[("active", p["header_bg"]), ("pressed", p["header_bg"]), ("disabled", p["bg"])],
+                foreground=[("disabled", p["subtle"])],
+            )
+            # Reserved for the primary actions in the top toolbar (Load/Save).
+            style.configure("Accent.TButton", padding=(12, 6), background=p["accent"], foreground=p["accent_text"],
+                             bordercolor=p["accent"], font=(UI_FONT_FAMILY, 9, "bold"))
+            style.map(
+                "Accent.TButton",
+                background=[("active", p["accent_hover"]), ("pressed", p["accent_hover"])],
+                foreground=[("disabled", p["subtle"])],
+            )
+
+            style.configure("TEntry", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
+            style.configure("TCombobox", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
+            style.map("TCombobox", fieldbackground=[("readonly", p["surface"])])
+
+            style.configure("TNotebook", background=p["bg"], bordercolor=p["border"], tabmargins=(6, 6, 6, 0))
+            style.configure("TNotebook.Tab", padding=(16, 8), background=p["bg"], foreground=p["subtle"], font=(UI_FONT_FAMILY, 9, "bold"))
+            style.map(
+                "TNotebook.Tab",
+                background=[("selected", p["surface"])],
+                foreground=[("selected", p["accent"])],
+            )
+
+            style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"], foreground=p["text"],
+                             rowheight=24, bordercolor=p["border"], borderwidth=0)
+            style.configure("Treeview.Heading", background=p["header_bg"], foreground=p["text"],
+                             font=(UI_FONT_FAMILY, 9, "bold"), relief="flat")
+            style.map(
+                "Treeview",
+                background=[("selected", p["accent"])],
+                foreground=[("selected", p["accent_text"])],
+            )
+
+            style.configure("TSeparator", background=p["border"])
+            style.configure("TPanedwindow", background=p["bg"])
+            style.configure("Status.TLabel", background=p["bg"], foreground=p["subtle"])
+            style.configure("TScrollbar", background=p["surface"], bordercolor=p["border"], arrowcolor=p["subtle"], troughcolor=p["bg"])
+        except Exception:
+            pass  # cosmetics only - never block the app over a styling error
+
+    def _retheme_raw_widgets(self):
+        """Live-updates plain tk (non-ttk) widgets that already existed before
+        a Dark Mode toggle, since the Tk option database only affects widgets
+        created after it's set."""
+        p = self._ui_palette
+        for name in ("lst_teams", "lst_players"):
+            w = getattr(self, name, None)
+            if w:
+                w.configure(
+                    background=p["surface"], foreground=p["text"],
+                    selectbackground=p["accent"], selectforeground=p["accent_text"],
+                    highlightbackground=p["border"], highlightcolor=p["accent"],
+                )
+        if getattr(self, "txt_desc", None):
+            self.txt_desc.configure(background=p["surface"], foreground=p["text"], highlightbackground=p["border"])
+        for lbl in getattr(self, "_help_labels", []):
+            lbl.configure(background=p["bg"], foreground=p["subtle"])
+        for canvas in getattr(self, "_themed_canvases", []):
+            canvas.configure(background=p["bg"])
+
+    def on_toggle_dark_mode(self):
+        mode = "dark" if self.dark_mode_var.get() else "light"
+        self._apply_theme(mode)
+        self._retheme_raw_widgets()
+        self.ui_prefs["mode"] = mode
+        save_ui_prefs(self.ui_prefs)
+
     # ---------- UI layout ----------
     def _build_ui(self):
         top = ttk.Frame(self)
-        top.pack(fill="x", padx=10, pady=8)
+        top.pack(fill="x", padx=12, pady=10)
 
-        ttk.Button(top, text="Load Save File", command=self.on_load).pack(side="left")
-        ttk.Button(top, text="Save to File", command=self.on_save).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Load Save File", style="Accent.TButton", command=self.on_load).pack(side="left")
+        ttk.Button(top, text="Save to File", style="Accent.TButton", command=self.on_save).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Reload from File", command=self.on_reload).pack(side="left", padx=(8, 0))
 
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=12)
 
         ttk.Label(top, text="Recent:").pack(side="left")
         self.recent_files_var = tk.StringVar()
@@ -2027,16 +2377,24 @@ class App(tk.Tk):
         self._recent_display_to_path = {}
         self._refresh_recent_files_ui(load_recent_files())
 
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=12)
 
         ttk.Button(top, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
         ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
 
-        self.lbl_status = ttk.Label(top, text="Load play.csv to begin.")
-        self.lbl_status.pack(side="left", padx=12)
+        # Packed before the status label (both docking to the right) so it
+        # always claims its space regardless of how long the status text
+        # gets - previously a long "Loaded: ..." string could push this
+        # entirely off the visible window.
+        ttk.Checkbutton(
+            top, text="Dark Mode", variable=self.dark_mode_var, command=self.on_toggle_dark_mode
+        ).pack(side="right", padx=(8, 0))
+
+        self.lbl_status = ttk.Label(top, text="Load play.csv to begin.", style="Status.TLabel", width=40, anchor="w")
+        self.lbl_status.pack(side="left", fill="x", expand=True, padx=14)
 
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        self.notebook.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         self.tab_players = ttk.Frame(self.notebook)
         self.tab_picks = ttk.Frame(self.notebook)
@@ -2089,9 +2447,37 @@ class App(tk.Tk):
         self.lst_players.pack(fill="both", expand=True)
         self.lst_players.bind("<<ListboxSelect>>", self.on_player_select)
 
-        # Right: Name editor + Stats editor + Raw editor
-        right = ttk.Frame(root)
-        right.pack(side="left", fill="both", expand=True, pady=6)
+        # Right: Name editor + Stats editor + Contract editor + Raw editor.
+        # This column can hold more content than fits vertically depending on
+        # window size (e.g. the Contract Editor's 7-year grid), so it's
+        # wrapped in a scrollable canvas rather than assuming everything
+        # always fits - nothing gets silently clipped off below the window.
+        right_outer = ttk.Frame(root)
+        right_outer.pack(side="left", fill="both", expand=True, pady=6)
+
+        right_canvas = tk.Canvas(right_outer, highlightthickness=0, bd=0, background=self._ui_palette["bg"])
+        self._themed_canvases = getattr(self, "_themed_canvases", [])
+        self._themed_canvases.append(right_canvas)
+        right_scroll = ttk.Scrollbar(right_outer, orient="vertical", command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_scroll.set)
+        right_canvas.pack(side="left", fill="both", expand=True)
+        right_scroll.pack(side="right", fill="y")
+
+        right = ttk.Frame(right_canvas)
+        right_window_id = right_canvas.create_window((0, 0), window=right, anchor="nw")
+
+        def _on_right_frame_configure(event=None):
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+        right.bind("<Configure>", _on_right_frame_configure)
+
+        def _on_right_canvas_configure(event):
+            right_canvas.itemconfigure(right_window_id, width=event.width)
+        right_canvas.bind("<Configure>", _on_right_canvas_configure)
+
+        def _on_right_mousewheel(event):
+            right_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        right_canvas.bind("<MouseWheel>", _on_right_mousewheel)
+        right.bind("<MouseWheel>", _on_right_mousewheel)
 
         # --- Name Editor ---
         namefrm = ttk.LabelFrame(right, text="Name Editor (PFNA / PLNA) (sanitized to avoid crashes)")
@@ -2149,42 +2535,11 @@ class App(tk.Tk):
         self.ent_years.grid(row=0, column=3, sticky="w", padx=(4, 12))
         ttk.Button(info, text="Apply Age/Years", command=self.on_apply_age_years).grid(row=0, column=4, sticky="w")
 
-        contract = ttk.LabelFrame(right, text="Contract Editor (PSA#/PSB# from play.csv)")
-        contract.pack(fill="x", pady=(6, 0))
-
-        ttk.Label(contract, text="Year").grid(row=0, column=0, sticky="w")
-        self.cmb_contract_year = ttk.Combobox(
-            contract,
-            width=4,
-            state="readonly",
-            textvariable=self.contract_year_var,
-            values=[str(i) for i in range(7)]
-        )
-        self.cmb_contract_year.grid(row=0, column=1, sticky="w", padx=6)
-        self.cmb_contract_year.bind("<<ComboboxSelected>>", lambda e: self.refresh_contract_editor())
-        self.cmb_contract_year.current(0)
-
-        ttk.Label(contract, text="Salary").grid(row=0, column=2, sticky="w", padx=(10, 0))
-        self.ent_contract_salary = ttk.Entry(contract, width=9)
-        self.ent_contract_salary.grid(row=0, column=3, sticky="w", padx=4)
-
-        ttk.Label(contract, text="Bonus").grid(row=0, column=4, sticky="w", padx=(10, 0))
-        self.ent_contract_bonus = ttk.Entry(contract, width=9)
-        self.ent_contract_bonus.grid(row=0, column=5, sticky="w", padx=4)
-
-        ttk.Button(contract, text="Apply Salary/Bonus", command=self.on_apply_contract).grid(
-            row=0, column=6, sticky="w", padx=(8, 0)
-        )
-
-        ttk.Button(contract, text="Set All Salary Min", command=self.set_contract_salary_to_min).grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(4, 0)
-        )
-        ttk.Button(contract, text="Set All Bonus Min", command=self.set_contract_bonus_to_min).grid(
-            row=1, column=2, columnspan=2, sticky="w", pady=(4, 0)
-        )
-
-        self.lbl_contract_cols = ttk.Label(contract, text="Year 0 uses PSA0 / PSB0")
-        self.lbl_contract_cols.grid(row=2, column=0, columnspan=7, sticky="w", pady=(4, 0))
+        # Contract editing lives in its own popup (same all-years grid style
+        # as the Sign Free Agent dialog) rather than always-expanded inline -
+        # keeps this column compact and consistent with how Sign Free Agent
+        # already handles contracts.
+        ttk.Button(right, text="Edit Contract...", command=self.on_open_contract_editor).pack(anchor="w", pady=(6, 0))
 
         # Raw column editor (ANY column)
         raw = ttk.LabelFrame(right, text="Raw Column Editor (any header)")
@@ -2303,7 +2658,9 @@ class App(tk.Tk):
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
-        tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray").pack(fill="x", pady=(4, 6))
+        _lbl_help = tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray")
+        _lbl_help.pack(fill="x", pady=(4, 6))
+        self._help_labels.append(_lbl_help)
 
         cols = ("team", "orig_team", "round", "pick_num", "year")
         headings = {
@@ -2346,6 +2703,23 @@ class App(tk.Tk):
         self.lbl_cap_status.pack(anchor="w", padx=10, pady=(8, 0))
 
     # ---------- Staff Tabs (Trainer / Coach / GM) ----------
+    def _build_staff_team_filter(self, parent):
+        """Shared 'My Team' / 'All Teams' toggle for the Trainer/Coach/GM
+        tabs - these tables have 300+ league-wide rows, which is what made
+        those tabs slow to render/scroll. One shared setting across all
+        three, remembered across restarts."""
+        frm = ttk.Frame(parent)
+        frm.pack(side="left", padx=(16, 0))
+        ttk.Label(frm, text="Show:").pack(side="left", padx=(0, 4))
+        ttk.Radiobutton(
+            frm, text="My Team", variable=self.staff_filter_var, value="my_team",
+            command=self.on_staff_filter_changed,
+        ).pack(side="left")
+        ttk.Radiobutton(
+            frm, text="All Teams", variable=self.staff_filter_var, value="all_teams",
+            command=self.on_staff_filter_changed,
+        ).pack(side="left", padx=(6, 0))
+
     def _build_trainer_tab(self):
         root = ttk.Frame(self.notebook)
         self.tab_trainer = root
@@ -2356,6 +2730,7 @@ class App(tk.Tk):
         ttk.Label(top, text="Trainer (trvw.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_trainer).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Trainer's Stats", command=self.on_max_selected_trainer).pack(side="left", padx=(8, 0))
+        self._build_staff_team_filter(top)
 
         help_text = (
             "Injury Eval (TSIE/TSIM): How accurately the trainer assesses recovery length for a player's injury.\n\n"
@@ -2366,10 +2741,15 @@ class App(tk.Tk):
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
-        tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray").pack(fill="x", pady=(6, 0))
+        _lbl_help = tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray")
+        _lbl_help.pack(fill="x", pady=(6, 0))
+        self._help_labels.append(_lbl_help)
 
-        self.tree_trainer = ttk.Treeview(root, show="headings", height=20)
-        self.tree_trainer.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        self.tree_trainer = ttk.Treeview(root, show="headings", height=10)
+        self.tree_trainer.pack(fill="both", expand=True, padx=10, pady=(0, 0))
+        xscroll_trainer = ttk.Scrollbar(root, orient="horizontal", command=self.tree_trainer.xview)
+        xscroll_trainer.pack(fill="x", padx=10, pady=(0, 6))
+        self.tree_trainer.configure(xscrollcommand=xscroll_trainer.set)
 
         # Bottom editor for SKPT
         btm = ttk.Frame(root)
@@ -2400,6 +2780,7 @@ class App(tk.Tk):
         self.ent_coach_search.pack(side="left")
         ttk.Button(top, text="Find", command=lambda: self.refresh_coach()).pack(side="left", padx=(6, 4))
         ttk.Button(top, text="Clear", command=lambda: (self.coach_search_var.set(""), self.refresh_coach())).pack(side="left")
+        self._build_staff_team_filter(top)
 
         # Help text reflects what's actually confirmed in-game (verified via direct testing).
         help_text = (
@@ -2416,10 +2797,15 @@ class App(tk.Tk):
         # place help in its own frame below the controls so it can span the full width
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
-        tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray").pack(fill="x", pady=(6,0))
+        _lbl_help = tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray")
+        _lbl_help.pack(fill="x", pady=(6, 0))
+        self._help_labels.append(_lbl_help)
 
-        self.tree_coach = ttk.Treeview(root, show="headings", height=20)
-        self.tree_coach.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        self.tree_coach = ttk.Treeview(root, show="headings", height=10)
+        self.tree_coach.pack(fill="both", expand=True, padx=10, pady=(0, 0))
+        xscroll_coach = ttk.Scrollbar(root, orient="horizontal", command=self.tree_coach.xview)
+        xscroll_coach.pack(fill="x", padx=10, pady=(0, 6))
+        self.tree_coach.configure(xscrollcommand=xscroll_coach.set)
 
         # Bottom editor for SKPT
         btm = ttk.Frame(root)
@@ -2442,6 +2828,7 @@ class App(tk.Tk):
         ttk.Label(top, text="GM (gmvw.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_gm).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected GM's Stats", command=self.on_max_selected_gm).pack(side="left", padx=(8, 0))
+        self._build_staff_team_filter(top)
 
         help_text = (
             "Trade/Contract, Potential Eval (PE), and Rookie Scouting (RS) - each per position - are all "
@@ -2451,10 +2838,15 @@ class App(tk.Tk):
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
-        tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray").pack(fill="x", pady=(6, 0))
+        _lbl_help = tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray")
+        _lbl_help.pack(fill="x", pady=(6, 0))
+        self._help_labels.append(_lbl_help)
 
-        self.tree_gm = ttk.Treeview(root, show="headings", height=20)
-        self.tree_gm.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        self.tree_gm = ttk.Treeview(root, show="headings", height=10)
+        self.tree_gm.pack(fill="both", expand=True, padx=10, pady=(0, 0))
+        xscroll_gm = ttk.Scrollbar(root, orient="horizontal", command=self.tree_gm.xview)
+        xscroll_gm.pack(fill="x", padx=10, pady=(0, 6))
+        self.tree_gm.configure(xscrollcommand=xscroll_gm.set)
 
         # Bottom editor for SKPT
         btm = ttk.Frame(root)
@@ -2478,15 +2870,19 @@ class App(tk.Tk):
             f"You have unsaved changes that will be lost if you {action_desc}. Continue anyway?"
         )
 
-    def _load_db_path(self, db_path):
+    def _load_db_path(self, db_path, error_title="Load Error"):
         """Shared load logic used by Load Save File, Reload from File, and the
-        recent-files list, so all three stay in sync."""
-        self.set_busy(f"Loading {recent_file_display(db_path)}...")
-        try:
-            self.model.load_all_from_db(db_path)
-        finally:
-            self.clear_busy()
+        recent-files list, so all three stay in sync. Runs the slow bridge.js
+        export on a background thread so the window stays responsive instead
+        of Windows marking it "(Not Responding)" during the load."""
+        self.run_in_thread_with_busy(
+            f"Loading {recent_file_display(db_path)}...",
+            lambda: self.model.load_all_from_db(db_path),
+            lambda _result: self._on_load_db_path_success(db_path),
+            error_title=error_title,
+        )
 
+    def _on_load_db_path_success(self, db_path):
         # Any boosts applied since the last Save are being discarded along
         # with the rest of the in-memory edits - drop their "already
         # boosted" flags too so they don't get silently skipped later.
@@ -2526,7 +2922,7 @@ class App(tk.Tk):
             if not db_path:
                 return
 
-            self._load_db_path(db_path)
+            self._load_db_path(db_path, error_title="Load Error")
 
         except Exception as e:
             self.clear_busy()
@@ -2539,7 +2935,7 @@ class App(tk.Tk):
                 return
             if not self._confirm_discard_if_dirty("reload from disk"):
                 return
-            self._load_db_path(self.model.db_path)
+            self._load_db_path(self.model.db_path, error_title="Reload Error")
         except Exception as e:
             self.clear_busy()
             messagebox.showerror("Reload Error", str(e))
@@ -2556,7 +2952,7 @@ class App(tk.Tk):
         try:
             if not self._confirm_discard_if_dirty("load a different save"):
                 return
-            self._load_db_path(path)
+            self._load_db_path(path, error_title="Load Error")
         except Exception as e:
             self.clear_busy()
             messagebox.showerror("Load Error", str(e))
@@ -2605,31 +3001,29 @@ class App(tk.Tk):
         ttk.Button(dlg, text="Close", command=dlg.destroy).pack(pady=(0, 10))
 
     def on_save(self):
-        try:
-            if not self.model.players:
-                messagebox.showinfo("Nothing to save", "Load a save file first.")
-                return
+        if not self.model.players:
+            messagebox.showinfo("Nothing to save", "Load a save file first.")
+            return
 
-            self.set_busy("Saving...")
-            try:
-                backup_path = self.model.save_to_db()
-            finally:
-                self.clear_busy()
+        self.run_in_thread_with_busy(
+            "Saving...",
+            self.model.save_to_db,
+            self._on_save_success,
+            error_title="Save Error",
+        )
 
-            self._commit_pending_motivator_boosts()
-            self.clear_dirty()
-            self.lbl_status.configure(
-                text=f"Saved: {recent_file_display(self.model.db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
-            )
+    def _on_save_success(self, backup_path):
+        self._commit_pending_motivator_boosts()
+        self.clear_dirty()
+        self.lbl_status.configure(
+            text=f"Saved: {recent_file_display(self.model.db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
+        )
 
-            messagebox.showinfo(
-                "Saved",
-                f"Changes written directly to:\n{self.model.db_path}\n\n"
-                f"Backup of the previous version saved to:\n{backup_path}"
-            )
-        except Exception as e:
-            self.clear_busy()
-            messagebox.showerror("Save Error", str(e))
+        messagebox.showinfo(
+            "Saved",
+            f"Changes written directly to:\n{self.model.db_path}\n\n"
+            f"Backup of the previous version saved to:\n{backup_path}"
+        )
 
     # ---------- Teams / Players ----------
     def refresh_teams(self):
@@ -2638,19 +3032,80 @@ class App(tk.Tk):
             self.lst_teams.insert(tk.END, f"{tid}: {name}")
 
     def _select_default_team(self):
-        target = "1009"  # Free Agents (confirmed against real save data, see TEAM_NAMES)
+        """First time this save has ever been loaded (no remembered team),
+        ask once which team to default to. Every load after that silently
+        reselects the same team - switching teams any time from the list on
+        the left is always available and updates the remembered choice."""
+        remembered = self.ui_prefs.get("per_save", {}).get(self.get_current_save_key(), {}).get("last_team_id")
+        if remembered:
+            self._activate_team_by_id(remembered)
+        else:
+            self._prompt_first_team_choice()
+
+    def _activate_team_by_id(self, tid):
         idx = None
         for i in range(self.lst_teams.size()):
-            if self.lst_teams.get(i).startswith(target + ":"):
+            if self.lst_teams.get(i).startswith(str(tid) + ":"):
                 idx = i
                 break
+        if idx is None:
+            for i in range(self.lst_teams.size()):
+                if self.lst_teams.get(i).startswith("1009:"):  # Free Agents fallback
+                    idx = i
+                    break
         if idx is None and self.lst_teams.size() > 0:
             idx = 0
         if idx is not None:
             self.lst_teams.selection_clear(0, tk.END)
             self.lst_teams.selection_set(idx)
             self.lst_teams.activate(idx)
+            self.lst_teams.see(idx)
             self.on_team_select()
+
+    def _prompt_first_team_choice(self):
+        p = self._ui_palette
+        dlg = tk.Toplevel(self, background=p["bg"])
+        dlg.title("Choose Your Team")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.geometry("420x620")
+        dlg.minsize(380, 480)
+
+        ttk.Label(
+            dlg,
+            text="Pick your team for this save.\nRemembered from now on - you can switch teams anytime from the list on the left.",
+            justify="left", wraplength=380, padding=(12, 12, 12, 6),
+        ).pack(anchor="w", fill="x")
+
+        lb = tk.Listbox(
+            dlg, exportselection=False, font=(UI_FONT_FAMILY, 10),
+            background=p["surface"], foreground=p["text"],
+            selectbackground=p["accent"], selectforeground=p["accent_text"],
+            highlightthickness=1, highlightbackground=p["border"], highlightcolor=p["accent"],
+            relief="flat", borderwidth=1,
+        )
+        lb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        for tid, name in TEAM_NAMES.items():
+            lb.insert(tk.END, f"{tid}: {name}")
+
+        def choose(event=None):
+            sel = lb.curselection()
+            if not sel:
+                return
+            txt = lb.get(sel[0])
+            tid = txt.split(":", 1)[0].strip()
+            dlg.destroy()
+            self._activate_team_by_id(tid)
+
+        lb.bind("<Double-1>", choose)
+
+        btn_frm = ttk.Frame(dlg)
+        btn_frm.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(
+            btn_frm, text="Skip (use Free Agents)",
+            command=lambda: (dlg.destroy(), self._activate_team_by_id("1009")),
+        ).pack(side="left")
+        ttk.Button(btn_frm, text="Select", style="Accent.TButton", command=choose).pack(side="right")
 
     def on_team_select(self, event=None):
         sel = self.lst_teams.curselection()
@@ -2660,6 +3115,22 @@ class App(tk.Tk):
         tid = txt.split(":", 1)[0].strip()
         self.selected_team_id.set(tid)
         self.refresh_players_for_team()
+
+        per_save = self.ui_prefs.setdefault("per_save", {})
+        per_save.setdefault(self.get_current_save_key(), {})["last_team_id"] = tid
+        save_ui_prefs(self.ui_prefs)
+
+        if self.staff_filter_var.get() == "my_team":
+            self.refresh_trainer()
+            self.refresh_coach()
+            self.refresh_gm()
+
+    def on_staff_filter_changed(self):
+        self.ui_prefs["staff_filter"] = self.staff_filter_var.get()
+        save_ui_prefs(self.ui_prefs)
+        self.refresh_trainer()
+        self.refresh_coach()
+        self.refresh_gm()
 
     def on_set_team_bonus_min(self):
         if not self.model.players:
@@ -2695,7 +3166,6 @@ class App(tk.Tk):
             updated_players += 1
 
         self.refresh_players_for_team()
-        self.refresh_contract_editor()
         messagebox.showinfo(
             "Team bonus updated",
             f"Set PSB0 through PSB6 to 0 for {updated_players} player(s) on {team_name}."
@@ -2823,7 +3293,17 @@ class App(tk.Tk):
         self.player_search_var.set("")  # triggers _on_player_search_changed -> reverts to team view
         self.refresh_players_for_team()
 
-    def refresh_players_for_team(self):
+    def refresh_players_for_team(self, preselect_model_idx=None):
+        """preselect_model_idx: keep this player (by index into
+        self.model.players, not listbox position) selected across the
+        rebuild instead of always jumping back to the first row - matters
+        for anything that edits the currently-selected player and then
+        refreshes (e.g. the contract dialog), since otherwise the visible
+        selection silently jumps to a different player and the edit looks
+        like it didn't take effect."""
+        if preselect_model_idx is None:
+            preselect_model_idx = self.selected_player_index
+
         self.lbl_players_header.configure(text="Players on Team (play.csv)")
         self.lst_players.delete(0, tk.END)
         self.selected_player_index = None
@@ -2852,12 +3332,33 @@ class App(tk.Tk):
             pos = self.model.player_pos(r)
             name = self.model.player_name(r)
             age = (r.get(AGE_COL, "") or "").strip()
-            yrs = (r.get(YEARS_COL, "") or "").strip()
-            self.lst_players.insert(tk.END, f"{pos}  {name}   (Age:{age or '-'} Yrs:{yrs or '-'})")
+            ovr = (r.get("POVR", "") or "").strip()
+
+            # Always read PSA0/PSB0 (Year 0) here - that's exactly what the
+            # first row of the Edit Contract dialog writes, so an edit there
+            # always shows up. (An earlier version tried to compute the
+            # player's true "current" contract year from PCON-PCYL for
+            # players signed mid-contract, but that meant editing Year 0 in
+            # the dialog silently didn't move this number for anyone not
+            # freshly signed - not obvious/predictable enough to be worth it.)
+            years_left = safe_int(r.get("PCYL", ""))
+            cap_summary = ""
+            if years_left is not None and years_left > 0:
+                cap_units = (safe_int(r.get("PSA0", "")) or 0) + (safe_int(r.get("PSB0", "")) or 0)
+                cap_summary = f"{years_left}y {format_cap_dollars(cap_units)}/yr"
+
+            self.lst_players.insert(
+                tk.END,
+                f"{pos}  {name}   OVR:{ovr or '-'}  Age:{age or '-'}  {cap_summary}".rstrip()
+            )
 
         if self.lst_players.size() > 0:
-            self.lst_players.selection_set(0)
-            self.lst_players.activate(0)
+            lb_idx = 0
+            if preselect_model_idx is not None and preselect_model_idx in self._player_index_map:
+                lb_idx = self._player_index_map.index(preselect_model_idx)
+            self.lst_players.selection_set(lb_idx)
+            self.lst_players.activate(lb_idx)
+            self.lst_players.see(lb_idx)
             self.on_player_select()
 
     def on_player_select(self, event=None):
@@ -2882,9 +3383,6 @@ class App(tk.Tk):
         self.ent_first.insert(0, (r.get(PLAYER_FIRST_NAME_CODE, "") or "").strip())
         self.ent_last.delete(0, tk.END)
         self.ent_last.insert(0, (r.get(PLAYER_LAST_NAME_CODE, "") or "").strip())
-
-        # Prefill contract editor
-        self.refresh_contract_editor()
 
         # Prefill raw column value
         self.on_raw_column_changed()
@@ -3322,104 +3820,17 @@ class App(tk.Tk):
             messagebox.showerror("Apply Error", str(e))
 
     # ---------- Contract Editor ----------
-    def _current_contract_columns(self):
-        year_idx = self.cmb_contract_year.get().strip() if hasattr(self, "cmb_contract_year") else "0"
-        if year_idx not in [str(i) for i in range(7)]:
-            year_idx = "0"
-        return f"PSA{year_idx}", f"PSB{year_idx}"
-
-    def refresh_contract_editor(self):
-        salary_col, bonus_col = self._current_contract_columns()
-        self.lbl_contract_cols.configure(text=f"Year {self.cmb_contract_year.get() or '0'} uses {salary_col} / {bonus_col}")
-
-        self.ent_contract_salary.delete(0, tk.END)
-        self.ent_contract_bonus.delete(0, tk.END)
-
-        if self.selected_player_index is None:
-            return
-
-        row = self.model.players[self.selected_player_index]
-        self.ent_contract_salary.insert(0, (row.get(salary_col, "") or "").strip())
-        self.ent_contract_bonus.insert(0, (row.get(bonus_col, "") or "").strip())
-
     def _parse_contract_number(self, raw):
         try:
             return int(raw)
         except ValueError:
             return int(float(raw))
 
-    def set_contract_salary_to_min(self):
+    def on_open_contract_editor(self):
         if self.selected_player_index is None:
             messagebox.showinfo("No player", "Select a player first.")
             return
-        row = self.model.players[self.selected_player_index]
-        headers = set(self.model.player_headers or [])
-        updated = False
-        for col in PLAYER_CONTRACT_COLS:
-            if col in headers:
-                row[col] = "0"
-                updated = True
-        self.refresh_contract_editor()
-        if updated:
-            messagebox.showinfo("Salary updated", "Set PSA0 through PSA6 to 0 for the selected player.")
-
-    def set_contract_bonus_to_min(self):
-        if self.selected_player_index is None:
-            messagebox.showinfo("No player", "Select a player first.")
-            return
-        row = self.model.players[self.selected_player_index]
-        headers = set(self.model.player_headers or [])
-        updated = False
-        for col in PLAYER_BONUS_COLS:
-            if col in headers:
-                row[col] = "0"
-                updated = True
-        self.refresh_contract_editor()
-        if updated:
-            messagebox.showinfo("Bonus updated", "Set PSB0 through PSB6 to 0 for the selected player.")
-
-    def on_apply_contract(self):
-        if self.selected_player_index is None:
-            messagebox.showinfo("No player", "Select a player first.")
-            return
-
-        salary_col, bonus_col = self._current_contract_columns()
-        headers = set(self.model.player_headers or [])
-        if salary_col not in headers or bonus_col not in headers:
-            messagebox.showwarning(
-                "Missing columns",
-                f"Could not find {salary_col} and/or {bonus_col} in play.csv."
-            )
-            return
-
-        salary_raw = self.ent_contract_salary.get().strip()
-        bonus_raw = self.ent_contract_bonus.get().strip()
-        if salary_raw == "" and bonus_raw == "":
-            messagebox.showwarning("Nothing to apply", "Enter a salary and/or bonus value.")
-            return
-
-        row = self.model.players[self.selected_player_index]
-
-        try:
-            updates = []
-            if salary_raw != "":
-                salary_val = self._parse_contract_number(salary_raw)
-                salary_val = max(0, min(PLAYER_SALARY_MAX_VALUE, salary_val))
-                row[salary_col] = str(salary_val)
-                updates.append(f"{salary_col}={salary_val}")
-
-            if bonus_raw != "":
-                bonus_val = self._parse_contract_number(bonus_raw)
-                bonus_val = max(0, min(PLAYER_BONUS_MAX_VALUE, bonus_val))
-                row[bonus_col] = str(bonus_val)
-                updates.append(f"{bonus_col}={bonus_val}")
-
-            self.refresh_contract_editor()
-            self.refresh_players_for_team()
-            self.refresh_stats_for_player()
-            messagebox.showinfo("Contract updated", "Updated " + ", ".join(updates))
-        except Exception as e:
-            messagebox.showerror("Contract Error", str(e))
+        PlayerContractDialog(self, self.model, self.selected_player_index)
 
     # ---------- Trades ----------
     def on_open_swap_trade(self):
@@ -3606,6 +4017,16 @@ class App(tk.Tk):
             vals = [ (r.get(h, "") or "") for h in headers ]
             tree.insert("", tk.END, iid=str(i), values=vals)
 
+    def _filter_rows_by_staff_team(self, rows):
+        """rows is a list of (model_idx, row) tuples. Applies the shared
+        My Team / All Teams toggle from _build_staff_team_filter."""
+        if self.staff_filter_var.get() != "my_team":
+            return rows
+        tid = self.selected_team_id.get().strip()
+        if not tid:
+            return rows
+        return [(i, r) for i, r in rows if (r.get("TGID", "") or "").strip() == tid]
+
     def refresh_trainer(self):
         # Show TGID, SKPT, and confirmed skill fields (Injury Eval/Rehab/Fatigue Recovery) if present
         desired = ["TGID", "SKPT", "TSIE", "TSIM", "TSRH", "TSRM", "TSFR", "TSFM"]
@@ -3616,6 +4037,7 @@ class App(tk.Tk):
 
         # Prepare rows as (model_idx, row) for sorting
         rows = list(enumerate(self.model.trainers))
+        rows = self._filter_rows_by_staff_team(rows)
 
         # Sort by TGID if present, numeric when possible
         if "TGID" in (self.model.trainer_headers or []):
@@ -3842,6 +4264,7 @@ class App(tk.Tk):
 
         # Prepare rows as (model_idx, row) and apply filter
         rows = list(enumerate(self.model.coaches))
+        rows = self._filter_rows_by_staff_team(rows)
         if q:
             def match(r):
                 fn = (r.get("CFNM", "") or "").lower()
@@ -3950,6 +4373,7 @@ class App(tk.Tk):
 
         # Prepare rows as (model_idx, row) for sorting
         rows = list(enumerate(self.model.gms))
+        rows = self._filter_rows_by_staff_team(rows)
 
         # Sort by TGID if present, numeric when possible
         if "TGID" in (self.model.gm_headers or []):
@@ -4282,7 +4706,6 @@ class App(tk.Tk):
 # -----------------------------
 _MUTATING_APP_METHODS = [
     "on_apply_name", "on_apply_stat", "on_apply_both", "on_apply_age_years",
-    "set_contract_salary_to_min", "set_contract_bonus_to_min", "on_apply_contract",
     "on_assign_picks", "on_set_team_bonus_min",
     "on_max_team_staff_skpt", "on_apply_cap", "on_apply_raw_column",
     "_apply_trainer_skpt", "_apply_coach_skpt", "_apply_gm_skpt",

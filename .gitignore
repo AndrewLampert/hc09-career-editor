@@ -16,3 +16,6 @@ test-data/
 
 # Local Motivator Boost preference/history - not repo content
 .hc09_motivator_state.json
+
+# Local UI preferences (theme, remembered team per save) - not repo content
+.hc09_ui_prefs.json
