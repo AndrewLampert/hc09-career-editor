@@ -2186,8 +2186,10 @@ class App(tk.Tk):
             "(raw pick number) is 0-indexed for the CURRENT year only (pick #1 overall = 0) - Round/Pick# below "
             "are already converted to the real, 1-indexed value you'd see in-game. For FUTURE years, DPNM isn't "
             "a pick number at all (the draft order isn't determined yet) - shown as \"Future\" rather than a "
-            "fabricated round/pick. \"Year\" is a sequential 1/2/3... display of the save's real year-offset "
-            "values, not a literal calendar year (that was tried and disproven)."
+            "fabricated round/pick. \"Year\" is a sequential 1/2... display of the save's real year-offset "
+            "values, not a literal calendar year (that was tried and disproven). Only the current year and one "
+            "year out are shown, matching what the in-game draft picks screen itself displays - DRPK can carry "
+            "a further-out 3rd year that the game never shows, so this list skips it too."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -3096,6 +3098,13 @@ class App(tk.Tk):
         year_map = {y: i + 1 for i, y in enumerate(unique_years)}
         current_year_off = unique_years[0] if unique_years else None
 
+        # In-game, the draft picks screen only ever shows the current year
+        # plus one year out (2 years total) - confirmed by the user. DRPK can
+        # carry a 3rd, further-out year (e.g. DPYO 0, 1, 3 - a gap at 2) that
+        # the game itself never displays, so this list is limited to the same
+        # 2 years the game actually shows, to match and avoid clutter.
+        visible_years = set(unique_years[:2])
+
         for orig_idx, p in sorted_picks:
             tid = (p.get(DRAFT_PICK_ID, "") or "").strip()
             team_name = TEAM_NAMES.get(tid, tid or "Unknown")
@@ -3104,6 +3113,8 @@ class App(tk.Tk):
 
             pick_num = safe_int(p.get(DRAFT_PICK_NUM, ""))
             year_off = safe_int(p.get(DRAFT_PICK_YEAR, ""))
+            if year_off not in visible_years:
+                continue
             year_display = year_map.get(year_off, "-") if year_off is not None else "-"
 
             # DPNM's meaning is confirmed to change by year (per the Discord
