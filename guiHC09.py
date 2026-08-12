@@ -243,6 +243,16 @@ TEAM_NAMES = {
     "1013": "Game Changer Players",
 }
 
+# PSXP ("Portrait ID" per the reference spreadsheet) is the player's face/photo.
+# Confirmed by the user: PSXP=0 displays as a plain grey silhouette in-game (not
+# an error/missing state) - this is what every Game Changer Players pool player
+# has (see TEAM_NAMES "1013" comment). NOT otherwise investigated - a future
+# feature idea is custom portraits (uploading your own, or reassigning one of
+# the game's existing in-game portraits to a player) via this field, but the ID
+# space/lookup mechanism (what values are valid, where the actual images live)
+# hasn't been explored at all yet.
+PLAYER_PORTRAIT_CODE = "PSXP"
+
 PLAYER_FIRST_NAME_CODE = "PFNA"
 PLAYER_LAST_NAME_CODE = "PLNA"
 PLAYER_POS_CODE = "PPOS"
@@ -1289,6 +1299,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.parent = parent
         self.model = model
         self.idx_player = None
+        self.idx_players = []  # all currently-selected source rows (ctrl/shift-click multi-select)
         self.year_rows = []  # list of dicts: {salary_var, bonus_var, salary_lbl, bonus_lbl}
 
         # If a player was already selected on the Players tab and they're
@@ -1323,7 +1334,10 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.cmb_src.pack(anchor="w", padx=10, pady=(10, 6))
         self.cmb_src.bind("<<ComboboxSelected>>", lambda e: self._refresh_roster())
 
-        self.lst_src = tk.Listbox(src_frame, exportselection=False)
+        # EXTENDED selectmode: ctrl-click to add/remove individual players,
+        # shift-click for a range - lets you sign several players at once
+        # with the same contract terms.
+        self.lst_src = tk.Listbox(src_frame, exportselection=False, selectmode=tk.EXTENDED)
         self.lst_src.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.lst_src.bind("<<ListboxSelect>>", lambda e: self._on_pick_player())
 
@@ -1336,10 +1350,17 @@ class SignFreeAgentDialog(tk.Toplevel):
         row1 = ttk.Frame(contract)
         row1.pack(fill="x", padx=10, pady=6)
         ttk.Label(row1, text="Sign to team:").pack(side="left")
-        self.cmb_dest = ttk.Combobox(row1, state="readonly", width=26)
-        self.cmb_dest["values"] = [f"{tid}: {name}" for tid, name in SIGN_DEST_TEAMS]
+        # Editable (not readonly) so you can type a team name directly instead
+        # of only picking from the dropdown - the value list live-filters to
+        # matching teams as you type (see _on_dest_typed), and _resolve_dest_tid
+        # falls back to a name-substring match at sign-time if what's typed
+        # isn't an exact "id: name" match.
+        self._dest_all_values = [f"{tid}: {name}" for tid, name in SIGN_DEST_TEAMS]
+        self.cmb_dest = ttk.Combobox(row1, width=26)
+        self.cmb_dest["values"] = self._dest_all_values
         self._set_combo_to_tid(self.cmb_dest, SignFreeAgentDialog._last_dest_tid)
         self.cmb_dest.pack(side="left", padx=(6, 0))
+        self.cmb_dest.bind("<KeyRelease>", self._on_dest_typed)
 
         row2 = ttk.Frame(contract)
         row2.pack(fill="x", padx=10, pady=6)
@@ -1384,6 +1405,36 @@ class SignFreeAgentDialog(tk.Toplevel):
                 return
         if cmb["values"]:
             cmb.current(0)
+
+    def _on_dest_typed(self, event):
+        """Live-filter the 'Sign to team' dropdown's value list to teams whose
+        id or name contains what's typed so far, without touching the typed
+        text itself (only the underlying dropdown suggestions change)."""
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+            return
+        typed = self.cmb_dest.get().strip().lower()
+        if not typed:
+            self.cmb_dest["values"] = self._dest_all_values
+            return
+        matches = [v for v in self._dest_all_values if typed in v.lower()]
+        self.cmb_dest["values"] = matches or self._dest_all_values
+
+    def _resolve_dest_tid(self):
+        """Resolve whatever's in the 'Sign to team' box to a TGID: exact
+        'id: name' match first (picking from the dropdown), else a
+        case-insensitive substring match against team names (typing "falcons"
+        or "atlanta" and not picking from the list), else None."""
+        typed = self.cmb_dest.get().strip()
+        if not typed:
+            return None
+        exact = self._combo_tid(self.cmb_dest)
+        if any(tid == exact for tid, _name in SIGN_DEST_TEAMS):
+            return exact
+        typed_lower = typed.lower()
+        for tid, name in SIGN_DEST_TEAMS:
+            if typed_lower in name.lower():
+                return tid
+        return None
 
     def _rebuild_year_rows(self):
         """Rebuild the per-year salary/bonus entry rows to match the current
@@ -1486,36 +1537,44 @@ class SignFreeAgentDialog(tk.Toplevel):
             self._on_pick_player()
 
     def _on_pick_player(self):
+        """Refresh self.idx_players from the listbox's current selection
+        (ctrl/shift-click for multiple). self.idx_player stays the FIRST
+        selected one, for backward-compat call sites and the signing label."""
         sel = self.lst_src.curselection()
-        if not sel:
-            return
-        lb_idx = sel[0]
-        if lb_idx < len(self.map_src):
-            self.idx_player = self.map_src[lb_idx]
-            self._update_signing_label()
+        self.idx_players = [self.map_src[i] for i in sel if i < len(self.map_src)]
+        self.idx_player = self.idx_players[0] if self.idx_players else None
+        self._update_signing_label()
 
     def _update_signing_label(self):
-        if self.idx_player is None or not hasattr(self, "lbl_signing"):
+        if not hasattr(self, "lbl_signing"):
             return
-        row = self.model.players[self.idx_player]
-        pos = self.model.player_pos(row)
-        name = self.model.player_name(row)
-        ovr = (row.get("POVR", "") or "").strip()
-        self.lbl_signing.configure(text=f"Signing: {name} ({pos}, OVR {ovr})")
+        if not self.idx_players:
+            self.lbl_signing.configure(text="No player selected")
+            return
+        if len(self.idx_players) == 1:
+            row = self.model.players[self.idx_players[0]]
+            pos = self.model.player_pos(row)
+            name = self.model.player_name(row)
+            ovr = (row.get("POVR", "") or "").strip()
+            self.lbl_signing.configure(text=f"Signing: {name} ({pos}, OVR {ovr})")
+        else:
+            names = ", ".join(self.model.player_name(self.model.players[i]) for i in self.idx_players)
+            self.lbl_signing.configure(text=f"Signing {len(self.idx_players)} players: {names}")
 
     def _do_sign(self):
         # Re-derive from the listbox's own current selection rather than
-        # trusting the cached self.idx_player, so clicking a player and then
-        # immediately clicking "Sign Player" always targets whoever is
-        # actually highlighted, with no risk of stale state in between.
+        # trusting cached state, so clicking player(s) and then immediately
+        # clicking "Sign Player" always targets whoever is actually
+        # highlighted, with no risk of stale state in between.
         self._on_pick_player()
-        if self.idx_player is None:
-            messagebox.showwarning("Pick a player", "Select a player from the source pool first.")
+        if not self.idx_players:
+            messagebox.showwarning("Pick a player", "Select one or more players from the source pool first.")
             return
 
         src_tid_pool = self._combo_tid(self.cmb_src)
-        dest_tid = self._combo_tid(self.cmb_dest)
+        dest_tid = self._resolve_dest_tid()
         if not dest_tid:
+            messagebox.showerror("Unknown team", f"'{self.cmb_dest.get()}' doesn't match any team.")
             return
 
         years = len(self.year_rows)
@@ -1535,51 +1594,60 @@ class SignFreeAgentDialog(tk.Toplevel):
             salaries.append(s)
             bonuses.append(b)
 
-        row = self.model.players[self.idx_player]
-        src_tid = self.model.player_team_id(row)
-        name = self.model.player_name(row)
+        # Everyone selected gets the SAME contract terms (years/salary/bonus
+        # per year) - each signed independently, and the destination team's
+        # cap total accumulates all of them together.
+        signed_names = []
+        total_cap_hit = 0
+        for idx in self.idx_players:
+            row = self.model.players[idx]
+            src_tid = self.model.player_team_id(row)
+            signed_names.append(self.model.player_name(row))
 
-        for i, col in enumerate(PLAYER_CONTRACT_COLS):
-            row[col] = str(salaries[i]) if i < years else "0"
-        for i, col in enumerate(PLAYER_BONUS_COLS):
-            row[col] = str(bonuses[i]) if i < years else "0"
+            for i, col in enumerate(PLAYER_CONTRACT_COLS):
+                row[col] = str(salaries[i]) if i < years else "0"
+            for i, col in enumerate(PLAYER_BONUS_COLS):
+                row[col] = str(bonuses[i]) if i < years else "0"
 
-        # PCSA/PTSA/PVSB formulas found by decoding a real mid-contract player
-        # (Keith Brooking, Falcons LB, PCON=7/PCYL=2: PCSA=649 exactly equals
-        # PSA[5]+PSB[5] where 5=PCON-PCYL, i.e. the CURRENT year's salary+bonus
-        # combined - and PTSA=3640 exactly equals sum(all PSA)+sum(all PSB)).
-        # For a brand-new signing, PCON==PCYL so the current-year index is 0,
-        # which is exactly what this dialog just wrote to PSA0/PSB0 - i.e.
-        # year 1's entered salary/bonus.
-        total_salary = sum(int(row.get(c, "0") or "0") for c in PLAYER_CONTRACT_COLS)
-        total_bonus = sum(int(row.get(c, "0") or "0") for c in PLAYER_BONUS_COLS)
-        year1_cap_hit = salaries[0] + bonuses[0]
+            # PCSA/PTSA/PVSB formulas found by decoding a real mid-contract
+            # player (Keith Brooking, Falcons LB, PCON=7/PCYL=2: PCSA=649
+            # exactly equals PSA[5]+PSB[5] where 5=PCON-PCYL, i.e. the CURRENT
+            # year's salary+bonus combined - and PTSA=3640 exactly equals
+            # sum(all PSA)+sum(all PSB)). For a brand-new signing, PCON==PCYL
+            # so the current-year index is 0, which is exactly what this
+            # dialog just wrote to PSA0/PSB0 - i.e. year 1's entered
+            # salary/bonus.
+            total_salary = sum(int(row.get(c, "0") or "0") for c in PLAYER_CONTRACT_COLS)
+            total_bonus = sum(int(row.get(c, "0") or "0") for c in PLAYER_BONUS_COLS)
+            year1_cap_hit = salaries[0] + bonuses[0]
 
-        self.model.set_player_team_id(row, dest_tid)
-        row["PCON"] = str(years)
-        row["PCYL"] = str(years)
-        row["PCSA"] = str(year1_cap_hit)
-        row["PTSA"] = str(total_salary + total_bonus)
-        row["PVSB"] = str(total_bonus)
-        row["PPTI"] = str(src_tid)
+            self.model.set_player_team_id(row, dest_tid)
+            row["PCON"] = str(years)
+            row["PCYL"] = str(years)
+            row["PCSA"] = str(year1_cap_hit)
+            row["PTSA"] = str(total_salary + total_bonus)
+            row["PVSB"] = str(total_bonus)
+            row["PPTI"] = str(src_tid)
+            total_cap_hit += year1_cap_hit
 
         # Team-wide "Team Salary Cap" (TMSA) is a separately stored total, NOT
         # dynamically computed from the roster - confirmed live (bumping a
         # player's cap hit updated their own card correctly but left the
         # Team Roadmap's cap number frozen until TMSA itself was updated).
-        # A freshly signed player's cap hit is exactly year 1's salary+bonus
-        # (same units as TMSA), so that's what gets added.
-        cap_updated = self.model.adjust_team_salary_cap(dest_tid, year1_cap_hit)
+        # Each signed player's cap hit is exactly year 1's salary+bonus (same
+        # units as TMSA), so the sum across everyone signed gets added.
+        cap_updated = self.model.adjust_team_salary_cap(dest_tid, total_cap_hit)
 
         self.parent.mark_dirty()
         SignFreeAgentDialog._last_src_tid = src_tid_pool
         SignFreeAgentDialog._last_dest_tid = dest_tid
         dest_name = TEAM_NAMES.get(dest_tid, dest_tid)
         cap_note = "" if cap_updated else "\n\n(Team cap total not found/updated - load a save with the TEAM table.)"
+        who = signed_names[0] if len(signed_names) == 1 else f"{len(signed_names)} players ({', '.join(signed_names)})"
         messagebox.showinfo(
-            "Player signed",
-            f"{name} signed to {dest_tid}: {dest_name}\n"
-            f"{years} year(s), {format_cap_dollars(total_salary + total_bonus)} total.{cap_note}"
+            "Player(s) signed",
+            f"{who} signed to {dest_tid}: {dest_name}\n"
+            f"{years} year(s) each, {format_cap_dollars(salaries[0] + bonuses[0])}/yr year 1.{cap_note}"
         )
 
         self.parent.refresh_players_for_team()
