@@ -1373,6 +1373,9 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.cmb_dest.bind("<Down>", lambda e: self._on_dest_arrow(1))
         self.cmb_dest.bind("<Up>", lambda e: self._on_dest_arrow(-1))
         self.cmb_dest.bind("<Return>", self._on_dest_return)
+        # Tab should also confirm the highlighted suggestion (like Enter),
+        # but must NOT "break" - Tab still needs to move focus on afterward.
+        self.cmb_dest.bind("<Tab>", self._on_dest_tab)
 
         row2 = ttk.Frame(contract)
         row2.pack(fill="x", padx=10, pady=6)
@@ -1479,6 +1482,15 @@ class SignFreeAgentDialog(tk.Toplevel):
         if 0 <= self._dest_popup_active_idx < self._dest_popup_list.size():
             self._pick_dest_value(self._dest_popup_list.get(self._dest_popup_active_idx))
             return "break"
+        return None
+
+    def _on_dest_tab(self, event):
+        """Tab: also confirm the highlighted suggestion (like Enter), but
+        must NOT return "break" - Tab still needs to move focus to the next
+        field afterward, unlike Enter which just closes the popup in place."""
+        if self._dest_popup is not None and str(self._dest_popup.state()) == "normal":
+            if 0 <= self._dest_popup_active_idx < self._dest_popup_list.size():
+                self._pick_dest_value(self._dest_popup_list.get(self._dest_popup_active_idx))
         return None
 
     def _highlight_dest_popup_row(self, idx):
