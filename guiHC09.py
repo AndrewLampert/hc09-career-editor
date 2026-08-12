@@ -25,6 +25,7 @@ import csv
 import os
 import re
 import json
+import random
 import shutil
 import tempfile
 import subprocess
@@ -78,6 +79,59 @@ def recent_file_display(path):
     save file is literally named USR-DATA and wouldn't be distinguishable."""
     folder = os.path.basename(os.path.dirname(path))
     return folder or path
+
+# -----------------------------
+# Motivator Boost (replicates the in-game "Motivator" coach perk)
+#
+# Confirmed via controlled test (44 Falcons players, save BLUS30128-CAREER-TESTE,
+# uniform potential baseline, varied headroom 0-50, varied ceiling 70/90, all
+# checked against age/position/PLRN/dev-trait fields):
+#   - Purchasing Motivator applies ONE random flat integer delta (observed
+#     range 5-9, roughly uniform - chi2=4.64 on 44 samples, not significant
+#     enough to prove weighting) to a player's potential.
+#   - That SAME delta is added to every "X"-suffix potential/max stat field
+#     for that player, EXCEPT Acceleration cap (PACX) and Stamina cap (PSAX),
+#     which never moved for any of the 44 test subjects.
+#   - Current stat values are never touched, even for players with zero
+#     headroom (current == potential already).
+#   - Clamped at 99 same as any other potential stat.
+# This app-side reimplementation lets you apply that same boost to any
+# player on demand, without needing to actually buy the perk in-game.
+# State (mode preference + per-save boost history) is stored in a local app
+# file, NOT written into the save file, per user request - so it survives
+# closing/reopening the app but never touches game data on its own.
+# -----------------------------
+MOTIVATOR_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_motivator_state.json")
+MOTIVATOR_EXCLUDED_BASE_KEYS = {"PACC", "PSTA"}  # Acceleration / Stamina caps - never boosted in real testing
+MOTIVATOR_RANDOM_MIN = 5
+MOTIVATOR_RANDOM_MAX = 9
+MOTIVATOR_MODE_RANDOM = "Random (5-9)"
+MOTIVATOR_MODE_CUSTOM = "Custom amount"
+
+def load_motivator_state():
+    try:
+        with open(MOTIVATOR_STATE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                data.setdefault("last_mode", MOTIVATOR_MODE_RANDOM)
+                data.setdefault("last_custom_value", "10")
+                data.setdefault("include_excluded_stats", False)
+                data.setdefault("team_skip_already_boosted", True)
+                data.setdefault("boosts", {})
+                return data
+    except Exception:
+        pass
+    return {
+        "last_mode": MOTIVATOR_MODE_RANDOM, "last_custom_value": "10",
+        "include_excluded_stats": False, "team_skip_already_boosted": True, "boosts": {},
+    }
+
+def save_motivator_state(state):
+    try:
+        with open(MOTIVATOR_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
 DB_TABLE_FILES = {
     "PLAY": "play.csv",
     "DRPK": "drpk.csv",
@@ -1903,6 +1957,14 @@ class App(tk.Tk):
         self._player_index_map = []
         self.contract_year_var = tk.StringVar(value="0")
 
+        self.motivator_state = load_motivator_state()
+        # Boosts applied since the last successful Save. Kept separate from
+        # motivator_state["boosts"] (which is only written to disk on Save)
+        # so that Reload from File / loading a different save - which discard
+        # unsaved edits - also discard the "already boosted" flag for boosts
+        # that never actually made it into the save file.
+        self.motivator_pending_boosts = {}
+
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_close_request)
 
@@ -2005,6 +2067,7 @@ class App(tk.Tk):
         self.lst_teams.bind("<<ListboxSelect>>", self.on_team_select)
         ttk.Button(left, text="Set Team Bonus Min", command=self.on_set_team_bonus_min).pack(anchor="w", pady=(8, 0))
         ttk.Button(left, text="Max Team Staff", command=self.on_max_team_staff_skpt).pack(anchor="w", pady=(6, 0))
+        ttk.Button(left, text="Apply Motivator Boost to Team...", command=self.on_open_team_motivator_dialog).pack(anchor="w", pady=(6, 0))
 
         # Middle: Players
         mid = ttk.Frame(root)
@@ -2044,6 +2107,8 @@ class App(tk.Tk):
 
         ttk.Button(namefrm, text="Apply Name", command=self.on_apply_name).grid(row=0, column=4, sticky="w", padx=(8, 0))
         namefrm.grid_columnconfigure(4, weight=1)
+
+        ttk.Button(right, text="Apply Motivator Boost...", command=self.on_open_motivator_dialog).pack(anchor="w", pady=(0, 6))
 
         ttk.Label(right, text="Stats (described only)").pack(anchor="w")
 
@@ -2422,6 +2487,11 @@ class App(tk.Tk):
         finally:
             self.clear_busy()
 
+        # Any boosts applied since the last Save are being discarded along
+        # with the rest of the in-memory edits - drop their "already
+        # boosted" flags too so they don't get silently skipped later.
+        self.motivator_pending_boosts = {}
+
         if not self.model.team_col:
             messagebox.showwarning(
                 "Team Column Not Found",
@@ -2546,6 +2616,7 @@ class App(tk.Tk):
             finally:
                 self.clear_busy()
 
+            self._commit_pending_motivator_boosts()
             self.clear_dirty()
             self.lbl_status.configure(
                 text=f"Saved: {recent_file_display(self.model.db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
@@ -2976,6 +3047,264 @@ class App(tk.Tk):
             self.tree_stats.see(base_key)
         except Exception as e:
             messagebox.showerror("Apply Error", str(e))
+
+    # ---------- Motivator Boost ----------
+    def _commit_pending_motivator_boosts(self):
+        """Called after a successful Save: fold this session's pending boosts
+        into the persisted history so they now count as 'already boosted'."""
+        if not self.motivator_pending_boosts:
+            return
+        boosts = self.motivator_state.setdefault("boosts", {})
+        for save_key, per_player in self.motivator_pending_boosts.items():
+            save_boosts = boosts.setdefault(save_key, {})
+            for pgid, entries in per_player.items():
+                save_boosts.setdefault(pgid, []).extend(entries)
+        self.motivator_pending_boosts = {}
+        save_motivator_state(self.motivator_state)
+
+    def get_current_save_key(self):
+        """Key used to namespace boost history per save (folder name, since
+        every save file is literally named USR-DATA)."""
+        return recent_file_display(self.model.db_path) if self.model.db_path else "unknown"
+
+    def get_player_boost_history(self, pgid):
+        save_key = self.get_current_save_key()
+        saved = self.motivator_state.get("boosts", {}).get(save_key, {}).get(str(pgid), [])
+        pending = self.motivator_pending_boosts.get(save_key, {}).get(str(pgid), [])
+        return saved + pending
+
+    def on_open_motivator_dialog(self):
+        if self.selected_player_index is None:
+            messagebox.showinfo("No player", "Select a player first.")
+            return
+
+        r = self.model.players[self.selected_player_index]
+        pgid = (r.get("PGID", "") or "").strip()
+        player_label = self.model.player_name(r) if hasattr(self.model, "player_name") else pgid
+        history = self.get_player_boost_history(pgid)
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Apply Motivator Boost")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text=f"Player: {player_label}", font=("", 10, "bold")).pack(anchor="w")
+
+        if history:
+            total = sum(h.get("amount", 0) for h in history)
+            last = history[-1]
+            hist_text = (
+                f"Already boosted {len(history)} time(s) on this save "
+                f"(total +{total}, last +{last.get('amount')})."
+            )
+        else:
+            hist_text = "Not boosted yet on this save."
+        ttk.Label(frm, text=hist_text, foreground="#8a5a00", wraplength=340, justify="left").pack(anchor="w", pady=(4, 10))
+
+        ttk.Label(frm, text="Mode:").pack(anchor="w")
+        mode_var = tk.StringVar(value=self.motivator_state.get("last_mode", MOTIVATOR_MODE_RANDOM))
+        cmb_mode = ttk.Combobox(
+            frm, state="readonly", width=22, textvariable=mode_var,
+            values=[MOTIVATOR_MODE_RANDOM, MOTIVATOR_MODE_CUSTOM]
+        )
+        cmb_mode.pack(anchor="w", pady=(2, 8))
+
+        custom_frm = ttk.Frame(frm)
+        custom_frm.pack(anchor="w", fill="x")
+        ttk.Label(custom_frm, text="Custom amount (added to every potential stat):").pack(side="left")
+        ent_custom = ttk.Entry(custom_frm, width=6)
+        ent_custom.insert(0, str(self.motivator_state.get("last_custom_value", "10")))
+        ent_custom.pack(side="left", padx=(6, 0))
+
+        def _sync_custom_state(*_):
+            ent_custom.configure(state="normal" if mode_var.get() == MOTIVATOR_MODE_CUSTOM else "disabled")
+        mode_var.trace_add("write", _sync_custom_state)
+        _sync_custom_state()
+
+        include_var = tk.BooleanVar(value=bool(self.motivator_state.get("include_excluded_stats", False)))
+        ttk.Checkbutton(
+            frm, variable=include_var,
+            text="Also include Acceleration & Stamina caps (real perk never boosts these)"
+        ).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(
+            frm,
+            text="By default applies to every potential/max stat except Acceleration\n"
+                 "and Stamina caps (confirmed never boosted by the real perk).\n"
+                 "Current stats are left untouched, same as the real perk.",
+            justify="left", foreground="#555"
+        ).pack(anchor="w", pady=(0, 10))
+
+        btn_frm = ttk.Frame(frm)
+        btn_frm.pack(anchor="e", fill="x")
+
+        def do_apply():
+            mode = mode_var.get()
+            if mode == MOTIVATOR_MODE_CUSTOM:
+                try:
+                    amount = int(ent_custom.get().strip())
+                except Exception:
+                    messagebox.showerror("Invalid amount", "Custom amount must be a whole number.")
+                    return
+            else:
+                amount = random.randint(MOTIVATOR_RANDOM_MIN, MOTIVATOR_RANDOM_MAX)
+
+            include_excluded = include_var.get()
+            self._apply_motivator_boost(pgid, amount, include_excluded)
+
+            self.motivator_state["last_mode"] = mode
+            if mode == MOTIVATOR_MODE_CUSTOM:
+                self.motivator_state["last_custom_value"] = str(amount)
+            self.motivator_state["include_excluded_stats"] = include_excluded
+            save_motivator_state(self.motivator_state)
+
+            dlg.destroy()
+            note = "" if include_excluded else " (except accel/stamina caps)"
+            messagebox.showinfo("Motivator Boost applied", f"{player_label}: +{amount} to all potential stats{note}.")
+
+        ttk.Button(btn_frm, text="Cancel", command=dlg.destroy).pack(side="right")
+        ttk.Button(btn_frm, text="Apply", command=do_apply).pack(side="right", padx=(0, 8))
+
+    def _apply_motivator_boost(self, pgid, amount, include_excluded=False):
+        self._apply_motivator_boost_to_row(self.model.players[self.selected_player_index], amount, include_excluded)
+        self.mark_dirty()
+        self.refresh_stats_for_player()
+
+    def _apply_motivator_boost_to_row(self, r, amount, include_excluded=False):
+        """Mutates one player row + records boost history. No UI refresh here
+        so this can be called in a loop for team-wide application."""
+        for base_key, max_col in self.model.max_map.items():
+            if base_key in MOTIVATOR_EXCLUDED_BASE_KEYS and not include_excluded:
+                continue
+            cur_val = safe_int(r.get(max_col, "")) or 0
+            r[max_col] = str(clamp_stat(cur_val + amount))
+
+        pgid = (r.get("PGID", "") or "").strip()
+        save_key = self.get_current_save_key()
+        save_pending = self.motivator_pending_boosts.setdefault(save_key, {})
+        history = save_pending.setdefault(str(pgid), [])
+        history.append({"amount": amount, "included_accel_stamina": include_excluded})
+
+    def on_open_team_motivator_dialog(self):
+        if not self.model.players:
+            messagebox.showinfo("Load first", "Load play.csv first.")
+            return
+        tid = self.selected_team_id.get().strip()
+        if not tid:
+            messagebox.showinfo("No team", "Select a team first.")
+            return
+        team_col = self.model.team_col
+        if not team_col:
+            messagebox.showwarning("No team column", "Team column not detected in play.csv.")
+            return
+
+        team_name = TEAM_NAMES.get(tid, tid)
+        team_rows = [r for r in self.model.players if (r.get(team_col, "") or "").strip() == tid]
+        if not team_rows:
+            messagebox.showinfo("No players", f"No players found on {team_name}.")
+            return
+
+        already_boosted = sum(1 for r in team_rows if self.get_player_boost_history((r.get("PGID", "") or "").strip()))
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Apply Motivator Boost to Team")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text=f"Team: {team_name} ({len(team_rows)} players)", font=("", 10, "bold")).pack(anchor="w")
+        if already_boosted:
+            ttk.Label(
+                frm, foreground="#8a5a00", wraplength=360, justify="left",
+                text=f"{already_boosted} of {len(team_rows)} player(s) on this team already have a boost recorded on this save."
+            ).pack(anchor="w", pady=(4, 10))
+
+        ttk.Label(frm, text="Mode:").pack(anchor="w")
+        mode_var = tk.StringVar(value=self.motivator_state.get("last_mode", MOTIVATOR_MODE_RANDOM))
+        cmb_mode = ttk.Combobox(
+            frm, state="readonly", width=22, textvariable=mode_var,
+            values=[MOTIVATOR_MODE_RANDOM, MOTIVATOR_MODE_CUSTOM]
+        )
+        cmb_mode.pack(anchor="w", pady=(2, 8))
+
+        custom_frm = ttk.Frame(frm)
+        custom_frm.pack(anchor="w", fill="x")
+        ttk.Label(custom_frm, text="Custom amount (same for every player):").pack(side="left")
+        ent_custom = ttk.Entry(custom_frm, width=6)
+        ent_custom.insert(0, str(self.motivator_state.get("last_custom_value", "10")))
+        ent_custom.pack(side="left", padx=(6, 0))
+
+        def _sync_custom_state(*_):
+            ent_custom.configure(state="normal" if mode_var.get() == MOTIVATOR_MODE_CUSTOM else "disabled")
+        mode_var.trace_add("write", _sync_custom_state)
+        _sync_custom_state()
+
+        note_text = "Random mode rolls a fresh 5-9 independently for each player (matches the real perk - it's not the same amount for everyone)."
+        ttk.Label(frm, text=note_text, wraplength=360, justify="left", foreground="#555").pack(anchor="w", pady=(0, 8))
+
+        include_var = tk.BooleanVar(value=bool(self.motivator_state.get("include_excluded_stats", False)))
+        ttk.Checkbutton(
+            frm, variable=include_var,
+            text="Also include Acceleration & Stamina caps (real perk never boosts these)"
+        ).pack(anchor="w", pady=(0, 4))
+
+        skip_var = tk.BooleanVar(value=bool(self.motivator_state.get("team_skip_already_boosted", True)))
+        ttk.Checkbutton(
+            frm, variable=skip_var,
+            text="Skip players who already have a boost recorded on this save"
+        ).pack(anchor="w", pady=(0, 10))
+
+        btn_frm = ttk.Frame(frm)
+        btn_frm.pack(anchor="e", fill="x")
+
+        def do_apply():
+            mode = mode_var.get()
+            fixed_amount = None
+            if mode == MOTIVATOR_MODE_CUSTOM:
+                try:
+                    fixed_amount = int(ent_custom.get().strip())
+                except Exception:
+                    messagebox.showerror("Invalid amount", "Custom amount must be a whole number.")
+                    return
+
+            include_excluded = include_var.get()
+            skip_already = skip_var.get()
+
+            boosted = 0
+            skipped = 0
+            for r in team_rows:
+                pgid = (r.get("PGID", "") or "").strip()
+                if skip_already and self.get_player_boost_history(pgid):
+                    skipped += 1
+                    continue
+                amount = fixed_amount if fixed_amount is not None else random.randint(MOTIVATOR_RANDOM_MIN, MOTIVATOR_RANDOM_MAX)
+                self._apply_motivator_boost_to_row(r, amount, include_excluded)
+                boosted += 1
+
+            self.motivator_state["last_mode"] = mode
+            if fixed_amount is not None:
+                self.motivator_state["last_custom_value"] = str(fixed_amount)
+            self.motivator_state["include_excluded_stats"] = include_excluded
+            self.motivator_state["team_skip_already_boosted"] = skip_already
+            save_motivator_state(self.motivator_state)
+
+            self.mark_dirty()
+            self.refresh_players_for_team()
+            self.refresh_stats_for_player()
+
+            dlg.destroy()
+            messagebox.showinfo(
+                "Team Motivator Boost applied",
+                f"{team_name}: boosted {boosted} player(s), skipped {skipped} already-boosted."
+            )
+
+        ttk.Button(btn_frm, text="Cancel", command=dlg.destroy).pack(side="right")
+        ttk.Button(btn_frm, text="Apply to Team", command=do_apply).pack(side="right", padx=(0, 8))
 
     def on_apply_age_years(self):
         if self.selected_player_index is None:

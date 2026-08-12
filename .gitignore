@@ -13,3 +13,6 @@ test-data/
 
 # Local recent-files list - personal file paths, not repo content
 .hc09_recent_files.json
+
+# Local Motivator Boost preference/history - not repo content
+.hc09_motivator_state.json
