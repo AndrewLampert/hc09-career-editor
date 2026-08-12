@@ -2102,54 +2102,60 @@ class App(tk.Tk):
         ttk.Button(raw, text="Apply", command=self.on_apply_raw_column).grid(row=0, column=4, sticky="w", padx=8)
 
     # =========================================================================
-    # DRAFT PICK REASSIGNMENT - REMOVED, CONFIRMED UNSAFE
+    # DRAFT PICK REASSIGNMENT - RESTORED, "FRESH SAVE ONLY" THEORY DISPROVEN
     # =========================================================================
     # An "Assign to team" feature (writing DRAFT_PICK_ID directly, matching
     # the approach independently used and reported working by someone in the
-    # NFL Head Coach modding Discord) was built and shipped, then CONFIRMED TO
-    # CRASH THE GAME ON DAY-ADVANCE by the user testing it directly - the same
-    # failure mode as the "Move Player -> Selected Team" investigation earlier
-    # in this file (see that log for the full methodology). The same Discord
-    # thread that described the DPID approach also flagged this exact risk
-    # ("It might f*ck up the game later since the trade details are in the
-    # list I found earlier, but it should work on a new game") - the crash
-    # confirms that caution was warranted for an in-progress save, at least in
-    # this case.
+    # NFL Head Coach modding Discord) was originally confirmed to CRASH THE
+    # GAME ON DAY-ADVANCE on the primary test save (BLUS30128-CAREER-TEST) -
+    # the same failure mode as the "Move Player -> Selected Team" investigation
+    # earlier in this file. That same Discord thread had flagged this exact
+    # risk up front: "It might f*ck up the game later since the trade details
+    # are in the list I found earlier, but it should work on a new game."
     #
-    # Searched for a separate "trade details" table (the Discord's own hint)
-    # without success: no table found containing anything resembling a trade/
-    # transaction ledger. DPTT and DRPP (both 224 records - one draft class's
-    # worth of picks) look like draft-class scouting/prospect data, not trade
-    # history. DPLP (32 records) is too sparse to be a trade ledger. TEAM.TRDE
-    # is a red herring - it's "Team Rating DEF" (defense rating), not
-    # trade-related despite the name.
+    # Ruled out two things that turned out NOT to be the cause: a separate
+    # "trade details" table (searched, none found - DPTT/DRPP look like
+    # draft-class scouting data, not a trade ledger; DPLP too sparse; TEAM.TRDE
+    # is "Team Rating DEF", an unrelated red herring despite the name), and
+    # DPOD staleness (writing DPOD to match the new team too made things
+    # WORSE - the pick vanished from the destination team's board entirely -
+    # and didn't stop the crash either, so DPOD is never written here).
     #
-    # Tested a second hypothesis - that leaving DPOD (original owning team)
-    # stale/mismatched from the new DPID was the trigger, by writing DPOD to
-    # match the new team too (making the pick look like it always belonged
-    # there, no trade history at all): this made things WORSE, not better -
-    # the pick disappeared from the destination team's draft board entirely
-    # (never checked whether it also vanished from the source team's), AND
-    # the game still crashed on day-advance regardless. For comparison, the
-    # ORIGINAL DPID-only test displayed correctly on the destination team
-    # (proving DPID alone is sufficient for correct display) but still
-    # crashed too. So: DPOD should stay untouched (confirmed to actively
-    # break display when touched), and the crash itself is unrelated to
-    # DPOD - something else entirely causes it, on both variants tried.
+    # Also reproduced the crash via the REAL HC09Editor.exe's own binary
+    # writer, not just this project's bridge - ruling out a bug specific to
+    # this reimplementation.
     #
-    # CONCLUSION: same as the player-move investigation - whatever actually
-    # causes the crash wasn't found via save-file inspection alone across
-    # either variant tested. The tab is left as a VIEW-ONLY list (still
-    # useful - shows every pick, current vs. original owner, round/pick#,
-    # year) with no way to actually reassign a pick until a safe method is
-    # found.
+    # Initially looked like a "fresh vs. aged save" distinction (DRPK grows
+    # from 448 records on a brand-new save to 672 once a season has passed -
+    # one full 224-pick draft class per DPYO value): reassigning multiple
+    # picks (both current AND next year, several rounds) worked cleanly on a
+    # freshly-created save. BUT that theory was DISPROVEN by testing a THIRD,
+    # separate save (BLUS30128-CAREER-DOLPHINS) that also has 672 DRPK
+    # records (same "aged" bucket as the crashing TEST save) - the exact same
+    # multi-pick reassignment worked fine there too, surviving day-advance.
+    # So DRPK size/save age is NOT the deciding factor - two 672-record saves
+    # gave opposite results.
+    #
+    # CURRENT WORKING THEORY (not confirmed): the crash is specific to
+    # BLUS30128-CAREER-TEST itself, most likely from the sheer volume of
+    # OTHER experimental edits made directly to that one save throughout this
+    # project's development (dozens of rounds of Coach/GM/player/cap/roster
+    # testing, including at least one other confirmed-crashy edit - the
+    # "Move Player" TGID investigation - performed on the exact same save
+    # file) rather than anything about draft picks specifically. Draft pick
+    # reassignment itself is now confirmed working on TWO independent saves
+    # (one fresh, one aged) and only ever failed on the one save that had
+    # accumulated the most total editing history of any save in this project.
+    # Still shows a confirmation dialog every time as a matter of caution,
+    # since the real cause remains unconfirmed - just don't take the specific
+    # "fresh save only" framing as accurate anymore.
     # =========================================================================
     def _build_picks_tab(self):
         root = self.tab_picks
         top = ttk.Frame(root)
         top.pack(fill="x", padx=10, pady=10)
 
-        ttk.Label(top, text="Draft Picks (drpk.csv) - view only, see comment above _build_picks_tab").pack(side="left")
+        ttk.Label(top, text="Draft Picks (drpk.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_picks).pack(side="left", padx=8)
 
         ttk.Label(top, text="Filter by team:").pack(side="left", padx=(16, 4))
@@ -2159,13 +2165,16 @@ class App(tk.Tk):
         ttk.Button(top, text="Clear", command=lambda: self.pick_filter_var.set("")).pack(side="left", padx=(6, 0))
 
         help_text = (
-            "VIEW ONLY - reassigning picks is confirmed to crash the game on day-advance (same failure mode as "
-            "the removed \"Move Player\" feature), so that's been pulled. Per the Discord community: DPNM (raw "
-            "pick number) is 0-indexed for the CURRENT year only (pick #1 overall = 0) - Round/Pick# below are "
-            "already converted to the real, 1-indexed value you'd see in-game. For FUTURE years, DPNM isn't a "
-            "pick number at all (the draft order isn't determined yet) - shown as \"Future\" rather than a "
+            "Confirmed working on 2 independent saves (a fresh one and an aged one), but ONE specific heavily "
+            "test-edited save crashed on day-advance after reassigning a pick - real cause unconfirmed, most "
+            "likely from that save's own large accumulated editing history rather than draft picks specifically. "
+            "You'll get a confirmation prompt every time as a precaution. Click a pick to select it (ctrl/shift-"
+            "click for multiple), pick a destination team below, then Assign. Per the Discord community: DPNM "
+            "(raw pick number) is 0-indexed for the CURRENT year only (pick #1 overall = 0) - Round/Pick# below "
+            "are already converted to the real, 1-indexed value you'd see in-game. For FUTURE years, DPNM isn't "
+            "a pick number at all (the draft order isn't determined yet) - shown as \"Future\" rather than a "
             "fabricated round/pick. \"Year\" is a sequential 1/2/3... display of the save's real year-offset "
-            "values (this year, next year, etc.) - a real calendar year was tried but disproven."
+            "values, not a literal calendar year (that was tried and disproven)."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -2176,18 +2185,26 @@ class App(tk.Tk):
             "team": ("Team (current)", 220), "orig_team": ("Originally", 220),
             "round": ("Round", 70), "pick_num": ("Pick #", 70), "year": ("Year", 60),
         }
-        self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=22, selectmode="extended")
+        self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=20, selectmode="extended")
         for c in cols:
             text, width = headings[c]
             self.tree_picks.heading(c, text=text)
             self.tree_picks.column(c, width=width, anchor="w")
-        self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 6))
         self.tree_picks.bind("<<TreeviewSelect>>", lambda e: self._update_pick_selection_label())
 
         bottom = ttk.Frame(root)
         bottom.pack(fill="x", padx=10, pady=(0, 10))
         self.lbl_pick_selection = ttk.Label(bottom, text="No picks selected")
         self.lbl_pick_selection.pack(side="left")
+
+        ttk.Label(bottom, text="Assign to:").pack(side="left", padx=(16, 4))
+        # Draft picks can only be owned by real teams (confirmed: DPID values
+        # in every save checked are always 1-32, never a pool ID) - same
+        # 32-team list as Sign Free Agent's destination combo.
+        self.pick_dest_combo = TeamAutocompleteCombo(bottom, SIGN_DEST_TEAMS, width=26).pack(side="left")
+
+        ttk.Button(bottom, text="Assign", command=self.on_assign_picks).pack(side="left", padx=8)
 
     def _build_cap_tab(self):
         root = self.tab_cap
@@ -3075,6 +3092,49 @@ class App(tk.Tk):
         n = len(self.tree_picks.selection())
         self.lbl_pick_selection.configure(text="No picks selected" if n == 0 else f"{n} pick(s) selected")
 
+    def on_assign_picks(self):
+        if not self.model.picks:
+            messagebox.showinfo("No picks", "Load drpk.csv to edit picks.")
+            return
+
+        sel = self.tree_picks.selection()
+        if not sel:
+            messagebox.showwarning("No picks selected", "Select one or more picks in the list first.")
+            return
+
+        dest_tid = self.pick_dest_combo.get_tid()
+        if not dest_tid:
+            messagebox.showerror("Unknown team", f"'{self.pick_dest_combo.combo.get()}' doesn't match any team.")
+            return
+
+        # See the investigation log above _build_picks_tab - confirmed working
+        # on 2 independent saves (one fresh, one aged), but crashed on
+        # day-advance on ONE specific heavily test-edited save. Real cause
+        # unconfirmed - warns every time as a matter of caution, not because
+        # a specific trigger condition ("fresh save only") is actually known.
+        dest_name = TEAM_NAMES.get(dest_tid, dest_tid)
+        ok = messagebox.askyesno(
+            "Confirm pick reassignment",
+            f"Reassign {len(sel)} pick(s) to {dest_tid}: {dest_name}?\n\n"
+            "Confirmed working on 2 independent saves, but ONE specific save (with a large amount "
+            "of other test edits already made to it) crashed on day-advance after this. The real "
+            "trigger is unconfirmed - proceed with normal save-editing caution."
+        )
+        if not ok:
+            return
+
+        count = 0
+        for iid in sel:
+            try:
+                model_idx = int(iid)
+            except ValueError:
+                continue
+            self.model.picks[model_idx][DRAFT_PICK_ID] = dest_tid
+            count += 1
+
+        messagebox.showinfo("Picks assigned", f"Assigned {count} pick(s) to {dest_tid}: {dest_name}")
+        self.refresh_picks()
+
     # ---------- Salary Cap ----------
     def refresh_cap(self):
         if not self.model.salaries:
@@ -3783,7 +3843,7 @@ class App(tk.Tk):
 _MUTATING_APP_METHODS = [
     "on_apply_name", "on_apply_stat", "on_apply_both", "on_apply_age_years",
     "set_contract_salary_to_min", "set_contract_bonus_to_min", "on_apply_contract",
-    "on_set_team_bonus_min",
+    "on_assign_picks", "on_set_team_bonus_min",
     "on_max_team_staff_skpt", "on_apply_cap", "on_apply_raw_column",
     "_apply_trainer_skpt", "_apply_coach_skpt", "_apply_gm_skpt",
     "set_trainer_skpt_to_max", "set_coach_skpt_to_max", "set_gm_skpt_to_max",
