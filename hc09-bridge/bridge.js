@@ -374,6 +374,16 @@ async function cmdPortraitLookup(args) {
     console.log(JSON.stringify({ found: true, size: ddsBytes.length, out: outPath }));
 }
 
+// Lists every shortId present in a cached archive - lets the picker UI browse
+// existing portraits without guessing valid IDs.
+async function cmdPortraitList(args) {
+    const archivePath = args.archive;
+    const archiveBuf = fs.readFileSync(archivePath);
+    const tocs = await readToc(archiveBuf);
+    const shortIds = tocs.map((t) => t.shortId).sort((a, b) => a - b);
+    console.log(JSON.stringify({ shortIds }));
+}
+
 function parseArgs(argv) {
     const args = {};
     for (let i = 0; i < argv.length; i++) {
@@ -409,6 +419,8 @@ async function main() {
             await cmdPortraitExtractArchive(args);
         } else if (cmd === 'portrait-lookup') {
             await cmdPortraitLookup(args);
+        } else if (cmd === 'portrait-list') {
+            await cmdPortraitList(args);
         } else {
             console.error('Usage:');
             console.error('  node bridge.js inspect --db <path>');
@@ -417,6 +429,7 @@ async function main() {
             console.error('  node bridge.js import --db <path> --in <dir> [--out <path>] [--tables PLAY,DRPK,...]');
             console.error('  node bridge.js portrait-extract-archive --ast <path> --top-index <N> --out <path>');
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
+            console.error('  node bridge.js portrait-list --archive <path>');
             process.exit(1);
         }
     } catch (err) {

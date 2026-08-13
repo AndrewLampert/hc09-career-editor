@@ -2450,6 +2450,155 @@ class PersonalityDialog(tk.Toplevel):
         self.destroy()
 
 
+class AssignPortraitDialog(tk.Toplevel):
+    """Reassign one of the game's ~3580 existing in-game portraits to a
+    player - no game-file modification needed, since PSXP (the player's
+    portrait ID) is a plain save field and the portrait itself is read from
+    the untouched game disc. Browse by shortId (Prev/Next/Random/jump-to),
+    preview, Apply writes PSXP. Uploading a genuinely custom photo would
+    require repacking the archive on disk - separate, unsolved problem."""
+
+    def __init__(self, parent, row, row_name, refresh_callback):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Assign Existing Photo")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        self.parent = parent
+        self.row = row
+        self.refresh_callback = refresh_callback
+        self.shortids = []
+        self._req_id = 0
+
+        ttk.Label(self, text=f"Player: {row_name}", font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
+
+        img_kwargs = {}
+        if p:
+            img_kwargs["background"] = p["surface"]
+        self.img_label = tk.Label(self, text="Loading archive index...", width=256, height=256, **img_kwargs)
+        self.img_label.pack(padx=12, pady=8)
+
+        nav = ttk.Frame(self)
+        nav.pack(padx=12, pady=(0, 4))
+        ttk.Button(nav, text="< Prev", command=self._on_prev).pack(side="left")
+        self.shortid_var = tk.StringVar(value="")
+        ent = ttk.Entry(nav, textvariable=self.shortid_var, width=6)
+        ent.pack(side="left", padx=6)
+        ent.bind("<Return>", lambda e: self._on_jump())
+        ttk.Button(nav, text="Go", command=self._on_jump).pack(side="left")
+        ttk.Button(nav, text="Random", command=self._on_random).pack(side="left", padx=(6, 0))
+        ttk.Button(nav, text="Next >", command=self._on_next).pack(side="left", padx=(6, 0))
+
+        self.lbl_status = ttk.Label(self, text="", wraplength=280, justify="left")
+        self.lbl_status.pack(anchor="w", padx=12)
+
+        btn_frm = ttk.Frame(self)
+        btn_frm.pack(fill="x", padx=12, pady=12)
+        apply_kwargs = {"style": "Accent.TButton"} if p else {}
+        ttk.Button(btn_frm, text="Assign to Player", command=self._apply, **apply_kwargs).pack(side="right")
+        ttk.Button(btn_frm, text="Cancel", command=self.destroy).pack(side="right", padx=(0, 8))
+
+        self.cur_idx = 0
+        threading.Thread(target=self._load_index, daemon=True).start()
+
+    def _load_index(self):
+        try:
+            ast_path = self.parent.get_game_ast_path()
+            if not ast_path:
+                self.after(0, lambda: self.lbl_status.configure(text="Locate your game files first (see the Portrait panel)."))
+                return
+            cache_path = self.parent._portrait_archive_cache_path("player")
+            if not os.path.isfile(cache_path):
+                os.makedirs(PORTRAIT_CACHE_DIR, exist_ok=True)
+                self.parent.model.run_bridge([
+                    "portrait-extract-archive", "--ast", ast_path,
+                    "--top-index", str(PORTRAIT_TOP_INDEX["player"]), "--out", cache_path,
+                ])
+            result = self.parent.model.run_bridge(["portrait-list", "--archive", cache_path])
+            shortids = result.get("shortIds", [])
+            current = safe_int(self.row.get(PLAYER_PORTRAIT_CODE, ""))
+            start_idx = shortids.index(current) if current in shortids else 0
+            self.after(0, lambda: self._on_index_loaded(shortids, start_idx))
+        except Exception as e:
+            self.after(0, lambda: self.lbl_status.configure(text=f"Couldn't load portrait archive: {e}"))
+
+    def _on_index_loaded(self, shortids, start_idx):
+        self.shortids = shortids
+        self.cur_idx = start_idx
+        self.lbl_status.configure(text=f"{len(shortids)} portraits available.")
+        self._show_current()
+
+    def _on_prev(self):
+        if self.shortids:
+            self.cur_idx = (self.cur_idx - 1) % len(self.shortids)
+            self._show_current()
+
+    def _on_next(self):
+        if self.shortids:
+            self.cur_idx = (self.cur_idx + 1) % len(self.shortids)
+            self._show_current()
+
+    def _on_random(self):
+        if self.shortids:
+            self.cur_idx = random.randrange(len(self.shortids))
+            self._show_current()
+
+    def _on_jump(self):
+        if not self.shortids:
+            return
+        target = safe_int(self.shortid_var.get())
+        if target is None or target not in self.shortids:
+            messagebox.showwarning("Not found", f"'{self.shortid_var.get()}' isn't a valid portrait ID.")
+            return
+        self.cur_idx = self.shortids.index(target)
+        self._show_current()
+
+    def _show_current(self):
+        if not self.shortids:
+            return
+        shortid = self.shortids[self.cur_idx]
+        self.shortid_var.set(str(shortid))
+        self._req_id += 1
+        req_id = self._req_id
+        self.img_label.configure(image="", text="Loading...")
+
+        def worker():
+            try:
+                pil_image = self.parent._load_portrait_image("player", shortid)
+                error = None
+            except Exception as e:
+                pil_image = None
+                error = str(e)
+            self.after(0, lambda: self._on_loaded(req_id, pil_image, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_loaded(self, req_id, pil_image, error):
+        if req_id != self._req_id:
+            return
+        if error or pil_image is None:
+            self.img_label.configure(image="", text="Error" if error else "No image")
+            return
+        photo = ImageTk.PhotoImage(pil_image)
+        self._photo_ref = photo  # keep alive
+        self.img_label.configure(image=photo, text="")
+
+    def _apply(self):
+        if not self.shortids:
+            return
+        shortid = self.shortids[self.cur_idx]
+        self.row[PLAYER_PORTRAIT_CODE] = str(shortid)
+        self.parent.mark_dirty()
+        if self.refresh_callback:
+            self.refresh_callback()
+        messagebox.showinfo("Photo assigned", f"Portrait ID set to {shortid}.")
+        self.destroy()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -3063,6 +3212,7 @@ class App(tk.Tk):
 
         # --- Portrait ---
         self._build_portrait_panel(right, kind="player", extra_buttons=[
+            ("Assign Existing Photo...", self.on_open_assign_portrait_dialog),
             ("Edit Contract...", self.on_open_contract_editor),
             ("Personality...", self.on_open_player_personality_editor),
         ])
@@ -4436,6 +4586,16 @@ class App(tk.Tk):
             self, self.model.players, self.selected_player_index,
             f"Player: {name}", refresh_callback=self.refresh_stats_for_player,
             subject_kind="player",
+        )
+
+    def on_open_assign_portrait_dialog(self):
+        if self.selected_player_index is None:
+            messagebox.showinfo("No player", "Select a player first.")
+            return
+        row = self.model.players[self.selected_player_index]
+        name = self.model.player_name(row) if hasattr(self.model, "player_name") else ""
+        AssignPortraitDialog(
+            self, row, name, refresh_callback=self._refresh_current_player_portrait,
         )
 
     # ---------- Trades ----------
