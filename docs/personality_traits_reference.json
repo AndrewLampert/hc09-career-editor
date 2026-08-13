@@ -371,7 +371,8 @@
       "loud": false,
       "types_with_this_trait": [
         "Anchor",
-        "Captain"
+        "Captain",
+        "Guru"
       ]
     },
     "Level Headed": {
@@ -626,8 +627,7 @@
       "quiet": false,
       "loud": false,
       "types_with_this_trait": [
-        "Analyst",
-        "Guru"
+        "Analyst"
       ]
     },
     "Spontaneous": {
@@ -891,8 +891,8 @@
       "Driven": 0,
       "Easy to Sign": 6.0,
       "Hard to Sign": 0.0,
-      "Easy to Please": 1.0,
-      "Hard to Please": 3.0,
+      "Easy to Please": 2.0,
+      "Hard to Please": 2.0,
       "Quiet": 3.0,
       "Loud": 0.0,
       "traits": [
@@ -901,9 +901,9 @@
         "Generous",
         "Humble",
         "Intimidated",
+        "Laid Back",
         "Level Headed",
         "Reserved",
-        "Skeptical",
         "Team Player",
         "Values Tradition"
       ]
