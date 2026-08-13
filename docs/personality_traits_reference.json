@@ -1,0 +1,1145 @@
+{
+  "source": "https://forums.operationsports.com/forums/forum/football/other-football-games/nfl-head-coach/451995-personality-guide-spreadsheet (ebongreen, community-compiled, not dev-confirmed)",
+  "personality_types": [
+    "Ambassador",
+    "Analyst",
+    "Commander",
+    "Anchor",
+    "Ally",
+    "Captain",
+    "Guru",
+    "Headliner",
+    "Lone Wolf",
+    "Loyalist",
+    "Optimist",
+    "Promoter",
+    "Stoic",
+    "Super Star",
+    "Titan",
+    "Traditionalist",
+    "Virtuoso"
+  ],
+  "traits": {
+    "Aggressive": {
+      "description": "Appreciates aggressive decisions by the head coach. Tough negotiators who rarely budge from their demands.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Captain",
+        "Titan"
+      ]
+    },
+    "Ambitious": {
+      "description": "Constantly looking for a better job or to sign with another team.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Headliner",
+        "Lone Wolf",
+        "Titan"
+      ]
+    },
+    "Calculating": {
+      "description": "Not always on the same page as the rest of the team. Looks for opportunities to self-promote.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Promoter",
+        "Super Star",
+        "Titan"
+      ]
+    },
+    "Cautious": {
+      "description": "Very conservative in negotiations.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Anchor"
+      ]
+    },
+    "Competitive": {
+      "description": "Winning is the goal always at the forefront. Doesn't like to be shown up.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Commander",
+        "Ally",
+        "Captain",
+        "Super Star",
+        "Titan",
+        "Traditionalist"
+      ]
+    },
+    "Conservative": {
+      "description": "Appreciates safe decisions by the head coach. Doesn’t like outbursts or public spectacles.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": true,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Guru",
+        "Stoic"
+      ]
+    },
+    "Consistent": {
+      "description": "Rarely exhibits surprise in his demeanor or actions.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": true,
+      "loud": false,
+      "types_with_this_trait": [
+        "Commander",
+        "Ally",
+        "Captain",
+        "Loyalist",
+        "Titan"
+      ]
+    },
+    "Contented": {
+      "description": "Generally comfortable as a whole. Doesn’t require much special attention.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": true,
+      "loud": false,
+      "types_with_this_trait": [
+        "Anchor",
+        "Guru",
+        "Stoic"
+      ]
+    },
+    "Cooperative": {
+      "description": "Willing to help out in any situation. Rarely demands or disagrees.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Captain",
+        "Optimist"
+      ]
+    },
+    "Dependable": {
+      "description": "Rarely exhibits behavior that is unexpected.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Commander",
+        "Ally",
+        "Loyalist",
+        "Traditionalist"
+      ]
+    },
+    "Dramatic": {
+      "description": "Tends to overreact in most situations. Can become a distraction.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": true,
+      "types_with_this_trait": [
+        "Headliner",
+        "Promoter",
+        "Super Star",
+        "Virtuoso"
+      ]
+    },
+    "Driven": {
+      "description": "Strives to be one of the best ever in the NFL. Tireless work ethic.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Commander",
+        "Captain",
+        "Super Star",
+        "Titan"
+      ]
+    },
+    "Efficient": {
+      "description": "Prefers to make conservative decisions financially.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Commander",
+        "Ally",
+        "Lone Wolf"
+      ]
+    },
+    "Energetic": {
+      "description": "Lives in the moment. Love big decisions made in drastic situations.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": true,
+      "types_with_this_trait": [
+        "Headliner",
+        "Loyalist",
+        "Optimist",
+        "Titan"
+      ]
+    },
+    "Enterprising": {
+      "description": "Focused on improving self image and worth. Focused on financial aspects.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Lone Wolf",
+        "Promoter"
+      ]
+    },
+    "Expressive": {
+      "description": "Never shy about his opinion. Takes issues public when ignored.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": true,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Headliner",
+        "Optimist",
+        "Promoter",
+        "Super Star",
+        "Virtuoso"
+      ]
+    },
+    "Flexible": {
+      "description": "Rolls with the punches. Doesn’t tend to overreact.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Virtuoso"
+      ]
+    },
+    "Generous": {
+      "description": "Tends to give up too much in negotiations.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Guru",
+        "Virtuoso"
+      ]
+    },
+    "Humble": {
+      "description": "Understands that he is a piece of the puzzle. Willing to take less for the greater good.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Anchor",
+        "Guru",
+        "Stoic"
+      ]
+    },
+    "Impatient": {
+      "description": "Doesn’t appreciate waiting. Wants issues resolved immediately.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Lone Wolf",
+        "Promoter"
+      ]
+    },
+    "Impulsive": {
+      "description": "Makes decisions in the spur of the moment. Hard to get a read on him.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Headliner",
+        "Super Star",
+        "Virtuoso"
+      ]
+    },
+    "Indifferent": {
+      "description": "Really isn’t concerned about what anybody else thinks. Rarely reacts to any situation.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Anchor"
+      ]
+    },
+    "Insecure": {
+      "description": "Lacks confidence. Worries about what the fans and media think too much.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Optimist"
+      ]
+    },
+    "Intimidated": {
+      "description": "Tends to back down in confrontations or tough negotiations.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Guru",
+        "Virtuoso"
+      ]
+    },
+    "Laid Back": {
+      "description": "Takes everything in stride. Rarely overreacts in situations.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Anchor",
+        "Captain"
+      ]
+    },
+    "Level Headed": {
+      "description": "Understands the big picture and that the NFL is a business. Willing to accept his role.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Guru",
+        "Lone Wolf",
+        "Stoic",
+        "Traditionalist"
+      ]
+    },
+    "Likes Change": {
+      "description": "Prefers a chaotic environment to work in.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Headliner",
+        "Lone Wolf",
+        "Virtuoso"
+      ]
+    },
+    "Likes Rules": {
+      "description": "Appreciates knowing everything is under control.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ally",
+        "Traditionalist"
+      ]
+    },
+    "Loyal": {
+      "description": "Tends to have a connection with his team. Would rather stay than go.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Commander",
+        "Ally",
+        "Captain",
+        "Loyalist",
+        "Optimist",
+        "Traditionalist"
+      ]
+    },
+    "Materialistic": {
+      "description": "Wants the most regardless of the situation. Unwilling to make concessions.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Headliner",
+        "Super Star"
+      ]
+    },
+    "Opinionated": {
+      "description": "Never shy about his outlook. Wants the world to know how he feels.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": true,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Optimist",
+        "Promoter"
+      ]
+    },
+    "Optimistic": {
+      "description": "Tends to look on the bright side, no matter how bleak the situation.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Loyalist",
+        "Optimist"
+      ]
+    },
+    "Passive": {
+      "description": "Can be bullied easily in pressure situations like negotiations. Tends to cave when pushed.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Anchor"
+      ]
+    },
+    "Patient": {
+      "description": "Willing to wait on a decision. Doesn't expect issues to be resolved immediately.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Commander",
+        "Anchor",
+        "Captain",
+        "Loyalist",
+        "Optimist",
+        "Stoic"
+      ]
+    },
+    "Perfectionist": {
+      "description": "Expects everything to be perfect and every situation to go right.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Super Star",
+        "Titan"
+      ]
+    },
+    "Problem Solver": {
+      "description": "Quick on his feet. Can analyze a problem and come up with a solution quickly.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Commander",
+        "Stoic",
+        "Super Star",
+        "Traditionalist"
+      ]
+    },
+    "Realistic": {
+      "description": "Knows to take the good with the bad. Doesn't expect perfection.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Commander",
+        "Lone Wolf",
+        "Stoic"
+      ]
+    },
+    "Reckless": {
+      "description": "Has been known to make rash decisions.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Headliner",
+        "Titan"
+      ]
+    },
+    "Reserved": {
+      "description": "Stays quiet about how he feels. Doesn’t tip his hand.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": true,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Anchor",
+        "Guru"
+      ]
+    },
+    "Self Focused": {
+      "description": "Cares about himself and that’s about it. Feels like the world revolves around him.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Promoter",
+        "Super Star"
+      ]
+    },
+    "Sensitive": {
+      "description": "Tends to take things personally and reacts to situations in that manner.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ally",
+        "Optimist",
+        "Stoic",
+        "Titan",
+        "Virtuoso"
+      ]
+    },
+    "Shrewd": {
+      "description": "Very adept negotiator. Gets what he wants or walks away.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Promoter",
+        "Stoic"
+      ]
+    },
+    "Skeptical": {
+      "description": "Takes a while to trust those around him.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Guru"
+      ]
+    },
+    "Spontaneous": {
+      "description": "Loves to change it up from time to time.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Headliner",
+        "Virtuoso"
+      ]
+    },
+    "Stingy": {
+      "description": "Unwilling to give up more than the minimum. Always looking to save money.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Lone Wolf"
+      ]
+    },
+    "Structured": {
+      "description": "Very rigid about his situations. Expects them to go as planned.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Analyst",
+        "Commander",
+        "Captain",
+        "Loyalist",
+        "Traditionalist"
+      ]
+    },
+    "Stubborn": {
+      "description": "Refuses to budge in many situations.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Headliner"
+      ]
+    },
+    "Team Player": {
+      "description": "Only cares about the team. Willing to help in any way, including pay cuts.",
+      "easy_to_sign": true,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Anchor",
+        "Captain",
+        "Guru",
+        "Loyalist",
+        "Traditionalist"
+      ]
+    },
+    "Trusting": {
+      "description": "Believes that everyone around him is doing the right thing.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": true,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Ally",
+        "Loyalist",
+        "Optimist",
+        "Promoter"
+      ]
+    },
+    "Uncompromising": {
+      "description": "Won’t budge once his mind is made up. Hard to deal with in negotiations.",
+      "easy_to_sign": false,
+      "hard_to_sign": true,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Ambassador",
+        "Promoter",
+        "Stoic"
+      ]
+    },
+    "Values Tradition": {
+      "description": "Prefers tradition over change. Has a hard time accepting new leadership.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": true,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Anchor",
+        "Ally",
+        "Guru",
+        "Loyalist",
+        "Traditionalist"
+      ]
+    },
+    "Well Rounded": {
+      "description": "Has many interests outside football. Can leave the game to pursue them at any time.",
+      "easy_to_sign": false,
+      "hard_to_sign": false,
+      "easy_to_please": false,
+      "hard_to_please": false,
+      "quiet": false,
+      "loud": false,
+      "types_with_this_trait": [
+        "Lone Wolf",
+        "Traditionalist",
+        "Virtuoso"
+      ]
+    }
+  },
+  "type_summary": {
+    "Ambassador": {
+      "Driven": 0,
+      "Easy to Sign": 1.0,
+      "Hard to Sign": 2.0,
+      "Easy to Please": 2.0,
+      "Hard to Please": 2.0,
+      "Quiet": 2.0,
+      "Loud": 2.0,
+      "traits": [
+        "Calculating",
+        "Conservative",
+        "Cooperative",
+        "Expressive",
+        "Opinionated",
+        "Realistic",
+        "Reserved",
+        "Team Player",
+        "Trusting",
+        "Uncompromising"
+      ]
+    },
+    "Analyst": {
+      "Driven": 0,
+      "Easy to Sign": 2.0,
+      "Hard to Sign": 0.0,
+      "Easy to Please": 3.0,
+      "Hard to Please": 4.0,
+      "Quiet": 0.0,
+      "Loud": 0.0,
+      "traits": [
+        "Cautious",
+        "Dependable",
+        "Flexible",
+        "Indifferent",
+        "Insecure",
+        "Passive",
+        "Perfectionist",
+        "Problem Solver",
+        "Skeptical",
+        "Structured"
+      ]
+    },
+    "Commander": {
+      "Driven": 1,
+      "Easy to Sign": 2.0,
+      "Hard to Sign": 1.0,
+      "Easy to Please": 3.0,
+      "Hard to Please": 2.0,
+      "Quiet": 1.0,
+      "Loud": 0.0,
+      "traits": [
+        "Competitive",
+        "Consistent",
+        "Dependable",
+        "Driven",
+        "Efficient",
+        "Loyal",
+        "Patient",
+        "Problem Solver",
+        "Realistic",
+        "Structured"
+      ]
+    },
+    "Anchor": {
+      "Driven": 0,
+      "Easy to Sign": 5.0,
+      "Hard to Sign": 1.0,
+      "Easy to Please": 3.0,
+      "Hard to Please": 1.0,
+      "Quiet": 2.0,
+      "Loud": 0.0,
+      "traits": [
+        "Cautious",
+        "Contented",
+        "Humble",
+        "Indifferent",
+        "Laid Back",
+        "Passive",
+        "Patient",
+        "Reserved",
+        "Team Player",
+        "Values Tradition"
+      ]
+    },
+    "Ally": {
+      "Driven": 0,
+      "Easy to Sign": 2.0,
+      "Hard to Sign": 0.0,
+      "Easy to Please": 3.0,
+      "Hard to Please": 4.0,
+      "Quiet": 1.0,
+      "Loud": 0.0,
+      "traits": [
+        "Competitive",
+        "Consistent",
+        "Dependable",
+        "Efficient",
+        "Likes Rules",
+        "Loyal",
+        "Sensitive",
+        "Trusting",
+        "Values Tradition"
+      ]
+    },
+    "Captain": {
+      "Driven": 1,
+      "Easy to Sign": 2.0,
+      "Hard to Sign": 2.0,
+      "Easy to Please": 2.0,
+      "Hard to Please": 3.0,
+      "Quiet": 1.0,
+      "Loud": 0.0,
+      "traits": [
+        "Aggressive",
+        "Competitive",
+        "Consistent",
+        "Cooperative",
+        "Driven",
+        "Laid Back",
+        "Loyal",
+        "Patient",
+        "Structured",
+        "Team Player"
+      ]
+    },
+    "Guru": {
+      "Driven": 0,
+      "Easy to Sign": 6.0,
+      "Hard to Sign": 0.0,
+      "Easy to Please": 1.0,
+      "Hard to Please": 3.0,
+      "Quiet": 3.0,
+      "Loud": 0.0,
+      "traits": [
+        "Conservative",
+        "Contented",
+        "Generous",
+        "Humble",
+        "Intimidated",
+        "Level Headed",
+        "Reserved",
+        "Skeptical",
+        "Team Player",
+        "Values Tradition"
+      ]
+    },
+    "Headliner": {
+      "Driven": 0,
+      "Easy to Sign": 0.0,
+      "Hard to Sign": 4.0,
+      "Easy to Please": 0.0,
+      "Hard to Please": 4.0,
+      "Quiet": 0.0,
+      "Loud": 3.0,
+      "traits": [
+        "Ambitious",
+        "Dramatic",
+        "Energetic",
+        "Expressive",
+        "Impulsive",
+        "Likes Change",
+        "Materialistic",
+        "Reckless",
+        "Spontaneous",
+        "Stubborn"
+      ]
+    },
+    "Lone Wolf": {
+      "Driven": 0,
+      "Easy to Sign": 3.0,
+      "Hard to Sign": 3.0,
+      "Easy to Please": 1.0,
+      "Hard to Please": 2.0,
+      "Quiet": 0.0,
+      "Loud": 0.0,
+      "traits": [
+        "Ambitious",
+        "Efficient",
+        "Enterprising",
+        "Impatient",
+        "Level Headed",
+        "Likes Change",
+        "Realistic",
+        "Stingy",
+        "Well Rounded"
+      ]
+    },
+    "Loyalist": {
+      "Driven": 0,
+      "Easy to Sign": 2.0,
+      "Hard to Sign": 1.0,
+      "Easy to Please": 4.0,
+      "Hard to Please": 3.0,
+      "Quiet": 1.0,
+      "Loud": 1.0,
+      "traits": [
+        "Consistent",
+        "Dependable",
+        "Energetic",
+        "Loyal",
+        "Optimistic",
+        "Patient",
+        "Structured",
+        "Team Player",
+        "Trusting",
+        "Values Tradition"
+      ]
+    },
+    "Optimist": {
+      "Driven": 0,
+      "Easy to Sign": 1.0,
+      "Hard to Sign": 1.0,
+      "Easy to Please": 2.0,
+      "Hard to Please": 3.0,
+      "Quiet": 0.0,
+      "Loud": 3.0,
+      "traits": [
+        "Cooperative",
+        "Energetic",
+        "Expressive",
+        "Insecure",
+        "Loyal",
+        "Opinionated",
+        "Optimistic",
+        "Patient",
+        "Sensitive",
+        "Trusting"
+      ]
+    },
+    "Promoter": {
+      "Driven": 0,
+      "Easy to Sign": 2.0,
+      "Hard to Sign": 4.0,
+      "Easy to Please": 1.0,
+      "Hard to Please": 3.0,
+      "Quiet": 0.0,
+      "Loud": 3.0,
+      "traits": [
+        "Calculating",
+        "Dramatic",
+        "Enterprising",
+        "Expressive",
+        "Impatient",
+        "Opinionated",
+        "Self Focused",
+        "Shrewd",
+        "Trusting",
+        "Uncompromising"
+      ]
+    },
+    "Stoic": {
+      "Driven": 0,
+      "Easy to Sign": 3.0,
+      "Hard to Sign": 3.0,
+      "Easy to Please": 2.0,
+      "Hard to Please": 2.0,
+      "Quiet": 2.0,
+      "Loud": 0.0,
+      "traits": [
+        "Conservative",
+        "Contented",
+        "Humble",
+        "Level Headed",
+        "Patient",
+        "Problem Solver",
+        "Realistic",
+        "Sensitive",
+        "Shrewd",
+        "Uncompromising"
+      ]
+    },
+    "Super Star": {
+      "Driven": 1,
+      "Easy to Sign": 1.0,
+      "Hard to Sign": 2.0,
+      "Easy to Please": 0.0,
+      "Hard to Please": 5.0,
+      "Quiet": 0.0,
+      "Loud": 2.0,
+      "traits": [
+        "Calculating",
+        "Competitive",
+        "Dramatic",
+        "Driven",
+        "Expressive",
+        "Impulsive",
+        "Materialistic",
+        "Perfectionist",
+        "Problem Solver",
+        "Self Focused"
+      ]
+    },
+    "Titan": {
+      "Driven": 1,
+      "Easy to Sign": 0.0,
+      "Hard to Sign": 3.0,
+      "Easy to Please": 1.0,
+      "Hard to Please": 7.0,
+      "Quiet": 1.0,
+      "Loud": 1.0,
+      "traits": [
+        "Aggressive",
+        "Ambitious",
+        "Calculating",
+        "Competitive",
+        "Consistent",
+        "Driven",
+        "Energetic",
+        "Perfectionist",
+        "Reckless",
+        "Sensitive"
+      ]
+    },
+    "Traditionalist": {
+      "Driven": 0,
+      "Easy to Sign": 3.0,
+      "Hard to Sign": 0.0,
+      "Easy to Please": 1.0,
+      "Hard to Please": 4.0,
+      "Quiet": 0.0,
+      "Loud": 0.0,
+      "traits": [
+        "Competitive",
+        "Dependable",
+        "Level Headed",
+        "Likes Rules",
+        "Loyal",
+        "Problem Solver",
+        "Structured",
+        "Team Player",
+        "Values Tradition",
+        "Well Rounded"
+      ]
+    },
+    "Virtuoso": {
+      "Driven": 0,
+      "Easy to Sign": 2.0,
+      "Hard to Sign": 1.0,
+      "Easy to Please": 1.0,
+      "Hard to Please": 3.0,
+      "Quiet": 0.0,
+      "Loud": 2.0,
+      "traits": [
+        "Dramatic",
+        "Expressive",
+        "Flexible",
+        "Generous",
+        "Impulsive",
+        "Intimidated",
+        "Likes Change",
+        "Sensitive",
+        "Spontaneous",
+        "Well Rounded"
+      ]
+    }
+  },
+  "save_field_ptid_mapping": {
+    "field": "PTId",
+    "table": "PLAY",
+    "confirmed": "2026-08-12, save BLUS30128-CAREER-DOLPHINS2, cross-checked against 20+ players in-game with zero mismatches",
+    "ptid_to_personality": {
+      "0": "Commander",
+      "1": "Super Star",
+      "2": "Traditionalist",
+      "3": "Loyalist",
+      "4": "Guru",
+      "5": "Lone Wolf",
+      "6": "Ambassador",
+      "7": "Promoter",
+      "8": "Headliner",
+      "9": "Captain",
+      "10": "Analyst",
+      "11": "Optimist",
+      "12": "Stoic",
+      "13": "Virtuoso",
+      "14": "Anchor",
+      "15": "Titan",
+      "16": "Ally"
+    }
+  }
+}

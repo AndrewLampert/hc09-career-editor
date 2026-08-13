@@ -362,6 +362,31 @@ STAFF_SKPT_MAX_VALUE = 131071
 AGE_COL = "PAGE"
 YEARS_COL = "PYRP"
 
+# -----------------------------
+# Personality (PTId, present on both PLAY and COCH with identical encoding -
+# confirmed via controlled test: PTId equals the 17-personality-type index,
+# cross-checked against known in-game personalities on save
+# BLUS30128-CAREER-DOLPHINS2 with zero mismatches across 20+ players/coaches).
+# Reference data (52 traits x 17 types, each trait's real gameplay effects)
+# is community-compiled (ebongreen, Operation Sports), not dev-confirmed.
+# -----------------------------
+PERSONALITY_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "personality_traits_reference.json")
+
+def load_personality_data():
+    try:
+        with open(PERSONALITY_DATA_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+PERSONALITY_DATA = load_personality_data()
+PERSONALITY_PTID_TO_NAME = {}
+PERSONALITY_NAME_TO_PTID = {}
+if PERSONALITY_DATA and "save_field_ptid_mapping" in PERSONALITY_DATA:
+    for _k, _v in PERSONALITY_DATA["save_field_ptid_mapping"]["ptid_to_personality"].items():
+        PERSONALITY_PTID_TO_NAME[int(_k)] = _v
+        PERSONALITY_NAME_TO_PTID[_v] = int(_k)
+
 POSITIONS = {
     "0": "QB", "1": "HB", "2": "FB", "3": "WR", "4": "TE",
     "5": "LT", "6": "LG", "7": "C", "8": "RG", "9": "RT",
@@ -2129,6 +2154,278 @@ class PlayerContractDialog(tk.Toplevel):
             messagebox.showerror("Contract Error", str(e))
 
 
+class PersonalityDialog(tk.Toplevel):
+    """Personality (PTId) viewer/editor - works identically for a PLAY row or
+    a COCH row, since both tables use the same PTId field/encoding. Shows the
+    current personality's traits (community-compiled effects reference) and
+    lets you pick a different one of the 17 real personality types."""
+
+    def __init__(self, parent, rows_list, row_index, subject_label, refresh_callback, subject_kind="player"):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Personality")
+        self.minsize(460, 520)
+        self.transient(parent)
+        self.grab_set()
+
+        self.parent = parent
+        self.rows_list = rows_list
+        self.row_index = row_index
+        self.refresh_callback = refresh_callback
+        # Easy/Hard to Sign and Easy/Hard to Please are about contract
+        # negotiation with a PLAYER - not meaningful for a coach's own
+        # personality, so those measurements are left out entirely in that
+        # context (both the compare table and the per-trait tag list below).
+        self.is_coach = (subject_kind == "coach")
+
+        row = rows_list[row_index]
+        current_ptid = safe_int(row.get("PTId", ""))
+        current_name = PERSONALITY_PTID_TO_NAME.get(current_ptid, f"Unknown (PTId={current_ptid})")
+
+        ttk.Label(self, text=subject_label, font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
+
+        if not PERSONALITY_DATA:
+            ttk.Label(
+                self, foreground="gray", wraplength=420, justify="left",
+                text=f"Current PTId: {current_ptid} ({current_name})\n\n"
+                     f"docs/personality_traits_reference.json not found next to guiHC09.py - "
+                     f"trait details and the name<->PTId picker aren't available without it.",
+            ).pack(anchor="w", padx=12, pady=12)
+            ttk.Button(self, text="Close", command=self.destroy).pack(anchor="e", padx=12, pady=(0, 12))
+            return
+
+        self.minsize(620, 640)
+
+        row_frm = ttk.Frame(self)
+        row_frm.pack(fill="x", padx=12, pady=(6, 4))
+        ttk.Label(row_frm, text="Personality:").pack(side="left")
+        self.personality_var = tk.StringVar(value=current_name)
+        names_sorted = sorted(PERSONALITY_NAME_TO_PTID.keys())
+        cmb = ttk.Combobox(row_frm, state="readonly", width=20, textvariable=self.personality_var, values=names_sorted)
+        cmb.pack(side="left", padx=(8, 0))
+        cmb.bind("<<ComboboxSelected>>", lambda e: self._on_personality_picked())
+
+        # Compare table: every personality's trait counts across the same six
+        # measurements shown on the reference spreadsheet - click a column
+        # header to sort by it, to find the type that best matches what
+        # you're looking for (e.g. sort by "Easy to Sign" descending).
+        ttk.Label(
+            self, foreground="gray",
+            text="Click a column to sort, or set target counts below and find the closest match - "
+                 "if no personality hits your targets exactly, the nearest ones rank first instead of nothing.",
+            wraplength=580, justify="left",
+        ).pack(anchor="w", padx=12, pady=(2, 2))
+
+        target_frm = ttk.Frame(self)
+        target_frm.pack(fill="x", padx=12, pady=(2, 4))
+        ttk.Label(target_frm, text="Target counts (blank = don't care):").pack(side="left")
+        self.target_vars = {}
+        if self.is_coach:
+            target_cols = ["quiet", "loud"]
+        else:
+            target_cols = ["easy_sign", "hard_sign", "easy_please", "hard_please", "quiet", "loud"]
+        target_labels = {
+            "easy_sign": "Easy Sign", "hard_sign": "Hard Sign", "easy_please": "Easy Please",
+            "hard_please": "Hard Please", "quiet": "Quiet", "loud": "Loud",
+        }
+        target_choices = [""] + [str(n) for n in range(0, 8)]
+        for c in target_cols:
+            ttk.Label(target_frm, text=target_labels[c] + ":").pack(side="left", padx=(8, 2))
+            var = tk.StringVar(value="")
+            ttk.Combobox(
+                target_frm, state="readonly", width=2, textvariable=var, values=target_choices,
+            ).pack(side="left")
+            self.target_vars[c] = var
+        ttk.Button(target_frm, text="Find Closest Match", command=self._find_closest_match).pack(side="left", padx=(10, 0))
+        ttk.Button(target_frm, text="Clear", command=self._clear_targets).pack(side="left", padx=(4, 0))
+
+        table_frm = ttk.Frame(self)
+        table_frm.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        if self.is_coach:
+            cols = ("name", "quiet", "loud", "match_score")
+        else:
+            cols = ("name", "easy_sign", "hard_sign", "easy_please", "hard_please", "quiet", "loud", "match_score")
+        headers = {
+            "name": "Personality", "easy_sign": "Easy to Sign", "hard_sign": "Hard to Sign",
+            "easy_please": "Easy to Please", "hard_please": "Hard to Please", "quiet": "Quiet", "loud": "Loud",
+            "match_score": "Match",
+        }
+        self.compare_cols = cols
+        self.compare_tree = ttk.Treeview(table_frm, columns=cols, show="headings", height=8)
+        for c in cols:
+            self.compare_tree.heading(c, text=headers[c], command=lambda c=c: self._sort_compare_table(c))
+            self.compare_tree.column(c, width=70 if c != "name" else 110, anchor="center" if c != "name" else "w", stretch=False)
+        xscroll = ttk.Scrollbar(table_frm, orient="horizontal", command=self.compare_tree.xview)
+        self.compare_tree.configure(xscrollcommand=xscroll.set)
+        self.compare_tree.pack(fill="both", expand=True)
+        xscroll.pack(fill="x")
+        self.compare_tree.bind("<<TreeviewSelect>>", self._on_compare_row_selected)
+        self._compare_sort_state = {}
+        self._populate_compare_table()
+
+        ttk.Label(self, text="Traits for the selected personality (community-compiled, not dev-confirmed):",
+                  foreground="gray").pack(anchor="w", padx=12, pady=(6, 0))
+
+        text_frm = ttk.Frame(self)
+        text_frm.pack(fill="both", expand=True, padx=12, pady=(4, 8))
+        self.traits_text = tk.Text(text_frm, height=10, wrap="word", relief="flat", borderwidth=1)
+        if p:
+            self.traits_text.configure(background=p["surface"], foreground=p["text"], highlightbackground=p["border"])
+        scroll = ttk.Scrollbar(text_frm, orient="vertical", command=self.traits_text.yview)
+        self.traits_text.configure(yscrollcommand=scroll.set)
+        self.traits_text.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        btn_frm = ttk.Frame(self)
+        btn_frm.pack(fill="x", padx=12, pady=(0, 12))
+        apply_btn_kwargs = {"style": "Accent.TButton"} if p else {}
+        ttk.Button(btn_frm, text="Apply", command=self._apply, **apply_btn_kwargs).pack(side="right")
+        ttk.Button(btn_frm, text="Close", command=self.destroy).pack(side="right", padx=(0, 8))
+
+        self._refresh_traits_display()
+        self._select_compare_row(current_name)
+
+    _COL_TO_SUMMARY_KEY = {
+        "easy_sign": "Easy to Sign", "hard_sign": "Hard to Sign",
+        "easy_please": "Easy to Please", "hard_please": "Hard to Please",
+        "quiet": "Quiet", "loud": "Loud",
+    }
+
+    def _populate_compare_table(self):
+        for iid in self.compare_tree.get_children():
+            self.compare_tree.delete(iid)
+        for name in sorted(PERSONALITY_NAME_TO_PTID.keys()):
+            info = PERSONALITY_DATA.get("type_summary", {}).get(name, {})
+            values = []
+            for col in self.compare_cols:
+                if col == "name":
+                    values.append(name)
+                elif col == "match_score":
+                    values.append("")
+                else:
+                    values.append(int(info.get(self._COL_TO_SUMMARY_KEY[col], 0)))
+            self.compare_tree.insert("", tk.END, iid=name, values=tuple(values))
+
+    def _clear_targets(self):
+        for var in self.target_vars.values():
+            var.set("")
+        for iid in self.compare_tree.get_children():
+            self.compare_tree.set(iid, "match_score", "")
+
+    def _find_closest_match(self):
+        """Ranks every personality by total distance from the target counts
+        you set (ignoring blank fields). If nothing hits your targets
+        exactly, the closest ones simply sort to the top instead of the
+        table coming up empty - there's no hard filtering-out here."""
+        targets = {}
+        for col, var in self.target_vars.items():
+            raw = var.get().strip()
+            if raw != "":
+                try:
+                    targets[col] = float(raw)
+                except ValueError:
+                    messagebox.showwarning("Invalid target", f"'{raw}' isn't a number.")
+                    return
+
+        if not targets:
+            messagebox.showinfo("No targets set", "Enter at least one target count to find the closest match.")
+            return
+
+        col_to_key = self._COL_TO_SUMMARY_KEY
+        scored = []
+        for name in PERSONALITY_NAME_TO_PTID.keys():
+            info = PERSONALITY_DATA.get("type_summary", {}).get(name, {})
+            distance = sum(abs(float(info.get(col_to_key[col], 0)) - target) for col, target in targets.items())
+            scored.append((distance, name))
+        scored.sort(key=lambda x: x[0])
+
+        for distance, name in scored:
+            self.compare_tree.set(name, "match_score", f"{distance:g}")
+        for index, (_, name) in enumerate(scored):
+            self.compare_tree.move(name, "", index)
+
+        self._compare_sort_state = {}
+        best_name = scored[0][1]
+        self.personality_var.set(best_name)
+        self._select_compare_row(best_name)
+        self._refresh_traits_display()
+
+    def _sort_compare_table(self, col):
+        reverse = self._compare_sort_state.get(col, False)
+        rows = [(self.compare_tree.set(iid, col), iid) for iid in self.compare_tree.get_children()]
+        try:
+            rows.sort(key=lambda r: float(r[0]), reverse=reverse)
+        except ValueError:
+            rows.sort(key=lambda r: r[0], reverse=reverse)
+        for index, (_, iid) in enumerate(rows):
+            self.compare_tree.move(iid, "", index)
+        self._compare_sort_state[col] = not reverse
+
+    def _select_compare_row(self, name):
+        if name in self.compare_tree.get_children():
+            self.compare_tree.selection_set(name)
+            self.compare_tree.see(name)
+
+    def _on_compare_row_selected(self, event=None):
+        sel = self.compare_tree.selection()
+        if not sel:
+            return
+        self.personality_var.set(sel[0])
+        self._refresh_traits_display()
+
+    def _on_personality_picked(self):
+        self._select_compare_row(self.personality_var.get())
+        self._refresh_traits_display()
+
+    def _refresh_traits_display(self):
+        name = self.personality_var.get()
+        type_info = PERSONALITY_DATA.get("type_summary", {}).get(name, {})
+        trait_names = type_info.get("traits", [])
+
+        lines = []
+        for t in trait_names:
+            tinfo = PERSONALITY_DATA.get("traits", {}).get(t, {})
+            tags = []
+            if not self.is_coach:
+                if tinfo.get("easy_to_sign"):
+                    tags.append("Easy to Sign")
+                if tinfo.get("hard_to_sign"):
+                    tags.append("Hard to Sign")
+                if tinfo.get("easy_to_please"):
+                    tags.append("Easy to Please")
+                if tinfo.get("hard_to_please"):
+                    tags.append("Hard to Please")
+            if tinfo.get("quiet"):
+                tags.append("Quiet")
+            if tinfo.get("loud"):
+                tags.append("Loud")
+            tag_str = f" [{', '.join(tags)}]" if tags else ""
+            lines.append(f"• {t}{tag_str}\n   {tinfo.get('description', '')}")
+
+        self.traits_text.configure(state="normal")
+        self.traits_text.delete("1.0", tk.END)
+        self.traits_text.insert("1.0", "\n\n".join(lines) if lines else "No trait data for this type.")
+        self.traits_text.configure(state="disabled")
+
+    def _apply(self):
+        name = self.personality_var.get()
+        ptid = PERSONALITY_NAME_TO_PTID.get(name)
+        if ptid is None:
+            messagebox.showerror("Personality Error", f"No known PTId for '{name}'.")
+            return
+
+        row = self.rows_list[self.row_index]
+        row["PTId"] = str(ptid)
+        self.parent.mark_dirty()
+        if self.refresh_callback:
+            self.refresh_callback()
+
+        messagebox.showinfo("Personality updated", f"Set to {name} (PTId={ptid}).")
+        self.destroy()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -2552,7 +2849,7 @@ class App(tk.Tk):
         self.tree_stats = ttk.Treeview(right, columns=cols, show="headings", height=11)
         for c, w in zip(cols, [260, 90, 80, 90, 80]):
             self.tree_stats.heading(c, text=c)
-            self.tree_stats.column(c, width=w, anchor="w")
+            self.tree_stats.column(c, width=w, anchor="w", stretch=False)
         self.tree_stats.pack(fill="both", expand=True)
         self.tree_stats.bind("<<TreeviewSelect>>", self.on_stat_select)
 
@@ -2590,6 +2887,7 @@ class App(tk.Tk):
         # keeps this column compact and consistent with how Sign Free Agent
         # already handles contracts.
         ttk.Button(right, text="Edit Contract...", command=self.on_open_contract_editor).pack(anchor="w", pady=(6, 0))
+        ttk.Button(right, text="Personality...", command=self.on_open_player_personality_editor).pack(anchor="w", pady=(6, 0))
 
         # Raw column editor (ANY column)
         raw = ttk.LabelFrame(right, text="Raw Column Editor (any header)")
@@ -2712,21 +3010,12 @@ class App(tk.Tk):
         _lbl_help.pack(fill="x", pady=(4, 6))
         self._help_labels.append(_lbl_help)
 
-        cols = ("team", "orig_team", "round", "pick_num", "year")
-        headings = {
-            "team": ("Team (current)", 220), "orig_team": ("Originally", 220),
-            "round": ("Round", 70), "pick_num": ("Pick #", 70), "year": ("Year", 60),
-        }
-        self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=20, selectmode="extended")
-        for c in cols:
-            text, width = headings[c]
-            self.tree_picks.heading(c, text=text)
-            self.tree_picks.column(c, width=width, anchor="w")
-        self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 6))
-        self.tree_picks.bind("<<TreeviewSelect>>", lambda e: self._update_pick_selection_label())
-
+        # Bottom controls packed FIRST with side="bottom" so they always keep
+        # their reserved space regardless of window size - previously the
+        # tall picks table (height=20) could eat all the vertical space and
+        # push the destination-team/Assign controls off-screen entirely.
         bottom = ttk.Frame(root)
-        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
         self.lbl_pick_selection = ttk.Label(bottom, text="No picks selected")
         self.lbl_pick_selection.pack(side="left")
 
@@ -2737,6 +3026,19 @@ class App(tk.Tk):
         self.pick_dest_combo = TeamAutocompleteCombo(bottom, SIGN_DEST_TEAMS, width=26).pack(side="left")
 
         ttk.Button(bottom, text="Assign", command=self.on_assign_picks).pack(side="left", padx=8)
+
+        cols = ("team", "orig_team", "round", "pick_num", "year")
+        headings = {
+            "team": ("Team (current)", 220), "orig_team": ("Originally", 220),
+            "round": ("Round", 70), "pick_num": ("Pick #", 70), "year": ("Year", 60),
+        }
+        self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=12, selectmode="extended")
+        for c in cols:
+            text, width = headings[c]
+            self.tree_picks.heading(c, text=text)
+            self.tree_picks.column(c, width=width, anchor="w", stretch=False)
+        self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        self.tree_picks.bind("<<TreeviewSelect>>", lambda e: self._update_pick_selection_label())
 
     def _build_cap_tab(self):
         root = self.tab_cap
@@ -2822,6 +3124,7 @@ class App(tk.Tk):
         ttk.Label(top, text="Coach (coch.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_coach).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Coach's Stats", command=self.on_max_selected_coach).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Personality...", command=self.on_open_coach_personality_editor).pack(side="left", padx=(8, 0))
 
         # Search controls for coach first/last name
         self.coach_search_var = tk.StringVar()
@@ -3099,8 +3402,12 @@ class App(tk.Tk):
                 idx = i
                 break
         if idx is None:
+            # Fall back to a real team, never Free Agents/Draft Class/Game
+            # Changer Players - those aren't coachable and would make the
+            # "My Team" filters on Trainer/Coach/GM come up empty.
+            fallback_tid = SIGN_DEST_TEAMS[0][0]
             for i in range(self.lst_teams.size()):
-                if self.lst_teams.get(i).startswith("1009:"):  # Free Agents fallback
+                if self.lst_teams.get(i).startswith(fallback_tid + ":"):
                     idx = i
                     break
         if idx is None and self.lst_teams.size() > 0:
@@ -3138,7 +3445,9 @@ class App(tk.Tk):
             )
         lb = tk.Listbox(dlg, **lb_kwargs)
         lb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        for tid, name in TEAM_NAMES.items():
+        # Only real coachable teams - not Free Agents/Draft Class/Game Changer
+        # Players, which aren't a team you can actually coach.
+        for tid, name in SIGN_DEST_TEAMS:
             lb.insert(tk.END, f"{tid}: {name}")
 
         def choose(event=None):
@@ -3155,8 +3464,8 @@ class App(tk.Tk):
         btn_frm = ttk.Frame(dlg)
         btn_frm.pack(fill="x", padx=12, pady=(0, 12))
         ttk.Button(
-            btn_frm, text="Skip (use Free Agents)",
-            command=lambda: (dlg.destroy(), self._activate_team_by_id("1009")),
+            btn_frm, text="Skip",
+            command=lambda: (dlg.destroy(), self._activate_team_by_id(SIGN_DEST_TEAMS[0][0])),
         ).pack(side="left")
         ttk.Button(btn_frm, text="Select", style="Accent.TButton", command=choose).pack(side="right")
 
@@ -3885,6 +4194,18 @@ class App(tk.Tk):
             return
         PlayerContractDialog(self, self.model, self.selected_player_index)
 
+    def on_open_player_personality_editor(self):
+        if self.selected_player_index is None:
+            messagebox.showinfo("No player", "Select a player first.")
+            return
+        row = self.model.players[self.selected_player_index]
+        name = self.model.player_name(row) if hasattr(self.model, "player_name") else ""
+        PersonalityDialog(
+            self, self.model.players, self.selected_player_index,
+            f"Player: {name}", refresh_callback=self.refresh_stats_for_player,
+            subject_kind="player",
+        )
+
     # ---------- Trades ----------
     def on_open_swap_trade(self):
         if not self.model.players:
@@ -4064,7 +4385,7 @@ class App(tk.Tk):
         tree["columns"] = headers
         for h in headers:
             tree.heading(h, text=h)
-            tree.column(h, width=140, anchor="w")
+            tree.column(h, width=140, anchor="w", stretch=False)
 
         for i, r in enumerate(rows):
             vals = [ (r.get(h, "") or "") for h in headers ]
@@ -4108,7 +4429,7 @@ class App(tk.Tk):
         self.tree_trainer["columns"] = headers
         for h in headers:
             self.tree_trainer.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
-            self.tree_trainer.column(h, width=110 if h in STAFF_FIELD_LABELS else 160, anchor="w")
+            self.tree_trainer.column(h, width=110 if h in STAFF_FIELD_LABELS else 160, anchor="w", stretch=False)
 
         for idx, r in rows:
             vals = []
@@ -4234,12 +4555,28 @@ class App(tk.Tk):
         self.refresh_gm()
         self._reselect(self.tree_gm, iid)
 
+    def _ensure_tree_selection(self, tree):
+        """If nothing is selected, auto-select the first visible row instead
+        of requiring an extra click - most useful when filtered to "My Team"
+        where there's often just one (or few) row(s) shown anyway. Returns
+        the resulting selection tuple (possibly still empty if the tree has
+        no rows at all)."""
+        sel = tree.selection()
+        if sel:
+            return sel
+        children = tree.get_children()
+        if children:
+            tree.selection_set(children[0])
+            tree.focus(children[0])
+            return tree.selection()
+        return sel
+
     def on_max_selected_gm(self):
         """Max out ALL of the selected GM's stats in one click: Trade, Contract, and
         Potential Evaluation + Rookie Scouting (for whichever position buckets this GM has data for)."""
-        sel = self.tree_gm.selection()
+        sel = self._ensure_tree_selection(self.tree_gm)
         if not sel:
-            messagebox.showinfo("No selection", "Select a GM row first.")
+            messagebox.showinfo("No GMs shown", "No GM rows to select - check the My Team/All Teams filter.")
             return
         iid = self._max_out_staff_skills(self.tree_gm, self.model.gms, GM_MAXABLE_SKILL_FIELDS)
         self._max_out_gm_potential_eval(int(sel[0]))
@@ -4248,9 +4585,9 @@ class App(tk.Tk):
 
     def on_max_selected_trainer(self):
         """Max out ALL of the selected trainer's stats: Injury Eval, Rehab, Fatigue Rec."""
-        sel = self.tree_trainer.selection()
+        sel = self._ensure_tree_selection(self.tree_trainer)
         if not sel:
-            messagebox.showinfo("No selection", "Select a trainer row first.")
+            messagebox.showinfo("No trainers shown", "No trainer rows to select - check the My Team/All Teams filter.")
             return
         iid = self._max_out_staff_skills(self.tree_trainer, self.model.trainers, TRAINER_MAXABLE_SKILL_FIELDS)
         self.refresh_trainer()
@@ -4261,9 +4598,9 @@ class App(tk.Tk):
         (SKST/SKSM), Team Chemistry (SKCR/SKCM), Performance (MIN(SKPA, SKPF), so setting
         both to 5 maxes it), and Physical/Intangible/Learning Development for all 10
         position buckets. See the investigation log above COACH_MAXABLE_SKILL_FIELDS."""
-        sel = self.tree_coach.selection()
+        sel = self._ensure_tree_selection(self.tree_coach)
         if not sel:
-            messagebox.showinfo("No selection", "Select a coach row first.")
+            messagebox.showinfo("No coaches shown", "No coach rows to select - check the My Team/All Teams filter.")
             return
         iid = self._max_out_staff_skills(self.tree_coach, self.model.coaches, COACH_MAXABLE_SKILL_FIELDS)
         self._max_out_coach_development(int(sel[0]))
@@ -4349,7 +4686,7 @@ class App(tk.Tk):
         self.tree_coach["columns"] = headers or []
         for h in headers or []:
             self.tree_coach.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
-            self.tree_coach.column(h, width=70 if h in COACH_DEV_COLUMNS else 140, anchor="w")
+            self.tree_coach.column(h, width=90 if h in COACH_DEV_COLUMNS else 140, anchor="w", stretch=False)
 
         # Insert rows using original model indices as iids
         for idx, r in rows:
@@ -4382,6 +4719,23 @@ class App(tk.Tk):
         self.ent_coach_skpt.delete(0, tk.END)
         if sk is not None:
             self.ent_coach_skpt.insert(0, str(sk))
+
+    def on_open_coach_personality_editor(self):
+        sel = self.tree_coach.selection()
+        if not sel:
+            messagebox.showinfo("No coach", "Select a coach first.")
+            return
+        try:
+            idx = int(sel[0])
+        except Exception:
+            return
+        row = self.model.coaches[idx]
+        name = f"{(row.get('CFNM','') or '').strip()} {(row.get('CLNM','') or '').strip()}".strip()
+        PersonalityDialog(
+            self, self.model.coaches, idx,
+            f"Coach: {name}", refresh_callback=self.refresh_coach,
+            subject_kind="coach",
+        )
 
     def _apply_coach_skpt(self):
         sel = self.tree_coach.selection()
@@ -4445,7 +4799,7 @@ class App(tk.Tk):
         for h in headers:
             self.tree_gm.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
             is_bucket_col = h in GM_POTENTIAL_EVAL_COLUMNS or h in GM_ROOKIE_SCOUTING_COLUMNS
-            self.tree_gm.column(h, width=70 if is_bucket_col else (110 if h in STAFF_FIELD_LABELS else 160), anchor="w")
+            self.tree_gm.column(h, width=90 if is_bucket_col else (110 if h in STAFF_FIELD_LABELS else 160), anchor="w", stretch=False)
 
         for idx, r in rows:
             vals = []
@@ -4706,14 +5060,11 @@ class App(tk.Tk):
             # Update display
             self.ent_cap.delete(0, tk.END)
             self.ent_cap.insert(0, str(v))
-            self.lbl_cap_status.configure(text=f"Updated to {v}")
-            
-            # Show result message
             if orig_v != v:
-                messagebox.showinfo("Clamped", f"Value {orig_v} was clamped to {v}. Click 'Save' to write to file.")
+                self.lbl_cap_status.configure(text=f"Value {orig_v} was clamped to {v}.")
             else:
-                messagebox.showinfo("Updated", f"Salary cap set to {v}. Click 'Save' to write to file.")
-            
+                self.lbl_cap_status.configure(text=f"Updated to {v}")
+
         except Exception as e:
             messagebox.showerror("Cap Error", str(e))
 
