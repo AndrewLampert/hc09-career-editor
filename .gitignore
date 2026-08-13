@@ -19,3 +19,7 @@ test-data/
 
 # Local UI preferences (theme, remembered team per save) - not repo content
 .hc09_ui_prefs.json
+
+# Cached portrait archive blobs extracted from the user's own game files -
+# large, copyrighted game assets, never repo content
+.hc09_portrait_cache/

@@ -3,7 +3,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
+const ASTParser = require('madden-file-tools/streams/ASTParser');
+const { Readable } = require('stream');
 
 const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM', 'cINF'];
 
@@ -272,6 +275,105 @@ async function cmdImport(args) {
     console.log(JSON.stringify({ savedTo: outPath || dbPath, results }, null, 2));
 }
 
+// ---------- Portrait extraction (qkl_fe2ig.ast player/coach portraits) ----------
+// See docs on the "PSXP" save field: the top-level AST entry (index 1777 for
+// player portraits, 1775 for coach/owner portraits) is itself a nested BGFA
+// archive of ~3580 headshots, one per shortId. PSXP equals a sub-entry's
+// shortId, NOT its storage-order index.
+
+function bufferFromReadable(readable) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        readable.on('data', (c) => chunks.push(c));
+        readable.on('end', () => resolve(Buffer.concat(chunks)));
+        readable.on('error', reject);
+    });
+}
+
+// Extract one top-level-index entry's raw bytes from an AST source (either a
+// file path to stream from disk, or an in-memory Buffer to re-pipe).
+function extractEntry(source, index) {
+    return new Promise((resolve, reject) => {
+        const parser = new ASTParser();
+        let resolved = false;
+        parser.on('compressed-file', ({ stream, toc }) => {
+            if (toc.index !== index) { stream.resume(); return; }
+            resolved = true;
+            bufferFromReadable(stream).then(resolve, reject);
+        });
+        parser.on('error', reject);
+        parser.on('end', () => { if (!resolved) reject(new Error(`entry index ${index} not found`)); });
+        if (Buffer.isBuffer(source)) {
+            const s = new Readable();
+            s._read = () => {};
+            s.push(source);
+            s.push(null);
+            s.pipe(parser);
+        } else {
+            fs.createReadStream(source).pipe(parser);
+        }
+    });
+}
+
+function readToc(source) {
+    return new Promise((resolve, reject) => {
+        const parser = new ASTParser();
+        parser.extract = false;
+        parser.on('toc', (tocs) => resolve(tocs));
+        parser.on('error', reject);
+        if (Buffer.isBuffer(source)) {
+            const s = new Readable();
+            s._read = () => {};
+            s.push(source);
+            s.push(null);
+            s.pipe(parser);
+        } else {
+            fs.createReadStream(source).pipe(parser);
+        }
+    });
+}
+
+// One-time (per game install), slow: pulls the ~55MB nested portrait archive
+// out of the ~2GB qkl_fe2ig.ast and caches it to --out so later lookups never
+// have to touch the multi-GB file again.
+async function cmdPortraitExtractArchive(args) {
+    const astPath = args.ast;
+    const topIndex = parseInt(args['top-index'], 10);
+    const outPath = args.out;
+
+    const raw = await extractEntry(astPath, topIndex);
+    if (raw.slice(0, 8).toString('latin1') !== 'BGFA1.05') {
+        throw new Error(`entry ${topIndex} doesn't look like a nested BGFA archive (bad magic)`);
+    }
+    fs.writeFileSync(outPath, raw);
+    console.log(JSON.stringify({ bytes: raw.length, out: outPath }));
+}
+
+// Fast, repeated: looks up one shortId within the already-cached nested
+// archive blob, decompresses it (sub-entries are raw zlib-deflate streams),
+// and writes the resulting DDS bytes to --out.
+async function cmdPortraitLookup(args) {
+    const archivePath = args.archive;
+    const shortId = parseInt(args.shortid, 10);
+    const outPath = args.out;
+
+    const archiveBuf = fs.readFileSync(archivePath);
+    const tocs = await readToc(archiveBuf);
+    const match = tocs.find((t) => t.shortId === shortId);
+    if (!match) {
+        console.log(JSON.stringify({ found: false }));
+        return;
+    }
+
+    const subRaw = await extractEntry(archiveBuf, match.index);
+    let ddsBytes = subRaw;
+    if (subRaw.slice(0, 2).toString('hex') === '78da') {
+        ddsBytes = zlib.inflateSync(subRaw);
+    }
+    fs.writeFileSync(outPath, ddsBytes);
+    console.log(JSON.stringify({ found: true, size: ddsBytes.length, out: outPath }));
+}
+
 function parseArgs(argv) {
     const args = {};
     for (let i = 0; i < argv.length; i++) {
@@ -303,12 +405,18 @@ async function main() {
             await cmdExport(args);
         } else if (cmd === 'import') {
             await cmdImport(args);
+        } else if (cmd === 'portrait-extract-archive') {
+            await cmdPortraitExtractArchive(args);
+        } else if (cmd === 'portrait-lookup') {
+            await cmdPortraitLookup(args);
         } else {
             console.error('Usage:');
             console.error('  node bridge.js inspect --db <path>');
             console.error('  node bridge.js fields --db <path> --table <name>');
             console.error('  node bridge.js export --db <path> --out <dir> [--tables PLAY,DRPK,...]');
             console.error('  node bridge.js import --db <path> --in <dir> [--out <path>] [--tables PLAY,DRPK,...]');
+            console.error('  node bridge.js portrait-extract-archive --ast <path> --top-index <N> --out <path>');
+            console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             process.exit(1);
         }
     } catch (err) {

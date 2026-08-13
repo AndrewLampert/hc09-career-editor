@@ -33,6 +33,12 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
 # -----------------------------
 # Bridge (direct .db load/save, no more manual CSV export/import via HC09Editor)
 # -----------------------------
@@ -2008,6 +2014,24 @@ def save_ui_prefs(prefs):
     except Exception:
         pass
 
+# -----------------------------
+# Portrait support (qkl_fe2ig.ast player/coach headshots)
+# -----------------------------
+# See docs/hc09_photo_customization findings: top-level AST entry 1777 is a
+# nested archive of ~3580 player headshots keyed by shortId, which PSXP
+# equals directly. Coach portraits (entry 1775) use the same mechanism but
+# the coach-side ID field hasn't been independently confirmed yet.
+PORTRAIT_TOP_INDEX = {"player": 1777, "coach": 1775}
+PORTRAIT_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_portrait_cache")
+PORTRAIT_ARCHIVE_FILENAME = {"player": "player_portraits.bin", "coach": "coach_portraits.bin"}
+
+# Auto-detected first: the RPCS3 install location the archive was originally
+# found at. If it's not there (different machine/install), on_locate_game_files
+# still lets you point at it manually.
+KNOWN_GAME_AST_CANDIDATES = [
+    r"C:\Emulators\Emulator stuff\Rpcs3\NFL Head Coach 09 (USA)\NFL Head Coach 09 (USA)\PS3_GAME\USRDIR\qkl_fe2ig.ast",
+]
+
 
 class PlayerContractDialog(tk.Toplevel):
     """Contract editor for an existing player - same all-years grid style as
@@ -2455,6 +2479,14 @@ class App(tk.Tk):
         self.selected_stat_key = None
         self._player_index_map = []
 
+        # Portrait viewer state. self._portrait_photo_refs holds the current
+        # ImageTk.PhotoImage per kind ("player"/"coach") - Tk drops the image
+        # if nothing keeps a Python reference to it alive. The request id lets
+        # a slow background lookup discard its result if the user has already
+        # clicked a different player before it finishes.
+        self._portrait_photo_refs = {}
+        self._portrait_request_id = 0
+
         # Shared by the Trainer/Coach/GM tabs: those tables have 300+ league-
         # wide rows, which is what made those tabs slow to render/scroll -
         # defaulting to "my team only" cuts that by ~30x and is remembered.
@@ -2531,6 +2563,173 @@ class App(tk.Tk):
                 on_success(result_box.get("value"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # ---------- Portrait viewer (Player Editor tab) ----------
+    # Read-only for now - writing a replacement portrait back into the game's
+    # AST archive is a separate, unsolved problem (repacking a nested BGFA
+    # archive) and hasn't been attempted.
+    def get_game_ast_path(self):
+        path = self.ui_prefs.get("game_ast_path") or ""
+        if path and os.path.isfile(path):
+            return path
+        for candidate in KNOWN_GAME_AST_CANDIDATES:
+            if os.path.isfile(candidate):
+                self.ui_prefs["game_ast_path"] = candidate
+                save_ui_prefs(self.ui_prefs)
+                return candidate
+        return ""
+
+    def on_locate_game_files(self):
+        path = filedialog.askopenfilename(
+            title="Locate qkl_fe2ig.ast (inside the game's PS3_GAME/USRDIR folder)",
+            filetypes=[("AST archive", "qkl_fe2ig.ast"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        if self.ui_prefs.get("game_ast_path") != path:
+            # A different install's archive may have different contents at
+            # the same shortIds - drop any cached blob so it re-extracts.
+            for kind in PORTRAIT_ARCHIVE_FILENAME:
+                cache_path = self._portrait_archive_cache_path(kind)
+                if os.path.isfile(cache_path):
+                    try:
+                        os.remove(cache_path)
+                    except OSError:
+                        pass
+        self.ui_prefs["game_ast_path"] = path
+        save_ui_prefs(self.ui_prefs)
+        self._refresh_current_player_portrait()
+
+    def _portrait_archive_cache_path(self, kind):
+        return os.path.join(PORTRAIT_CACHE_DIR, PORTRAIT_ARCHIVE_FILENAME[kind])
+
+    def _build_portrait_panel(self, parent, kind, extra_buttons=None):
+        frm = ttk.LabelFrame(parent, text="Portrait")
+        frm.pack(fill="x", pady=(0, 6))
+
+        img_kwargs = {}
+        if self._ui_palette:
+            img_kwargs["background"] = self._ui_palette["surface"]
+        # Native portrait size is 256x256 - shown full size (no thumbnail
+        # downscale), so the placeholder box matches that.
+        img_label = tk.Label(frm, text="No player selected", width=256, height=256, **img_kwargs)
+        img_label.pack(side="left", padx=8, pady=8)
+
+        status_col = ttk.Frame(frm)
+        status_col.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=8)
+        status_label = ttk.Label(status_col, text="", wraplength=220, justify="left")
+        status_label.pack(anchor="w")
+        # Locate Game Files only needs a click if auto-detection (checked at
+        # the top of get_game_ast_path) didn't find it - not shown otherwise.
+        locate_btn = ttk.Button(status_col, text="Locate Game Files...", command=self.on_locate_game_files)
+        locate_btn.pack(anchor="w", pady=(6, 0))
+
+        if extra_buttons:
+            btn_col = ttk.Frame(frm)
+            btn_col.pack(side="left", fill="y", padx=(0, 8), pady=8)
+            for text, command in extra_buttons:
+                ttk.Button(btn_col, text=text, command=command).pack(anchor="w", pady=(0, 6))
+
+        setattr(self, f"_portrait_img_label_{kind}", img_label)
+        setattr(self, f"_portrait_status_label_{kind}", status_label)
+
+    def _refresh_current_player_portrait(self):
+        if getattr(self, "selected_player_index", None) is None:
+            return
+        row = self.model.players[self.selected_player_index]
+        shortid = safe_int(row.get(PLAYER_PORTRAIT_CODE, ""))
+        self._request_portrait_load("player", shortid)
+
+    def _request_portrait_load(self, kind, shortid):
+        img_label = getattr(self, f"_portrait_img_label_{kind}", None)
+        status_label = getattr(self, f"_portrait_status_label_{kind}", None)
+        if img_label is None:
+            return
+
+        self._portrait_request_id += 1
+        req_id = self._portrait_request_id
+
+        if not PIL_AVAILABLE:
+            img_label.configure(image="", text="No image support")
+            status_label.configure(text="Pillow (PIL) isn't installed - run: pip install Pillow")
+            return
+
+        if not self.get_game_ast_path():
+            img_label.configure(image="", text="No photo")
+            status_label.configure(text="Locate your game files to view in-game portraits.")
+            return
+
+        if shortid is None:
+            img_label.configure(image="", text="No photo")
+            status_label.configure(text="")
+            return
+
+        img_label.configure(image="", text="Loading...")
+        status_label.configure(text="")
+
+        def worker():
+            try:
+                pil_image = self._load_portrait_image(kind, shortid)
+            except Exception as e:
+                pil_image = None
+                error = str(e)
+            else:
+                error = None
+            self.after(0, lambda: self._on_portrait_loaded(kind, req_id, pil_image, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _load_portrait_image(self, kind, shortid):
+        """Runs on a background thread. Ensures the (large, one-time) nested
+        portrait archive is cached locally, looks up shortid within it via
+        bridge.js, and returns a PIL Image - or None if not found."""
+        cache_path = self._portrait_archive_cache_path(kind)
+        if not os.path.isfile(cache_path):
+            os.makedirs(PORTRAIT_CACHE_DIR, exist_ok=True)
+            self.model.run_bridge([
+                "portrait-extract-archive",
+                "--ast", self.get_game_ast_path(),
+                "--top-index", str(PORTRAIT_TOP_INDEX[kind]),
+                "--out", cache_path,
+            ])
+
+        with tempfile.NamedTemporaryFile(suffix=".dds", delete=False) as tf:
+            dds_path = tf.name
+        try:
+            result = self.model.run_bridge([
+                "portrait-lookup", "--archive", cache_path,
+                "--shortid", str(shortid), "--out", dds_path,
+            ])
+            if not result.get("found"):
+                return None
+            return Image.open(dds_path).convert("RGBA")
+        finally:
+            try:
+                os.remove(dds_path)
+            except OSError:
+                pass
+
+    def _on_portrait_loaded(self, kind, req_id, pil_image, error):
+        if req_id != self._portrait_request_id:
+            return  # a newer request has already superseded this one
+        img_label = getattr(self, f"_portrait_img_label_{kind}", None)
+        status_label = getattr(self, f"_portrait_status_label_{kind}", None)
+        if img_label is None:
+            return
+
+        if error:
+            img_label.configure(image="", text="Error")
+            status_label.configure(text=f"Couldn't load portrait: {error}")
+            return
+        if pil_image is None:
+            img_label.configure(image="", text="No photo\nfound")
+            status_label.configure(text="No portrait entry matches this player's PSXP value in the archive.")
+            return
+
+        photo = ImageTk.PhotoImage(pil_image)  # shown full size (native 256x256)
+        self._portrait_photo_refs[kind] = photo  # keep alive
+        img_label.configure(image=photo, text="")
+        status_label.configure(text="In-game portrait (read-only for now).")
 
     # ---------- Visual theme ----------
     def _apply_theme(self, mode=None):
@@ -2741,16 +2940,16 @@ class App(tk.Tk):
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         self.tab_players = ttk.Frame(self.notebook)
+        self.tab_player_editor = ttk.Frame(self.notebook)
         self.tab_picks = ttk.Frame(self.notebook)
-        self.tab_cap = ttk.Frame(self.notebook)
 
-        self.notebook.add(self.tab_players, text="Players + Stats")
+        self.notebook.add(self.tab_players, text="Players")
+        self.notebook.add(self.tab_player_editor, text="Player Editor")
         self.notebook.add(self.tab_picks, text="Draft Picks")
-        self.notebook.add(self.tab_cap, text="Salary Cap")
 
         self._build_players_tab()
+        self._build_player_editor_tab()
         self._build_picks_tab()
-        self._build_cap_tab()
         # New staff tabs
         self._build_trainer_tab()
         self._build_coach_tab()
@@ -2759,17 +2958,25 @@ class App(tk.Tk):
     def _build_players_tab(self):
         root = self.tab_players
 
-        # Left: Teams
+        # Left: Teams. Bottom controls (team-wide buttons + cap panel) are
+        # packed FIRST with side="bottom" so they always keep their reserved
+        # space regardless of window height - otherwise a tall Teams listbox
+        # can push them off-screen (same overflow bug fixed elsewhere, e.g.
+        # the Draft Picks tab).
         left = ttk.Frame(root)
         left.pack(side="left", fill="y", padx=(0, 8), pady=6)
 
+        bottom_left = ttk.Frame(left)
+        bottom_left.pack(side="bottom", fill="x")
+        ttk.Button(bottom_left, text="Set Team Bonus Min", command=self.on_set_team_bonus_min).pack(anchor="w", pady=(8, 0))
+        ttk.Button(bottom_left, text="Max Team Staff", command=self.on_max_team_staff_skpt).pack(anchor="w", pady=(6, 0))
+        ttk.Button(bottom_left, text="Apply Motivator Boost to Team...", command=self.on_open_team_motivator_dialog).pack(anchor="w", pady=(6, 0))
+        self._build_cap_panel(bottom_left)
+
         ttk.Label(left, text="Teams").pack(anchor="w")
         self.lst_teams = tk.Listbox(left, height=28, exportselection=False)
-        self.lst_teams.pack(fill="y")
+        self.lst_teams.pack(fill="both", expand=True)
         self.lst_teams.bind("<<ListboxSelect>>", self.on_team_select)
-        ttk.Button(left, text="Set Team Bonus Min", command=self.on_set_team_bonus_min).pack(anchor="w", pady=(8, 0))
-        ttk.Button(left, text="Max Team Staff", command=self.on_max_team_staff_skpt).pack(anchor="w", pady=(6, 0))
-        ttk.Button(left, text="Apply Motivator Boost to Team...", command=self.on_open_team_motivator_dialog).pack(anchor="w", pady=(6, 0))
 
         # Middle: Players
         mid = ttk.Frame(root)
@@ -2791,13 +2998,41 @@ class App(tk.Tk):
         self.lst_players.pack(fill="both", expand=True)
         self.lst_players.bind("<<ListboxSelect>>", self.on_player_select)
 
-        # Right: Name editor + Stats editor + Contract editor + Raw editor.
+    def _build_cap_panel(self, parent):
+        """Salary Cap (slri.csv) - lives on the Players tab alongside the
+        other team-wide/mass-edit tools (team bonus min, staff max, team
+        motivator boost) rather than its own thin notebook tab, since it's
+        just one field + two buttons."""
+        frm = ttk.LabelFrame(parent, text="Salary Cap (slri.csv)")
+        frm.pack(anchor="w", fill="x", pady=(12, 0))
+
+        row1 = ttk.Frame(frm)
+        row1.pack(fill="x", padx=6, pady=(6, 4))
+        self.ent_cap = ttk.Entry(row1, width=14)
+        self.ent_cap.pack(side="left")
+        ttk.Button(row1, text="Set to Max", command=self.set_cap_to_max).pack(side="left", padx=(6, 0))
+
+        ttk.Button(
+            frm, text="Apply (max 260,000,000 - higher freezes the game)",
+            command=self.on_apply_cap,
+        ).pack(anchor="w", padx=6, pady=(0, 4))
+
+        self.lbl_cap_status = ttk.Label(frm, text="Load slri.csv to edit cap.", wraplength=200, justify="left")
+        self.lbl_cap_status.pack(anchor="w", padx=6, pady=(0, 6))
+
+    # ---------- Player Editor tab (individual-player editing) ----------
+    def _build_player_editor_tab(self):
+        root = self.tab_player_editor
+
+        self.lbl_player_editor_header = ttk.Label(root, text="No player selected - pick one from the Players tab.", font=("", 10, "bold"))
+        self.lbl_player_editor_header.pack(anchor="w", padx=10, pady=(10, 4))
+
         # This column can hold more content than fits vertically depending on
         # window size (e.g. the Contract Editor's 7-year grid), so it's
         # wrapped in a scrollable canvas rather than assuming everything
         # always fits - nothing gets silently clipped off below the window.
         right_outer = ttk.Frame(root)
-        right_outer.pack(side="left", fill="both", expand=True, pady=6)
+        right_outer.pack(side="left", fill="both", expand=True, padx=10, pady=(0, 6))
 
         canvas_kwargs = dict(highlightthickness=0, bd=0)
         if self._ui_palette:
@@ -2825,6 +3060,12 @@ class App(tk.Tk):
             right_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         right_canvas.bind("<MouseWheel>", _on_right_mousewheel)
         right.bind("<MouseWheel>", _on_right_mousewheel)
+
+        # --- Portrait ---
+        self._build_portrait_panel(right, kind="player", extra_buttons=[
+            ("Edit Contract...", self.on_open_contract_editor),
+            ("Personality...", self.on_open_player_personality_editor),
+        ])
 
         # --- Name Editor ---
         namefrm = ttk.LabelFrame(right, text="Name Editor (PFNA / PLNA) (sanitized to avoid crashes)")
@@ -2882,12 +3123,9 @@ class App(tk.Tk):
         self.ent_years.grid(row=0, column=3, sticky="w", padx=(4, 12))
         ttk.Button(info, text="Apply Age/Years", command=self.on_apply_age_years).grid(row=0, column=4, sticky="w")
 
-        # Contract editing lives in its own popup (same all-years grid style
-        # as the Sign Free Agent dialog) rather than always-expanded inline -
-        # keeps this column compact and consistent with how Sign Free Agent
-        # already handles contracts.
-        ttk.Button(right, text="Edit Contract...", command=self.on_open_contract_editor).pack(anchor="w", pady=(6, 0))
-        ttk.Button(right, text="Personality...", command=self.on_open_player_personality_editor).pack(anchor="w", pady=(6, 0))
+        # Contract/Personality buttons live next to the portrait at the top
+        # of this tab (see _build_portrait_panel's extra_buttons) rather than
+        # here, to make use of the blank space beside the photo.
 
         # Raw column editor (ANY column)
         raw = ttk.LabelFrame(right, text="Raw Column Editor (any header)")
@@ -3039,20 +3277,6 @@ class App(tk.Tk):
             self.tree_picks.column(c, width=width, anchor="w", stretch=False)
         self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 6))
         self.tree_picks.bind("<<TreeviewSelect>>", lambda e: self._update_pick_selection_label())
-
-    def _build_cap_tab(self):
-        root = self.tab_cap
-        frm = ttk.Frame(root)
-        frm.pack(fill="x", padx=10, pady=14)
-
-        ttk.Label(frm, text="Salary Cap (slri.csv)").grid(row=0, column=0, sticky="w")
-        self.ent_cap = ttk.Entry(frm, width=18)
-        self.ent_cap.grid(row=0, column=1, sticky="w", padx=8)
-        ttk.Button(frm, text="Set to Max", command=self.set_cap_to_max).grid(row=0, column=2, sticky="w", padx=4)
-        ttk.Button(frm, text="Click to apply changes (max 260,000,000 - higher freezes the game)", command=self.on_apply_cap).grid(row=0, column=3, sticky="w", padx=4)
-
-        self.lbl_cap_status = ttk.Label(root, text="Load slri.csv to edit cap.")
-        self.lbl_cap_status.pack(anchor="w", padx=10, pady=(8, 0))
 
     # ---------- Staff Tabs (Trainer / Coach / GM) ----------
     def _build_staff_team_filter(self, parent):
@@ -3748,6 +3972,14 @@ class App(tk.Tk):
 
         # Prefill raw column value
         self.on_raw_column_changed()
+
+        self.lbl_player_editor_header.configure(text=f"Editing: {self.model.player_name(r)}")
+        self._refresh_current_player_portrait()
+        # Only auto-switch tabs for a real user click on the list (event is
+        # set by the <<ListboxSelect>> binding) - not for the programmatic
+        # preselection that happens on save load / team switch / list refresh.
+        if event is not None:
+            self.notebook.select(self.tab_player_editor)
 
     # ---------- Name Editor ----------
     def on_apply_name(self):
