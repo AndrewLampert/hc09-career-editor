@@ -801,6 +801,91 @@ def safe_int(s):
     except Exception:
         return None
 
+# -----------------------------
+# Player Type Fit ("positional philosophy" fit).
+#
+# PLYT is a real table pulled directly from the game's own shipped database
+# (qkl_boot.ast top-level entry 46, an EA `DB` file with 716 tables - a
+# superset of the save's 217) - NOT a forum guess. It defines the game's 37
+# named player archetypes (Balanced QB, Scrambling QB, Power Back, ...),
+# each with a full 0-99 "ideal" profile using the SAME field codes as
+# STAT_META above. That means a player's fit to an archetype is a plain
+# field-by-field distance against real extracted game data - no invented
+# formula, no assumed weighting.
+#
+# The save-file field that records which archetype/philosophy is CURRENTLY
+# assigned to a roster position was NOT found (two candidate tables, TPHS/
+# TPHL, didn't pattern-match cleanly) - so this only computes a hypothetical
+# fit score for browsing/comparison, it doesn't read or write an existing
+# assignment.
+# -----------------------------
+PLYT_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "gamedata", "PLYT_player_types.csv")
+
+# PTId // 10 groups the 37 archetypes into 9 position groups; verified
+# against the archetype names themselves (e.g. ids 10-14 are all "... Back").
+PLAYER_TYPE_GROUP_LABELS = {
+    0: "QB", 1: "HB/FB", 2: "WR", 3: "TE", 4: "OL", 5: "DL", 6: "LB", 7: "DB", 8: "K/P",
+}
+PLAYER_TYPE_GROUP_TO_PPOS = {
+    0: {"0"},
+    1: {"1", "2"},
+    2: {"3"},
+    3: {"4"},
+    4: {"5", "6", "7", "8", "9"},
+    5: {"10", "11", "12"},
+    6: {"13", "14", "15"},
+    7: {"16", "17", "18"},
+    8: {"19", "20"},
+}
+
+def load_player_types():
+    try:
+        with open(PLYT_DATA_PATH, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    except Exception:
+        return [], []
+    if not rows:
+        return [], []
+
+    # Only fields this project already tracks (STAT_META) AND that actually
+    # vary across archetypes - a field that's 0 for every single archetype
+    # carries no fit information, so it's dropped automatically rather than
+    # hand-picked (avoids injecting any guesswork about which stats "should"
+    # matter for a given position).
+    candidate_fields = [k for k in STAT_META.keys() if k in rows[0]]
+    fields = [k for k in candidate_fields if any(safe_int(r.get(k, "0")) for r in rows)]
+
+    types = []
+    for r in rows:
+        ptid = safe_int(r.get("PTId", ""))
+        if ptid is None:
+            continue
+        types.append({
+            "ptid": ptid,
+            "name": (r.get("PTTN", "") or f"Type {ptid}").strip(),
+            "group": ptid // 10,
+            "ideal": {k: (safe_int(r.get(k, "0")) or 0) for k in fields},
+        })
+    types.sort(key=lambda t: (t["group"], t["ptid"]))
+    return types, fields
+
+PLAYER_TYPES, PLAYER_TYPE_FIT_FIELDS = load_player_types()
+
+def compute_player_type_fit(row, ideal_profile):
+    """Average absolute per-attribute difference, expressed as a 0-100
+    'match' score (100 = identical to the archetype's ideal profile).
+    Only real, already-tracked STAT_META fields are compared - see
+    load_player_types()."""
+    diffs = []
+    for field, ideal_val in ideal_profile.items():
+        actual = safe_int(row.get(field, ""))
+        if actual is None:
+            continue
+        diffs.append(abs(actual - ideal_val))
+    if not diffs:
+        return None
+    return max(0.0, 100.0 - (sum(diffs) / len(diffs)))
+
 def detect_team_col_case_sensitive(headers):
     hs = set(headers or [])
     for c in PREFERRED_TEAM_COLS:
@@ -2599,6 +2684,156 @@ class AssignPortraitDialog(tk.Toplevel):
         self.destroy()
 
 
+class PlayerTypeFitDialog(tk.Toplevel):
+    """Browse any pool of players (a team, all teams, Free Agents, Draft
+    Class, Game Changer Players) and rank them by fit against a chosen
+    player-type archetype (see load_player_types()/PLAYER_TYPES - real data
+    pulled from the game's own shipped database, not a guess). Read-only:
+    doesn't read or write any 'currently assigned philosophy' field, since
+    that field wasn't identified in the save."""
+
+    POOL_OPTIONS = [
+        ("this_team", "This Team"),
+        ("all_teams", "All Teams"),
+        ("free_agents", "Free Agents"),
+        ("draft_class", "Draft Class"),
+        ("game_changers", "Game Changer Players"),
+    ]
+
+    def __init__(self, parent, model):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Player Type Fit")
+        self.transient(parent)
+        self.geometry("720x560")
+
+        self.parent = parent
+        self.model = model
+
+        if not PLAYER_TYPES:
+            ttk.Label(
+                self, foreground="gray", wraplength=420, justify="left",
+                text="docs/gamedata/PLYT_player_types.csv not found next to guiHC09.py - "
+                     "this feature needs the extracted player-type data.",
+            ).pack(anchor="w", padx=12, pady=12)
+            ttk.Button(self, text="Close", command=self.destroy).pack(anchor="e", padx=12, pady=(0, 12))
+            return
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(12, 6))
+
+        ttk.Label(top, text="Player Type:").pack(side="left")
+        self._type_display_to_type = {}
+        display_names = []
+        for t in PLAYER_TYPES:
+            label = f"{t['name']} ({PLAYER_TYPE_GROUP_LABELS.get(t['group'], '?')})"
+            self._type_display_to_type[label] = t
+            display_names.append(label)
+        self.type_var = tk.StringVar(value=display_names[0] if display_names else "")
+        cmb_type = ttk.Combobox(top, state="readonly", width=28, textvariable=self.type_var, values=display_names)
+        cmb_type.pack(side="left", padx=(6, 16))
+        cmb_type.bind("<<ComboboxSelected>>", lambda e: self._refresh())
+
+        ttk.Label(top, text="Pool:").pack(side="left")
+        pool_labels = [label for _key, label in self.POOL_OPTIONS]
+        self.pool_var = tk.StringVar(value=pool_labels[0])
+        cmb_pool = ttk.Combobox(top, state="readonly", width=18, textvariable=self.pool_var, values=pool_labels)
+        cmb_pool.pack(side="left", padx=(6, 0))
+        cmb_pool.bind("<<ComboboxSelected>>", lambda e: self._refresh())
+
+        ttk.Label(
+            self, foreground="gray", wraplength=680, justify="left",
+            text="Fit = 100 minus the average difference between each player's real attributes and this "
+                 "archetype's ideal profile (both use the same real stat fields) - a plain distance score, "
+                 "not the game's actual in-game formula. This doesn't read or change any 'assigned "
+                 "philosophy' - that save field wasn't identified.",
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        table_frm = ttk.Frame(self)
+        table_frm.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        cols = ("name", "team", "pos", "ovr", "fit")
+        headers = {"name": ("Player", 200), "team": ("Team", 160), "pos": ("Pos", 60), "ovr": ("OVR", 60), "fit": ("Fit %", 70)}
+        self.tree = ttk.Treeview(table_frm, columns=cols, show="headings")
+        for c in cols:
+            text, width = headers[c]
+            self.tree.heading(c, text=text, command=lambda c=c: self._sort_by(c))
+            self.tree.column(c, width=width, anchor="w" if c in ("name", "team") else "center", stretch=(c in ("name", "team")))
+        yscroll = ttk.Scrollbar(table_frm, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=yscroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        yscroll.pack(side="right", fill="y")
+
+        self._sort_state = {}
+        self._refresh()
+
+    def _pool_key(self):
+        label = self.pool_var.get()
+        for key, plabel in self.POOL_OPTIONS:
+            if plabel == label:
+                return key
+        return "this_team"
+
+    def _pool_rows(self):
+        pool = self._pool_key()
+        if pool == "this_team":
+            tid = getattr(self.parent, "selected_team_id", None)
+            tid = tid.get() if tid else ""
+            if not tid:
+                return []
+            return [r for r in self.model.players if self.model.player_team_id(r) == tid]
+        if pool == "free_agents":
+            return [r for r in self.model.players if self.model.player_team_id(r) == "1009"]
+        if pool == "draft_class":
+            return [r for r in self.model.players if self.model.player_team_id(r) == "1015"]
+        if pool == "game_changers":
+            return [r for r in self.model.players if self.model.player_team_id(r) == "1013"]
+        # all_teams: every real team, i.e. exclude the pool IDs above
+        pool_ids = {"1009", "1013", "1015"}
+        return [r for r in self.model.players if self.model.player_team_id(r) not in pool_ids and self.model.player_team_id(r)]
+
+    def _refresh(self):
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+
+        ptype = self._type_display_to_type.get(self.type_var.get())
+        if not ptype:
+            return
+        eligible_ppos = PLAYER_TYPE_GROUP_TO_PPOS.get(ptype["group"], set())
+
+        rows = self._pool_rows()
+        count = 0
+        for r in rows:
+            if (r.get(PLAYER_POS_CODE, "") or "").strip() not in eligible_ppos:
+                continue
+            fit = compute_player_type_fit(r, ptype["ideal"])
+            if fit is None:
+                continue
+            name = self.model.player_name(r)
+            team_id = self.model.player_team_id(r)
+            team_name = TEAM_NAMES.get(team_id, team_id)
+            pos_name = self.model.player_pos(r)
+            ovr = (r.get("POVR", "") or "").strip()
+            iid = str(count)
+            count += 1
+            self.tree.insert("", tk.END, iid=iid, values=(name, team_name, pos_name, ovr, f"{fit:.1f}"))
+
+        self._sort_state = {}
+        self._sort_by("fit", default_reverse=True)
+
+    def _sort_by(self, col, default_reverse=None):
+        reverse = self._sort_state.get(col, False) if default_reverse is None else default_reverse
+        rows = [(self.tree.set(iid, col), iid) for iid in self.tree.get_children()]
+        try:
+            rows.sort(key=lambda r: float(r[0]), reverse=reverse)
+        except ValueError:
+            rows.sort(key=lambda r: r[0], reverse=reverse)
+        for index, (_, iid) in enumerate(rows):
+            self.tree.move(iid, "", index)
+        self._sort_state[col] = not reverse
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -3066,6 +3301,7 @@ class App(tk.Tk):
 
         ttk.Button(top, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
         ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Player Type Fit...", command=self.on_open_player_type_fit).pack(side="left", padx=(8, 0))
 
         # Packed before the status label (both docking to the right) so they
         # always claim their space regardless of how long the status text
@@ -4587,6 +4823,12 @@ class App(tk.Tk):
             f"Player: {name}", refresh_callback=self.refresh_stats_for_player,
             subject_kind="player",
         )
+
+    def on_open_player_type_fit(self):
+        if not self.model.players:
+            messagebox.showinfo("No data", "Load a save first.")
+            return
+        PlayerTypeFitDialog(self, self.model)
 
     def on_open_assign_portrait_dialog(self):
         if self.selected_player_index is None:

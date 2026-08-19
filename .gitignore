@@ -23,3 +23,8 @@ test-data/
 # Cached portrait archive blobs extracted from the user's own game files -
 # large, copyrighted game assets, never repo content
 .hc09_portrait_cache/
+
+# Data extracted directly from the game's own shipped database (PLYT/PORC
+# tables etc, see load_player_types()) - proprietary game data, never repo
+# content, kept local-only like the portrait cache above
+docs/gamedata/
