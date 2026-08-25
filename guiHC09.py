@@ -1515,6 +1515,7 @@ class SwapTradeDialog(tk.Toplevel):
         self.title("Trade Players (Safe Swap - does not change TGID)")
         self.geometry("980x520")
         self.minsize(900, 480)
+        self.resizable(True, True)
         self.parent = parent
         self.model = model
 
@@ -1528,7 +1529,7 @@ class SwapTradeDialog(tk.Toplevel):
 
     def _build(self):
         top = ttk.Frame(self)
-        top.pack(fill="x", padx=10, pady=10)
+        top.pack(fill="x", padx=12, pady=10)
 
         warn = (
             "This trade swaps player DATA between two roster rows, but keeps TGID/IDs unchanged.\n"
@@ -1537,7 +1538,7 @@ class SwapTradeDialog(tk.Toplevel):
         ttk.Label(top, text=warn).pack(anchor="w")
 
         body = ttk.Frame(self)
-        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
         left = ttk.LabelFrame(body, text="Team 1 (choose player to send)")
         right = ttk.LabelFrame(body, text="Team 2 (choose player to send)")
@@ -1574,7 +1575,7 @@ class SwapTradeDialog(tk.Toplevel):
 
         # bottom controls
         bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        bottom.pack(fill="x", padx=12, pady=(0, 10))
 
         ttk.Label(bottom, text="Immutable keys not swapped: " + ", ".join(sorted(IMMUTABLE_KEYS))).pack(side="left")
 
@@ -1725,8 +1726,12 @@ class SignFreeAgentDialog(tk.Toplevel):
     def __init__(self, parent, model: CSVModel):
         super().__init__(parent)
         self.title("Sign Free Agent / Pool Player")
-        self.geometry("640x640")
-        self.minsize(600, 560)
+        # 640 tall used to clip the Sign Player/Close buttons below the
+        # visible window (confirmed by actually opening it) - 720 was
+        # verified to show the full contract grid + buttons with no resize.
+        self.geometry("640x720")
+        self.minsize(600, 640)
+        self.resizable(True, True)
         self.parent = parent
         self.model = model
         self.idx_player = None
@@ -1749,7 +1754,7 @@ class SignFreeAgentDialog(tk.Toplevel):
 
     def _build(self):
         top = ttk.Frame(self)
-        top.pack(fill="x", padx=10, pady=10)
+        top.pack(fill="x", padx=12, pady=10)
         ttk.Label(
             top,
             text="Reverses an in-game 'cut' - confirmed field-for-field via a live before/after test.",
@@ -1757,7 +1762,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         ).pack(anchor="w")
 
         src_frame = ttk.LabelFrame(self, text="Source pool")
-        src_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        src_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
 
         self.cmb_src = ttk.Combobox(src_frame, state="readonly", width=30)
         self.cmb_src["values"] = [f"{tid}: {name}" for tid, name in SIGN_SOURCE_POOLS]
@@ -1773,7 +1778,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.lst_src.bind("<<ListboxSelect>>", lambda e: self._on_pick_player())
 
         contract = ttk.LabelFrame(self, text="New contract")
-        contract.pack(fill="x", padx=10, pady=(0, 8))
+        contract.pack(fill="x", padx=12, pady=(0, 8))
 
         self.lbl_signing = ttk.Label(contract, text="No player selected", font=("TkDefaultFont", 10, "bold"))
         self.lbl_signing.pack(anchor="w", padx=10, pady=(8, 4))
@@ -1810,7 +1815,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.lbl_total.pack(anchor="w", padx=10, pady=(0, 6))
 
         bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=10, pady=(0, 10))
+        bottom.pack(fill="x", padx=12, pady=(0, 10))
         ttk.Button(bottom, text="Sign Player", command=self._do_sign).pack(side="right")
         ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right", padx=(0, 8))
 
@@ -2134,6 +2139,9 @@ class PlayerContractDialog(tk.Toplevel):
         # No explicit geometry - let it size itself snugly to its actual
         # content instead of guessing a fixed height (a hardcoded 640px left
         # a large empty gap below the buttons on most players' contracts).
+        # Locked non-resizable since that snug fit is the whole point - a
+        # fixed grid of contract years, nothing here benefits from more room.
+        self.resizable(False, False)
         self.minsize(420, 460)
         self.transient(parent)
         self.grab_set()
@@ -2276,6 +2284,7 @@ class PersonalityDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Personality")
         self.minsize(460, 520)
+        self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
 
@@ -2708,6 +2717,8 @@ class PlayerTypeFitDialog(tk.Toplevel):
         self.title("Player Type Fit")
         self.transient(parent)
         self.geometry("720x560")
+        self.minsize(560, 380)
+        self.resizable(True, True)
 
         self.parent = parent
         self.model = model
