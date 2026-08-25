@@ -3279,15 +3279,62 @@ class App(tk.Tk):
         enabled = self.facelift_var.get()
         self.ui_prefs["facelift_enabled"] = enabled
         save_ui_prefs(self.ui_prefs)
-        if enabled:
-            self.chk_dark_mode.state(["!disabled"])
-        else:
-            self.chk_dark_mode.state(["disabled"])
+        chk = getattr(self, "_options_dark_chk", None)
+        if chk is not None and chk.winfo_exists():
+            chk.state(["!disabled"] if enabled else ["disabled"])
         messagebox.showinfo(
             "Restart required",
             "This takes effect the next time you launch the app. Nothing else changes - "
             "every feature works the same either way, this only affects the look."
         )
+
+    def _open_options_dialog(self):
+        """Modern UI/Dark Mode live in a small dialog here rather than as two
+        separate toolbar checkbuttons (that pair was what overflowed the
+        toolbar at the app's default width) or a native tk.Menu (Windows
+        renders tk.Menu via the OS menu system, which ignores Tk's color
+        options, so it would never respect Dark Mode). A borderless auto-
+        closing dropdown was tried first but never actually rendered on this
+        machine despite Tk reporting it as created/viewable - likely a DPI-
+        scaling coordinate mismatch between Tk and the physical screen. A
+        plain Toplevel is the same proven-reliable pattern as every other
+        dialog in this app."""
+        if getattr(self, "_options_dlg", None) is not None and self._options_dlg.winfo_exists():
+            self._options_dlg.lift()
+            return
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Options")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        p = self._ui_palette
+        if p:
+            dlg.configure(background=p["bg"])
+
+        inner = ttk.Frame(dlg)
+        inner.pack(fill="both", expand=True, padx=16, pady=14)
+
+        ttk.Checkbutton(
+            inner, text="Modern UI", variable=self.facelift_var, command=self.on_toggle_facelift
+        ).pack(anchor="w", pady=(0, 8))
+        chk_dark = ttk.Checkbutton(
+            inner, text="Dark Mode", variable=self.dark_mode_var, command=self.on_toggle_dark_mode
+        )
+        chk_dark.pack(anchor="w")
+        if not self.facelift_var.get():
+            chk_dark.state(["disabled"])
+        self._options_dark_chk = chk_dark
+
+        ttk.Button(inner, text="Close", command=dlg.destroy).pack(anchor="e", pady=(14, 0))
+        self._options_dlg = dlg
+
+        # Anchored near the Options button itself (top-right of the toolbar)
+        # rather than left to Tk's default placement, which isn't consistent
+        # enough to rely on for a small dialog like this.
+        dlg.update_idletasks()
+        x = self._options_btn.winfo_rootx() - dlg.winfo_reqwidth() + self._options_btn.winfo_width()
+        y = self._options_btn.winfo_rooty() + self._options_btn.winfo_height() + 4
+        dlg.geometry(f"+{x}+{y}")
 
     # ---------- UI layout ----------
     def _build_ui(self):
@@ -3318,20 +3365,20 @@ class App(tk.Tk):
         ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Player Type Fit...", command=self.on_open_player_type_fit).pack(side="left", padx=(8, 0))
 
-        # Packed before the status label (both docking to the right) so they
-        # always claim their space regardless of how long the status text
-        # gets - previously a long "Loaded: ..." string could push these
-        # entirely off the visible window.
-        self.chk_dark_mode = ttk.Checkbutton(
-            top, text="Dark Mode", variable=self.dark_mode_var, command=self.on_toggle_dark_mode
-        )
-        self.chk_dark_mode.pack(side="right", padx=(8, 0))
-        if not self.facelift_var.get():
-            self.chk_dark_mode.state(["disabled"])
-
-        ttk.Checkbutton(
-            top, text="Modern UI", variable=self.facelift_var, command=self.on_toggle_facelift
-        ).pack(side="right", padx=(8, 0))
+        # Packed before the status label (both docking to the right) so it
+        # always claims its space regardless of how long the status text
+        # gets - previously a long "Loaded: ..." string could push this
+        # entirely off the visible window. Modern UI/Dark Mode live under one
+        # "Options" dropdown here rather than as two separate checkbuttons -
+        # that pair was what overflowed the toolbar at the app's default
+        # width. The dropdown is a small custom popup built from the same
+        # ttk.Checkbutton widgets used everywhere else, NOT a native tk.Menu -
+        # Windows renders tk.Menu via the OS menu system, which ignores Tk's
+        # color options entirely, so a real dropdown menu here would always
+        # look like a plain light Windows menu regardless of Dark Mode.
+        self._options_btn = ttk.Button(top, text="Options...", command=self._open_options_dialog)
+        self._options_btn.pack(side="right", padx=(8, 0))
+        ttk.Separator(top, orient="vertical").pack(side="right", fill="y", padx=12)
 
         self.lbl_status = ttk.Label(top, text="Load play.csv to begin.", style="Status.TLabel", width=40, anchor="w")
         self.lbl_status.pack(side="left", fill="x", expand=True, padx=14)
