@@ -2763,7 +2763,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
         table_frm = ttk.Frame(self)
-        table_frm.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        table_frm.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         cols = ("name", "team", "pos", "ovr", "fit")
         headers = {"name": ("Player", 200), "team": ("Team", 160), "pos": ("Pos", 60), "ovr": ("OVR", 60), "fit": ("Fit %", 70)}
         self.tree = ttk.Treeview(table_frm, columns=cols, show="headings")
@@ -2775,6 +2775,10 @@ class PlayerTypeFitDialog(tk.Toplevel):
         self.tree.configure(yscrollcommand=yscroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
         yscroll.pack(side="right", fill="y")
+
+        btn_frm = ttk.Frame(self)
+        btn_frm.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn_frm, text="Close", command=self.destroy).pack(side="right")
 
         self._sort_state = {}
         self._refresh()
