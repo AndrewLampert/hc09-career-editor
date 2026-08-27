@@ -151,6 +151,23 @@ DB_TABLE_FILES = {
     "TEAM": "team.csv",
     "cINF": "cinf.csv",
 }
+# (table code, CSVModel rows attr, headers attr, path attr) - drives
+# load_all_from_db/save_to_db/_finish_load's per-table wiring below, so
+# adding a table only means adding one row here instead of touching all
+# three functions by hand (a table added to DB_TABLE_FILES but missed in
+# one of those three used to fail silently - see load_all_from_db).
+DB_TABLE_ATTRS = [
+    ("PLAY", "players", "player_headers", "play_path"),
+    ("DRPK", "picks", "pick_headers", "drpk_path"),
+    ("SLRI", "salaries", "salary_headers", "slri_path"),
+    ("TRVW", "trainers", "trainer_headers", "trainer_path"),
+    ("COCH", "coaches", "coach_headers", "coach_path"),
+    ("GMVW", "gms", "gm_headers", "gm_path"),
+    ("GMSK", "gmsk", "gmsk_headers", "gmsk_path"),
+    ("CSKL", "cskl", "cskl_headers", "cskl_path"),
+    ("TEAM", "team", "team_headers", "team_path"),
+    ("cINF", "cinf", "cinf_headers", "cinf_path"),
+]
 
 # cINF (1 row, global/save-level state) has a SEYR field ("Season Year" per
 # the reference spreadsheet). DISPROVEN as a live "current season" indicator:
@@ -175,6 +192,7 @@ CINF_SEASON_YEAR_OFFSET = 1753  # UNRELIABLE - do not use for a "current year" d
 # (confirmed: 11600 - 4953 = 6647, matching the displayed "$66.47M" exactly).
 TEAM_SALARY_CAP_FIELD = "TMSA"
 TEAM_SALARY_CAP_UNIT = 10000  # 1 TMSA unit = $10,000
+TEAM_SALARY_CAP_MAX_VALUE = 524287  # TMSA is a 19-bit field (2^19 - 1), confirmed via bridge.js fields
 
 def format_cap_dollars(raw_units):
     """Format a raw PSA/PSB/TMSA-style unit value (1 unit = $10,000) as a
@@ -364,6 +382,12 @@ PLAYER_CONTRACT_COLS = [f"PSA{i}" for i in range(7)]
 PLAYER_BONUS_COLS = [f"PSB{i}" for i in range(7)]
 PLAYER_SALARY_MAX_VALUE = 16383
 PLAYER_BONUS_MAX_VALUE = 8191
+# PCSA/PTSA/PVSB are derived (summed) fields, not directly entered - their own
+# bit-widths (14/16/14, confirmed via bridge.js fields) are each narrower than
+# what per-field-valid PSA/PSB sums can add up to, so they need their own clamp.
+PLAYER_PCSA_MAX_VALUE = 16383
+PLAYER_PTSA_MAX_VALUE = 65535
+PLAYER_PVSB_MAX_VALUE = 16383
 STAFF_SKPT_MAX_VALUE = 131071
 AGE_COL = "PAGE"
 YEARS_COL = "PYRP"
@@ -1007,16 +1031,8 @@ class CSVModel:
         self.db_path = db_path
         self._load_tmp_dir = tmp_dir
 
-        self.play_path = os.path.join(tmp_dir, DB_TABLE_FILES["PLAY"])
-        self.drpk_path = os.path.join(tmp_dir, DB_TABLE_FILES["DRPK"])
-        self.slri_path = os.path.join(tmp_dir, DB_TABLE_FILES["SLRI"])
-        self.trainer_path = os.path.join(tmp_dir, DB_TABLE_FILES["TRVW"])
-        self.coach_path = os.path.join(tmp_dir, DB_TABLE_FILES["COCH"])
-        self.gm_path = os.path.join(tmp_dir, DB_TABLE_FILES["GMVW"])
-        self.gmsk_path = os.path.join(tmp_dir, DB_TABLE_FILES["GMSK"])
-        self.cskl_path = os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"])
-        self.team_path = os.path.join(tmp_dir, DB_TABLE_FILES["TEAM"])
-        self.cinf_path = os.path.join(tmp_dir, DB_TABLE_FILES["cINF"])
+        for code, _rows_attr, _headers_attr, path_attr in DB_TABLE_ATTRS:
+            setattr(self, path_attr, os.path.join(tmp_dir, DB_TABLE_FILES[code]))
 
         self._finish_load()
 
@@ -1027,25 +1043,10 @@ class CSVModel:
 
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_save_")
 
-        self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["PLAY"]), self.players, self.player_headers)
-        if self.picks:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["DRPK"]), self.picks, self.pick_headers)
-        if self.salaries:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["SLRI"]), self.salaries, self.salary_headers)
-        if self.trainers:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["TRVW"]), self.trainers, self.trainer_headers)
-        if self.coaches:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["COCH"]), self.coaches, self.coach_headers)
-        if self.gms:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["GMVW"]), self.gms, self.gm_headers)
-        if self.gmsk:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["GMSK"]), self.gmsk, self.gmsk_headers)
-        if self.cskl:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["CSKL"]), self.cskl, self.cskl_headers)
-        if self.team:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["TEAM"]), self.team, self.team_headers)
-        if self.cinf:
-            self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES["cINF"]), self.cinf, self.cinf_headers)
+        for code, rows_attr, headers_attr, _path_attr in DB_TABLE_ATTRS:
+            rows = getattr(self, rows_attr)
+            if rows:
+                self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES[code]), rows, getattr(self, headers_attr))
 
         backup_path = self.db_path + ".bak"
         shutil.copy2(self.db_path, backup_path)
@@ -1118,16 +1119,11 @@ class CSVModel:
         self._finish_load()
 
     def _finish_load(self):
-        self.players, self.player_headers = self.load_csv(self.play_path)
-        self.picks, self.pick_headers = self.load_csv(self.drpk_path) if self.drpk_path else ([], [])
-        self.salaries, self.salary_headers = self.load_csv(self.slri_path) if self.slri_path else ([], [])
-        self.trainers, self.trainer_headers = self.load_csv(self.trainer_path) if self.trainer_path else ([], [])
-        self.coaches, self.coach_headers = self.load_csv(self.coach_path) if self.coach_path else ([], [])
-        self.gms, self.gm_headers = self.load_csv(self.gm_path) if self.gm_path else ([], [])
-        self.gmsk, self.gmsk_headers = self.load_csv(self.gmsk_path) if self.gmsk_path else ([], [])
-        self.cskl, self.cskl_headers = self.load_csv(self.cskl_path) if self.cskl_path else ([], [])
-        self.team, self.team_headers = self.load_csv(self.team_path) if self.team_path else ([], [])
-        self.cinf, self.cinf_headers = self.load_csv(self.cinf_path) if self.cinf_path else ([], [])
+        for _code, rows_attr, headers_attr, path_attr in DB_TABLE_ATTRS:
+            path = getattr(self, path_attr, "")
+            rows, headers = self.load_csv(path) if path else ([], [])
+            setattr(self, rows_attr, rows)
+            setattr(self, headers_attr, headers)
 
         if not self.players:
             raise ValueError("play.csv loaded 0 players/rows.")
@@ -1167,9 +1163,12 @@ class CSVModel:
         return (row.get(self.team_col, "") or "").strip()
 
     def set_player_team_id(self, row, tid):
+        """Returns False (no-op) if the team column wasn't detected for this
+        save - callers should check this before assuming the move happened."""
         if not self.team_col:
-            return
+            return False
         row[self.team_col] = str(tid)
+        return True
 
     def _rows_by_position(self, table_rows, pnid):
         """Return {position_bucket: row} for a PPGR-linked table (GMSK or CSKL),
@@ -1179,14 +1178,27 @@ class CSVModel:
         different physical orders despite using the same PPGR scheme)."""
         if not pnid:
             return {}
-        result = {}
-        for r in table_rows:
-            if (r.get("PNid", "") or "").strip() != str(pnid):
-                continue
-            bucket = PPGR_TO_POSITION.get((r.get("PPGR", "") or "").strip())
-            if bucket:
-                result[bucket] = r
-        return result
+        # Memoized by table identity (self.gmsk/self.cskl) so repeated calls -
+        # one per coach/GM row rendered, over a league-wide 300+ row table -
+        # don't each re-scan the whole table linearly. Naturally invalidated
+        # when _finish_load reassigns a fresh list: that's a new id(), so the
+        # old cache entry is simply never looked up again.
+        cache = getattr(self, "_pos_index_cache", None)
+        if cache is None:
+            cache = self._pos_index_cache = {}
+        key = id(table_rows)
+        index = cache.get(key)
+        if index is None:
+            index = {}
+            for r in table_rows:
+                row_pnid = (r.get("PNid", "") or "").strip()
+                if not row_pnid:
+                    continue
+                bucket = PPGR_TO_POSITION.get((r.get("PPGR", "") or "").strip())
+                if bucket:
+                    index.setdefault(row_pnid, {})[bucket] = r
+            cache[key] = index
+        return index.get(str(pnid), {})
 
     def get_gm_potential_eval_rows(self, pnid):
         """Return {bucket: GMSK row} for this GM's Potential Evaluation + Rookie
@@ -1223,7 +1235,7 @@ class CSVModel:
         if row is None:
             return False
         cur = safe_int(row.get(TEAM_SALARY_CAP_FIELD, "0")) or 0
-        row[TEAM_SALARY_CAP_FIELD] = str(max(0, cur + delta_units))
+        row[TEAM_SALARY_CAP_FIELD] = str(max(0, min(TEAM_SALARY_CAP_MAX_VALUE, cur + delta_units)))
         return True
 
     def get_current_season_year(self):
@@ -2026,12 +2038,22 @@ class SignFreeAgentDialog(tk.Toplevel):
             total_bonus = sum(int(row.get(c, "0") or "0") for c in PLAYER_BONUS_COLS)
             year1_cap_hit = salaries[0] + bonuses[0]
 
-            self.model.set_player_team_id(row, dest_tid)
+            team_moved = self.model.set_player_team_id(row, dest_tid)
+            if not team_moved:
+                messagebox.showwarning(
+                    "Team not changed",
+                    f"{self.model.player_name(row)}'s contract was updated, but the team column "
+                    "wasn't detected for this save, so they weren't actually moved to the new team."
+                )
             row["PCON"] = str(years)
             row["PCYL"] = str(years)
-            row["PCSA"] = str(year1_cap_hit)
-            row["PTSA"] = str(total_salary + total_bonus)
-            row["PVSB"] = str(total_bonus)
+            # PCSA/PTSA/PVSB are sums of already-validated per-year values, but
+            # their own fields are narrower than what those sums can reach -
+            # clamp to each field's real max instead of letting it silently
+            # overflow/wrap on write (see PLAYER_PCSA_MAX_VALUE etc. above).
+            row["PCSA"] = str(min(year1_cap_hit, PLAYER_PCSA_MAX_VALUE))
+            row["PTSA"] = str(min(total_salary + total_bonus, PLAYER_PTSA_MAX_VALUE))
+            row["PVSB"] = str(min(total_bonus, PLAYER_PVSB_MAX_VALUE))
             row["PPTI"] = str(src_tid)
             total_cap_hit += year1_cap_hit
 
@@ -5147,7 +5169,10 @@ class App(tk.Tk):
         except Exception:
             return
         # find SKPT value from model if present
-        row = self.model.trainers[idx]
+        try:
+            row = self.model.trainers[idx]
+        except IndexError:
+            return  # stale selection from before a reload shrank the list
         sk = row.get("SKPT") if row is not None else None
         self.ent_trainer_skpt.delete(0, tk.END)
         if sk is not None:
@@ -5410,7 +5435,10 @@ class App(tk.Tk):
             idx = int(iid)
         except Exception:
             return
-        row = self.model.coaches[idx]
+        try:
+            row = self.model.coaches[idx]
+        except IndexError:
+            return  # stale selection from before a reload shrank the list
         sk = row.get("SKPT") if row is not None else None
         self.ent_coach_skpt.delete(0, tk.END)
         if sk is not None:

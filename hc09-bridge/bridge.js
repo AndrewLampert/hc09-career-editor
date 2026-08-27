@@ -230,11 +230,30 @@ async function cmdImport(args) {
         let updatedFields = 0;
         const warnings = [];
 
+        // Rows are matched to records by pure position (see cmdImport's own
+        // docs) - if this table has an identity-looking column (PGID, PNid,
+        // TGID, etc.), catch the common case of a reordered/resorted CSV by
+        // comparing its value against what's already stored at that position
+        // BEFORE any fields get overwritten.
+        const idColIdx = headers.findIndex((h) => /id$/i.test(h));
+
         dataRows.forEach((rowValues, rowIdx) => {
             const record = records[rowIdx];
             if (!record) {
                 warnings.push(`row ${rowIdx}: no matching record in table (table has ${records.length} records)`);
                 return;
+            }
+
+            if (idColIdx !== -1) {
+                const idColName = headers[idColIdx];
+                const idField = record.fields[idColName];
+                if (idField && String(idField.value) !== String(rowValues[idColIdx])) {
+                    warnings.push(
+                        `row ${rowIdx}: ${idColName} in the CSV (${rowValues[idColIdx]}) doesn't match the record ` +
+                        `currently at that position (${idField.value}) - this row's edits may be landing on the ` +
+                        `wrong record if the CSV was reordered before importing`
+                    );
+                }
             }
 
             headers.forEach((colName, colIdx) => {
@@ -252,6 +271,11 @@ async function cmdImport(args) {
                     const n = Number(csvValue);
                     if (Number.isNaN(n)) {
                         warnings.push(`row ${rowIdx} col ${colName}: '${csvValue}' is not numeric, skipped`);
+                        return;
+                    }
+                    const maxValue = field.definition && field.definition.maxValue;
+                    if (typeof maxValue === 'number' && (n < 0 || n > maxValue)) {
+                        warnings.push(`row ${rowIdx} col ${colName}: ${n} is out of range (0-${maxValue} for this field), skipped`);
                         return;
                     }
                     newValue = n;
