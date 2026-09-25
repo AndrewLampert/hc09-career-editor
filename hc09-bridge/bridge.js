@@ -408,6 +408,43 @@ async function cmdPortraitList(args) {
     console.log(JSON.stringify({ shortIds }));
 }
 
+// ---------- Game-shipped DB extraction (qkl_boot.ast) ----------
+// qkl_boot.ast's top-level entry 46 is a full EA DB file (716 tables, a
+// superset of the save's). Extracts that entry to a temp file, opens it with
+// the normal DB helper, and writes the requested table to --out as CSV.
+async function cmdShippedTableExport(args) {
+    const astPath = args.ast;
+    const topIndex = parseInt(args['top-index'], 10);
+    const tableName = args.table;
+    const outPath = args.out;
+
+    const raw = await extractEntry(astPath, topIndex);
+    const tmpPath = path.join(require('os').tmpdir(), `hc09_shipped_db_${process.pid}.db`);
+    fs.writeFileSync(tmpPath, raw);
+    try {
+        const helper = await openDb(tmpPath);
+        if (!helper.file.tables.some((t) => t.name === tableName)) {
+            throw new Error(`table ${tableName} not found in entry ${topIndex}`);
+        }
+        const table = helper.file[tableName];
+        await table.readRecords();
+        const headers = table.fieldDefinitions.map((f) => f.name);
+        const rows = table.records.map((record) => {
+            const obj = {};
+            for (const h of headers) {
+                const field = record.fields[h];
+                obj[h] = field ? field.value : '';
+            }
+            return obj;
+        });
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        writeCsv(outPath, headers, rows);
+        console.log(JSON.stringify({ table: tableName, records: rows.length, out: outPath }));
+    } finally {
+        try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
+    }
+}
+
 function parseArgs(argv) {
     const args = {};
     for (let i = 0; i < argv.length; i++) {
@@ -445,6 +482,8 @@ async function main() {
             await cmdPortraitLookup(args);
         } else if (cmd === 'portrait-list') {
             await cmdPortraitList(args);
+        } else if (cmd === 'shipped-table-export') {
+            await cmdShippedTableExport(args);
         } else {
             console.error('Usage:');
             console.error('  node bridge.js inspect --db <path>');
@@ -454,6 +493,7 @@ async function main() {
             console.error('  node bridge.js portrait-extract-archive --ast <path> --top-index <N> --out <path>');
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             console.error('  node bridge.js portrait-list --archive <path>');
+            console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> --top-index <N> --table <NAME> --out <csv>');
             process.exit(1);
         }
     } catch (err) {
