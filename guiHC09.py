@@ -844,6 +844,11 @@ def safe_int(s):
 # assignment.
 # -----------------------------
 PLYT_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "gamedata", "PLYT_player_types.csv")
+# Where the app writes PLYT when it extracts it from the user's own game files
+# (qkl_boot.ast); checked after PLYT_DATA_PATH so a hand-placed file still wins.
+PLYT_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "PLYT_player_types.csv")
+BOOT_AST_FILENAME = "qkl_boot.ast"
+BOOT_DB_TOP_INDEX = 46
 
 # PTId // 10 groups the 37 archetypes into 9 position groups; verified
 # against the archetype names themselves (e.g. ids 10-14 are all "... Back").
@@ -863,11 +868,15 @@ PLAYER_TYPE_GROUP_TO_PPOS = {
 }
 
 def load_player_types():
-    try:
-        with open(PLYT_DATA_PATH, newline="", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
-    except Exception:
-        return [], []
+    rows = []
+    for path in (PLYT_DATA_PATH, PLYT_CACHE_PATH):
+        try:
+            with open(path, newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        except Exception:
+            continue
+        if rows:
+            break
     if not rows:
         return [], []
 
@@ -2748,8 +2757,8 @@ class PlayerTypeFitDialog(tk.Toplevel):
         if not PLAYER_TYPES:
             ttk.Label(
                 self, foreground="gray", wraplength=420, justify="left",
-                text="docs/gamedata/PLYT_player_types.csv not found next to guiHC09.py - "
-                     "this feature needs the extracted player-type data.",
+                text="Player-type data isn't available. This feature needs the archetype data "
+                     "from your own game files (qkl_boot.ast) - reopen Player Type Fit to locate it.",
             ).pack(anchor="w", padx=12, pady=12)
             ttk.Button(self, text="Close", command=self.destroy).pack(anchor="e", padx=12, pady=(0, 12))
             return
@@ -4912,7 +4921,62 @@ class App(tk.Tk):
         if not self.model.players:
             messagebox.showinfo("No data", "Load a save first.")
             return
+        if not PLAYER_TYPES and not self._extract_player_types_from_game():
+            return
         PlayerTypeFitDialog(self, self.model)
+
+    def _find_boot_ast(self):
+        saved = self.ui_prefs.get("boot_ast_path") or ""
+        if saved and os.path.isfile(saved):
+            return saved
+        fe2ig = self.get_game_ast_path()
+        if fe2ig:
+            sibling = os.path.join(os.path.dirname(fe2ig), BOOT_AST_FILENAME)
+            if os.path.isfile(sibling):
+                return sibling
+        messagebox.showinfo(
+            "Player Type Fit needs game data",
+            "This feature reads the game's player archetypes straight from your own game files.\n\n"
+            f"Next, locate {BOOT_AST_FILENAME} (inside the game's PS3_GAME/USRDIR folder). "
+            "This is only needed once.",
+        )
+        path = filedialog.askopenfilename(
+            title=f"Locate {BOOT_AST_FILENAME} (inside the game's PS3_GAME/USRDIR folder)",
+            filetypes=[("AST archive", BOOT_AST_FILENAME), ("All files", "*.*")],
+        )
+        return path or ""
+
+    def _extract_player_types_from_game(self):
+        """Pull the PLYT table out of the user's own qkl_boot.ast into a local
+        cache and load it. Returns True if player types are now available."""
+        global PLAYER_TYPES, PLAYER_TYPE_FIT_FIELDS
+        boot_ast = self._find_boot_ast()
+        if not boot_ast:
+            return False
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            self.model.run_bridge([
+                "shipped-table-export", "--ast", boot_ast,
+                "--top-index", str(BOOT_DB_TOP_INDEX), "--table", "PLYT",
+                "--out", PLYT_CACHE_PATH,
+            ])
+        except Exception as e:
+            messagebox.showerror("Couldn't read game data", str(e))
+            return False
+        finally:
+            self.config(cursor="")
+        PLAYER_TYPES, PLAYER_TYPE_FIT_FIELDS = load_player_types()
+        if not PLAYER_TYPES:
+            messagebox.showerror(
+                "Couldn't read game data",
+                f"Extracted the table from {os.path.basename(boot_ast)} but it contained no usable player types. "
+                "Make sure this is the NFL Head Coach 09 qkl_boot.ast.",
+            )
+            return False
+        self.ui_prefs["boot_ast_path"] = boot_ast
+        save_ui_prefs(self.ui_prefs)
+        return True
 
     def on_open_assign_portrait_dialog(self):
         if self.selected_player_index is None:

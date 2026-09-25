@@ -28,3 +28,6 @@ test-data/
 # tables etc, see load_player_types()) - proprietary game data, never repo
 # content, kept local-only like the portrait cache above
 docs/gamedata/
+
+# PLYT etc. extracted at runtime from the user's own game files - proprietary, local-only
+.hc09_gamedata_cache/
