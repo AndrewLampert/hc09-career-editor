@@ -343,7 +343,17 @@ function readToc(source) {
     return new Promise((resolve, reject) => {
         const parser = new ASTParser();
         parser.extract = false;
-        parser.on('toc', (tocs) => resolve(tocs));
+        let fileStream = null;
+        // The 'toc' event fires as soon as the parser has read the archive's
+        // table of contents, well before it has streamed the rest of the
+        // (possibly huge) file. Resolving here without tearing anything down
+        // would leave that read running in the background for no reason -
+        // destroy both ends once we have what we came for.
+        parser.on('toc', (tocs) => {
+            resolve(tocs);
+            parser.destroy();
+            if (fileStream) fileStream.destroy();
+        });
         parser.on('error', reject);
         if (Buffer.isBuffer(source)) {
             const s = new Readable();
@@ -352,7 +362,8 @@ function readToc(source) {
             s.push(null);
             s.pipe(parser);
         } else {
-            fs.createReadStream(source).pipe(parser);
+            fileStream = fs.createReadStream(source);
+            fileStream.pipe(parser);
         }
     });
 }
@@ -435,32 +446,32 @@ async function findShippedTableEntry(astPath, tableName) {
         let settled = false;
         let pending = Promise.resolve();
         let processedCount = 0;
-        const tmpFiles = [];
-
-        const cleanup = () => {
-            for (const f of tmpFiles) {
-                try { fs.unlinkSync(f); } catch (e) { /* best effort */ }
-            }
-        };
 
         const finish = (err, result) => {
             if (settled) return;
             settled = true;
-            cleanup();
             if (err) reject(err); else resolve(result);
             parser.destroy();
         };
 
+        // Each candidate entry gets written to its own temp file only long
+        // enough for openDb() to load it - deleted immediately afterward
+        // (win or lose) rather than accumulating every checked entry's bytes
+        // in the temp dir for the whole scan. Safe to delete right away:
+        // the DB helper reads everything it needs during load(), not lazily
+        // from disk when readRecords() is called later.
         const checkEntry = (index, rawBuf) => {
             const tmpPath = path.join(
                 require('os').tmpdir(),
                 `hc09_shipped_db_${process.pid}_${index}_${Math.random().toString(36).slice(2)}.db`,
             );
-            tmpFiles.push(tmpPath);
             fs.writeFileSync(tmpPath, rawBuf);
             return openDb(tmpPath)
                 .then((helper) => (helper.file.tables.some((t) => t.name === tableName) ? helper : null))
-                .catch(() => null);
+                .catch(() => null)
+                .finally(() => {
+                    try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
+                });
         };
 
         parser.on('compressed-file', ({ stream, toc }) => {
