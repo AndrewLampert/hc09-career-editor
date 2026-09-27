@@ -320,10 +320,22 @@ function extractEntry(source, index) {
     return new Promise((resolve, reject) => {
         const parser = new ASTParser();
         let resolved = false;
+        let fileStream = null;
+        // Resolving on a match without tearing anything down leaves the
+        // parser (and, for a file source, the underlying read) running in
+        // the background for the rest of the archive even though nothing is
+        // listening anymore - confirmed via direct measurement: on a 344MB
+        // archive, resolving after reading just the first ~8% still went on
+        // to read the other ~92% afterward. That's wasted on every call,
+        // and worst on the ~2GB portrait archive this also extracts from.
         parser.on('compressed-file', ({ stream, toc }) => {
             if (toc.index !== index) { stream.resume(); return; }
             resolved = true;
-            bufferFromReadable(stream).then(resolve, reject);
+            bufferFromReadable(stream).then((buf) => {
+                resolve(buf);
+                parser.destroy();
+                if (fileStream) fileStream.destroy();
+            }, reject);
         });
         parser.on('error', reject);
         parser.on('end', () => { if (!resolved) reject(new Error(`entry index ${index} not found`)); });
@@ -334,7 +346,8 @@ function extractEntry(source, index) {
             s.push(null);
             s.pipe(parser);
         } else {
-            fs.createReadStream(source).pipe(parser);
+            fileStream = fs.createReadStream(source);
+            fileStream.pipe(parser);
         }
     });
 }
@@ -343,7 +356,17 @@ function readToc(source) {
     return new Promise((resolve, reject) => {
         const parser = new ASTParser();
         parser.extract = false;
-        parser.on('toc', (tocs) => resolve(tocs));
+        let fileStream = null;
+        // The 'toc' event fires as soon as the parser has read the archive's
+        // table of contents, well before it has streamed the rest of the
+        // (possibly huge) file. Resolving here without tearing anything down
+        // would leave that read running in the background for no reason -
+        // destroy both ends once we have what we came for.
+        parser.on('toc', (tocs) => {
+            resolve(tocs);
+            parser.destroy();
+            if (fileStream) fileStream.destroy();
+        });
         parser.on('error', reject);
         if (Buffer.isBuffer(source)) {
             const s = new Readable();
@@ -352,7 +375,8 @@ function readToc(source) {
             s.push(null);
             s.pipe(parser);
         } else {
-            fs.createReadStream(source).pipe(parser);
+            fileStream = fs.createReadStream(source);
+            fileStream.pipe(parser);
         }
     });
 }
@@ -409,40 +433,139 @@ async function cmdPortraitList(args) {
 }
 
 // ---------- Game-shipped DB extraction (qkl_boot.ast) ----------
-// qkl_boot.ast's top-level entry 46 is a full EA DB file (716 tables, a
-// superset of the save's). Extracts that entry to a temp file, opens it with
-// the normal DB helper, and writes the requested table to --out as CSV.
+// On the PS3 release, qkl_boot.ast's top-level entry 46 is a full EA DB file
+// (716 tables, a superset of the save's). That index is PS3-specific -
+// other platforms/rips pack the archive's entries in a different order, so
+// entry 46 there can be something else entirely (confirmed: a Xbox 360 rip
+// throws "table PLYT not found in entry 46" - a valid DB was extracted, just
+// not the right one). Rather than trust a hardcoded index, this streams
+// through the whole archive ONCE, trying each entry in turn as a candidate
+// DB, and stops at the first one that both opens as a DB and actually
+// contains the requested table. --top-index, if given, is tried first as a
+// shortcut (fast path when it's already known to be correct) but is no
+// longer required.
+// Streams the AST once, testing each top-level entry against tableName.
+// Returns { index, helper } for the first hit. Completion is driven by
+// having processed every entry the TOC says exists (fetched up front via a
+// separate, cheap readToc pass) rather than the parser's own 'end' event -
+// in practice that event doesn't reliably fire once the very last entry has
+// been streamed, which would otherwise leave this hanging forever on a
+// genuine not-found case instead of failing with a clear error.
+async function findShippedTableEntry(astPath, tableName) {
+    const totalEntries = (await readToc(astPath)).length;
+
+    return new Promise((resolve, reject) => {
+        const parser = new ASTParser();
+        let settled = false;
+        let pending = Promise.resolve();
+        let processedCount = 0;
+
+        const finish = (err, result) => {
+            if (settled) return;
+            settled = true;
+            if (err) reject(err); else resolve(result);
+            parser.destroy();
+        };
+
+        // Each candidate entry gets written to its own temp file only long
+        // enough for openDb() to load it - deleted immediately afterward
+        // (win or lose) rather than accumulating every checked entry's bytes
+        // in the temp dir for the whole scan. Safe to delete right away:
+        // the DB helper reads everything it needs during load(), not lazily
+        // from disk when readRecords() is called later.
+        const checkEntry = (index, rawBuf) => {
+            const tmpPath = path.join(
+                require('os').tmpdir(),
+                `hc09_shipped_db_${process.pid}_${index}_${Math.random().toString(36).slice(2)}.db`,
+            );
+            fs.writeFileSync(tmpPath, rawBuf);
+            return openDb(tmpPath)
+                .then((helper) => (helper.file.tables.some((t) => t.name === tableName) ? helper : null))
+                .catch(() => null)
+                .finally(() => {
+                    try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
+                });
+        };
+
+        parser.on('compressed-file', ({ stream, toc }) => {
+            if (settled) { stream.resume(); return; }
+            const index = toc.index;
+            pending = pending.then(async () => {
+                if (settled) { stream.resume(); return; }
+                const rawBuf = await bufferFromReadable(stream);
+                if (settled) return;
+                const helper = await checkEntry(index, rawBuf);
+                processedCount++;
+                if (helper) {
+                    finish(null, { index, helper });
+                } else if (processedCount >= totalEntries) {
+                    finish(new Error(`table ${tableName} not found in any of ${totalEntries} entries of ${path.basename(astPath)}`));
+                }
+            }).catch((e) => finish(e));
+        });
+        parser.on('error', (e) => finish(e));
+        parser.on('end', () => {
+            // Usually redundant with the processedCount check above, but kept
+            // as a safety net in case totalEntries and the live entry count
+            // ever disagree (e.g. a differently-structured archive).
+            pending.finally(() => {
+                if (!settled) {
+                    finish(new Error(`table ${tableName} not found in any entry of ${path.basename(astPath)}`));
+                }
+            });
+        });
+
+        fs.createReadStream(astPath).pipe(parser);
+    });
+}
+
 async function cmdShippedTableExport(args) {
     const astPath = args.ast;
-    const topIndex = parseInt(args['top-index'], 10);
+    const preferredIndex = args['top-index'] !== undefined ? parseInt(args['top-index'], 10) : undefined;
     const tableName = args.table;
     const outPath = args.out;
 
-    const raw = await extractEntry(astPath, topIndex);
-    const tmpPath = path.join(require('os').tmpdir(), `hc09_shipped_db_${process.pid}.db`);
-    fs.writeFileSync(tmpPath, raw);
-    try {
-        const helper = await openDb(tmpPath);
-        if (!helper.file.tables.some((t) => t.name === tableName)) {
-            throw new Error(`table ${tableName} not found in entry ${topIndex}`);
-        }
-        const table = helper.file[tableName];
-        await table.readRecords();
-        const headers = table.fieldDefinitions.map((f) => f.name);
-        const rows = table.records.map((record) => {
-            const obj = {};
-            for (const h of headers) {
-                const field = record.fields[h];
-                obj[h] = field ? field.value : '';
+    // Fast path: if the caller already knows the right index (e.g. the PS3
+    // default of 46, or one remembered from a previous run on this install),
+    // try it directly first without a full scan.
+    let index = preferredIndex;
+    let helper;
+    if (preferredIndex !== undefined) {
+        try {
+            const raw = await extractEntry(astPath, preferredIndex);
+            const tmpPath = path.join(require('os').tmpdir(), `hc09_shipped_db_${process.pid}_fast.db`);
+            fs.writeFileSync(tmpPath, raw);
+            try {
+                const h = await openDb(tmpPath);
+                if (h.file.tables.some((t) => t.name === tableName)) helper = h;
+            } finally {
+                try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
             }
-            return obj;
-        });
-        fs.mkdirSync(path.dirname(outPath), { recursive: true });
-        writeCsv(outPath, headers, rows);
-        console.log(JSON.stringify({ table: tableName, records: rows.length, out: outPath }));
-    } finally {
-        try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
+        } catch (e) {
+            // fall through to full scan below
+        }
     }
+
+    if (!helper) {
+        const found = await findShippedTableEntry(astPath, tableName);
+        index = found.index;
+        helper = found.helper;
+    }
+
+    const table = helper.file[tableName];
+    await table.readRecords();
+    const headers = table.fieldDefinitions.map((f) => f.name);
+    const rows = table.records.map((record) => {
+        const obj = {};
+        for (const h of headers) {
+            const field = record.fields[h];
+            obj[h] = field ? field.value : '';
+        }
+        return obj;
+    });
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    writeCsv(outPath, headers, rows);
+    console.log(JSON.stringify({ table: tableName, records: rows.length, out: outPath, entryIndex: index }));
 }
 
 function parseArgs(argv) {
@@ -493,7 +616,7 @@ async function main() {
             console.error('  node bridge.js portrait-extract-archive --ast <path> --top-index <N> --out <path>');
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             console.error('  node bridge.js portrait-list --archive <path>');
-            console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> --top-index <N> --table <NAME> --out <csv>');
+            console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> [--top-index <N>] --table <NAME> --out <csv>');
             process.exit(1);
         }
     } catch (err) {
