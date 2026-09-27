@@ -1007,7 +1007,6 @@ class CSVModel:
         self.csv_formats = {}
 
         self.db_path = ""       # path to the .db / USR-DATA save file
-        self._load_tmp_dir = "" # temp dir holding the CSVs exported from db_path
 
     # ---------- Bridge (node bridge.js) ----------
     def run_bridge(self, args):
@@ -1035,15 +1034,21 @@ class CSVModel:
             raise ValueError("Select a valid .db / USR-DATA save file.")
 
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_load_")
-        self.run_bridge(["export", "--db", db_path, "--out", tmp_dir])
+        try:
+            self.run_bridge(["export", "--db", db_path, "--out", tmp_dir])
 
-        self.db_path = db_path
-        self._load_tmp_dir = tmp_dir
+            self.db_path = db_path
 
-        for code, _rows_attr, _headers_attr, path_attr in DB_TABLE_ATTRS:
-            setattr(self, path_attr, os.path.join(tmp_dir, DB_TABLE_FILES[code]))
+            for code, _rows_attr, _headers_attr, path_attr in DB_TABLE_ATTRS:
+                setattr(self, path_attr, os.path.join(tmp_dir, DB_TABLE_FILES[code]))
 
-        self._finish_load()
+            self._finish_load()
+        finally:
+            # _finish_load() reads every CSV into memory before returning, so
+            # nothing downstream ever touches this directory again - clean it
+            # up now (rather than never, as before) regardless of whether the
+            # load succeeded.
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def save_to_db(self):
         """Write current in-memory tables straight back into the .db save file."""
@@ -1051,20 +1056,20 @@ class CSVModel:
             raise ValueError("No save file loaded.")
 
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_save_")
+        try:
+            for code, rows_attr, headers_attr, _path_attr in DB_TABLE_ATTRS:
+                rows = getattr(self, rows_attr)
+                if rows:
+                    self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES[code]), rows, getattr(self, headers_attr))
 
-        for code, rows_attr, headers_attr, _path_attr in DB_TABLE_ATTRS:
-            rows = getattr(self, rows_attr)
-            if rows:
-                self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES[code]), rows, getattr(self, headers_attr))
+            backup_path = self.db_path + ".bak"
+            shutil.copy2(self.db_path, backup_path)
 
-        backup_path = self.db_path + ".bak"
-        shutil.copy2(self.db_path, backup_path)
-
-        # No --out: save in place. (Passing --out equal to --db would hit a
-        # clone-to-self race in HC09Helper.save() and corrupt the file.)
-        self.run_bridge(["import", "--db", self.db_path, "--in", tmp_dir])
-
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+            # No --out: save in place. (Passing --out equal to --db would hit a
+            # clone-to-self race in HC09Helper.save() and corrupt the file.)
+            self.run_bridge(["import", "--db", self.db_path, "--in", tmp_dir])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         return backup_path
 
     def _write_csv(self, path, rows, headers):
