@@ -734,13 +734,14 @@ for _cat, (_cur, _mx, _catname) in COACH_DEV_CATEGORIES.items():
 del _cat, _cur, _mx, _catname, _b
 
 # COPS = which staff "slot" a coach fills on their team (Head Coach, Offensive
-# Coordinator, etc.) - NOT yet independently in-game verified, just sourced
-# from a community report (Discord: NFL Head Coach modding server) matching
-# the order these appear under the in-game Develop Staff screen, except DBC
-# and DLC which are swapped from that on-screen order. Display-only for now -
-# not wired into the double-click editor, since swapping a coach's COPS value
-# hasn't been confirmed safe/meaningful the way the app's other editable
-# fields have.
+# Coordinator, etc.). Sourced from a community report (Discord: NFL Head Coach
+# modding server) matching the order these appear under the in-game Develop
+# Staff screen, except DBC and DLC which are swapped from that on-screen
+# order; the same report confirmed in-game that swapping a coach's position
+# (e.g. HC <-> LBC) via this field works. Edited via the double-click dropdown
+# in the Coach tab (see is_cops_column in _on_tree_double_click), not the
+# generic numeric entry box, since it's a fixed set of labeled codes rather
+# than an arbitrary integer.
 COACH_POSITION_LABELS = {
     "0": "HC", "1": "OC", "2": "DC", "3": "STC", "4": "QBC", "5": "RBC",
     "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
@@ -5726,16 +5727,51 @@ class App(tk.Tk):
         is_pe_column = tree is self.tree_gm and parse_pe_column(colname) is not None
         is_rs_column = tree is self.tree_gm and parse_rs_column(colname) is not None
         is_dev_column = tree is self.tree_coach and parse_dev_column(colname) is not None
+        is_cops_column = tree is self.tree_coach and colname == "COPS"
         # Allow editing any known staff numeric column (SKPT, coach 1-7 fields, GM/trainer skill pairs)
         # or a GM Potential Evaluation/Rookie Scouting or Coach Development column (each lives in a
-        # different table, handled specially below).
-        if not is_pe_column and not is_rs_column and not is_dev_column and colname not in STAFF_NUMERIC_FIELDS:
+        # different table, handled specially below), or the Coach Position column (also special-cased:
+        # it's a small fixed set of codes, edited via dropdown rather than a free-integer box).
+        if not is_pe_column and not is_rs_column and not is_dev_column and not is_cops_column and colname not in STAFF_NUMERIC_FIELDS:
             return
 
         bbox = tree.bbox(rowid, column=col)
         if not bbox:
             return
         x, y, w, h = bbox
+
+        if is_cops_column:
+            # Dropdown of position labels rather than a raw 0-10 number field -
+            # the tree displays the mapped label (e.g. "DC"), so editing should
+            # work in those same terms instead of requiring the user to know
+            # the underlying code.
+            try:
+                idx = int(rowid)
+            except Exception:
+                return
+            label_to_code = {v: k for k, v in COACH_POSITION_LABELS.items()}
+            combo = ttk.Combobox(tree, state="readonly", values=list(COACH_POSITION_LABELS.values()))
+            combo.place(x=x, y=y, width=w, height=h)
+            cur_code = (self.model.coaches[idx].get("COPS", "") or "").strip()
+            combo.set(COACH_POSITION_LABELS.get(cur_code, cur_code))
+            combo.focus_set()
+
+            def finish_cops(save: bool):
+                label = combo.get()
+                combo.destroy()
+                if not save:
+                    return
+                code = label_to_code.get(label)
+                if code is None:
+                    return
+                self.model.coaches[idx]["COPS"] = code
+                self.mark_dirty()
+                self.refresh_coach()
+
+            combo.bind("<<ComboboxSelected>>", lambda e: finish_cops(True))
+            combo.bind("<Escape>", lambda e: finish_cops(False))
+            combo.bind("<FocusOut>", lambda e: finish_cops(True))
+            return
 
         # Create entry overlay
         entry = ttk.Entry(tree)
