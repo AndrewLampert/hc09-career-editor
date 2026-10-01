@@ -713,6 +713,7 @@ STAFF_FIELD_LABELS = {
     "SKPX": "Play Call Max", "SKSM": "Strategy Max", "SKCM": "Chemistry Max",
     "POVS": "Overall",  # POVS also appears on GMVW/TRVW rows, not just COCH
     "SKPA": "Perf. Input A", "SKPF": "Perf. Input B",
+    "COPS": "Position",
     # GM_SCOUTING_FIELDS (CBMP, FBMP, etc.) intentionally have NO label here -
     # disproven as "Potential Evaluation" (see comment above), true purpose
     # unknown. Shown by raw field code via the STAFF_FIELD_LABELS.get(h, h)
@@ -731,6 +732,20 @@ for _cat, (_cur, _mx, _catname) in COACH_DEV_CATEGORIES.items():
         STAFF_FIELD_LABELS[f"DV_{_cat}_{_b}_C"] = f"{_b} {_catname[:3]} Cur"
         STAFF_FIELD_LABELS[f"DV_{_cat}_{_b}_M"] = f"{_b} {_catname[:3]} Max"
 del _cat, _cur, _mx, _catname, _b
+
+# COPS = which staff "slot" a coach fills on their team (Head Coach, Offensive
+# Coordinator, etc.). Sourced from a community report (Discord: NFL Head Coach
+# modding server) matching the order these appear under the in-game Develop
+# Staff screen, except DBC and DLC which are swapped from that on-screen
+# order; the same report confirmed in-game that swapping a coach's position
+# (e.g. HC <-> LBC) via this field works. Edited via the double-click dropdown
+# in the Coach tab (see is_cops_column in _on_tree_double_click), not the
+# generic numeric entry box, since it's a fixed set of labeled codes rather
+# than an arbitrary integer.
+COACH_POSITION_LABELS = {
+    "0": "HC", "1": "OC", "2": "DC", "3": "STC", "4": "QBC", "5": "RBC",
+    "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
+}
 
 # -----------------------------
 # HARD-CODED MAX columns (matches YOUR header dump)
@@ -5215,7 +5230,7 @@ class App(tk.Tk):
 
         self.tree_trainer["columns"] = headers
         for h in headers:
-            self.tree_trainer.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
+            self.tree_trainer.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_staff_tree(self.tree_trainer, h))
             self.tree_trainer.column(h, width=110 if h in STAFF_FIELD_LABELS else 160, anchor="w", stretch=False)
 
         for idx, r in rows:
@@ -5428,7 +5443,7 @@ class App(tk.Tk):
         # (SKPC=Play Call, SKST=Strategy, SKCR=Team Chemistry all directly
         # editable; SKPA+SKPF feed Performance=MIN(SKPA,SKPF), not independently
         # meaningful). See the investigation log above COACH_MAXABLE_SKILL_FIELDS.
-        desired = ["TGID", "CFNM", "CLNM", "SKPT", "SKPC", "SKPX", "SKST", "SKSM", "SKCR", "SKCM", "SKPA", "SKPF", "POVS"]
+        desired = ["TGID", "CFNM", "CLNM", "COPS", "SKPT", "SKPC", "SKPX", "SKST", "SKSM", "SKCR", "SKCM", "SKPA", "SKPF", "POVS"]
         headers = [h for h in desired if h in (self.model.coach_headers or [])]
         if not headers:
             headers = self.model.coach_headers
@@ -5475,7 +5490,7 @@ class App(tk.Tk):
 
         self.tree_coach["columns"] = headers or []
         for h in headers or []:
-            self.tree_coach.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
+            self.tree_coach.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_staff_tree(self.tree_coach, h))
             self.tree_coach.column(h, width=90 if h in COACH_DEV_COLUMNS else 140, anchor="w", stretch=False)
 
         # Insert rows using original model indices as iids
@@ -5486,6 +5501,9 @@ class App(tk.Tk):
                 if h == "TGID":
                     tid = (r.get("TGID", "") or "").strip()
                     vals.append(f"{tid}: {TEAM_NAMES.get(tid, tid)}" if tid else "")
+                elif h == "COPS":
+                    cops = (r.get("COPS", "") or "").strip()
+                    vals.append(COACH_POSITION_LABELS.get(cops, cops))
                 elif h in COACH_DEV_COLUMNS:
                     cat, bucket, is_max = parse_dev_column(h)
                     cur_field, max_field, _name = COACH_DEV_CATEGORIES[cat]
@@ -5590,7 +5608,7 @@ class App(tk.Tk):
 
         self.tree_gm["columns"] = headers
         for h in headers:
-            self.tree_gm.heading(h, text=STAFF_FIELD_LABELS.get(h, h))
+            self.tree_gm.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_staff_tree(self.tree_gm, h))
             is_bucket_col = h in GM_POTENTIAL_EVAL_COLUMNS or h in GM_ROOKIE_SCOUTING_COLUMNS
             self.tree_gm.column(h, width=90 if is_bucket_col else (110 if h in STAFF_FIELD_LABELS else 160), anchor="w", stretch=False)
 
@@ -5655,6 +5673,40 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Invalid SKPT", str(e))
 
+    def _sort_staff_tree(self, tree, col):
+        """Click-to-sort for the Trainer/Coach/GM tables' column headings -
+        toggles ascending/descending per (tree, column) on each click, same
+        pattern as PlayerTypeFitDialog._sort_by. Sorts numerically when the
+        displayed text is a plain number or starts with one (e.g. the "11:
+        Cowboys (Dallas)" TGID display sorts by the leading team number),
+        otherwise falls back to a case-insensitive string sort."""
+        state = getattr(self, "_staff_sort_state", None)
+        if state is None:
+            state = {}
+            self._staff_sort_state = state
+        key = (id(tree), col)
+        reverse = state.get(key, False)
+
+        def sort_key(val):
+            v = (val or "").strip()
+            try:
+                return (0, float(v))
+            except ValueError:
+                pass
+            m = re.match(r"^-?\d+(\.\d+)?", v)
+            if m:
+                try:
+                    return (0, float(m.group(0)))
+                except ValueError:
+                    pass
+            return (1, v.lower())
+
+        rows = [(tree.set(iid, col), iid) for iid in tree.get_children()]
+        rows.sort(key=lambda r: sort_key(r[0]), reverse=reverse)
+        for index, (_, iid) in enumerate(rows):
+            tree.move(iid, "", index)
+        state[key] = not reverse
+
     def _on_tree_double_click(self, event, tree: ttk.Treeview):
         # Identify clicked row/column
         region = tree.identify_region(event.x, event.y)
@@ -5675,16 +5727,51 @@ class App(tk.Tk):
         is_pe_column = tree is self.tree_gm and parse_pe_column(colname) is not None
         is_rs_column = tree is self.tree_gm and parse_rs_column(colname) is not None
         is_dev_column = tree is self.tree_coach and parse_dev_column(colname) is not None
+        is_cops_column = tree is self.tree_coach and colname == "COPS"
         # Allow editing any known staff numeric column (SKPT, coach 1-7 fields, GM/trainer skill pairs)
         # or a GM Potential Evaluation/Rookie Scouting or Coach Development column (each lives in a
-        # different table, handled specially below).
-        if not is_pe_column and not is_rs_column and not is_dev_column and colname not in STAFF_NUMERIC_FIELDS:
+        # different table, handled specially below), or the Coach Position column (also special-cased:
+        # it's a small fixed set of codes, edited via dropdown rather than a free-integer box).
+        if not is_pe_column and not is_rs_column and not is_dev_column and not is_cops_column and colname not in STAFF_NUMERIC_FIELDS:
             return
 
         bbox = tree.bbox(rowid, column=col)
         if not bbox:
             return
         x, y, w, h = bbox
+
+        if is_cops_column:
+            # Dropdown of position labels rather than a raw 0-10 number field -
+            # the tree displays the mapped label (e.g. "DC"), so editing should
+            # work in those same terms instead of requiring the user to know
+            # the underlying code.
+            try:
+                idx = int(rowid)
+            except Exception:
+                return
+            label_to_code = {v: k for k, v in COACH_POSITION_LABELS.items()}
+            combo = ttk.Combobox(tree, state="readonly", values=list(COACH_POSITION_LABELS.values()))
+            combo.place(x=x, y=y, width=w, height=h)
+            cur_code = (self.model.coaches[idx].get("COPS", "") or "").strip()
+            combo.set(COACH_POSITION_LABELS.get(cur_code, cur_code))
+            combo.focus_set()
+
+            def finish_cops(save: bool):
+                label = combo.get()
+                combo.destroy()
+                if not save:
+                    return
+                code = label_to_code.get(label)
+                if code is None:
+                    return
+                self.model.coaches[idx]["COPS"] = code
+                self.mark_dirty()
+                self.refresh_coach()
+
+            combo.bind("<<ComboboxSelected>>", lambda e: finish_cops(True))
+            combo.bind("<Escape>", lambda e: finish_cops(False))
+            combo.bind("<FocusOut>", lambda e: finish_cops(True))
+            return
 
         # Create entry overlay
         entry = ttk.Entry(tree)
