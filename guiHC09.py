@@ -4092,6 +4092,11 @@ class App(tk.Tk):
 
         res = ttk.LabelFrame(root, text="Find results")
         res.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Label(
+            res, foreground="gray",
+            text="Search for a play above to see its codes and which playbooks have it. "
+                 "Click a row to list those playbooks; double-click to jump to one.",
+        ).pack(anchor="w", padx=6, pady=(4, 0))
         self.tree_pb_found = ttk.Treeview(
             res, columns=("play", "set", "type", "setl", "plyl", "n"), show="headings", height=6, selectmode="browse")
         for c, text, w in (("play", "Play", 220), ("set", "Set", 150), ("type", "Type", 50), ("setl", "SETL", 56), ("plyl", "PLYL", 56), ("n", "In playbooks", 90)):
