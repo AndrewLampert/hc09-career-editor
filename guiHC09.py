@@ -388,6 +388,52 @@ PLAYER_BONUS_MAX_VALUE = 8191
 PLAYER_PCSA_MAX_VALUE = 16383
 PLAYER_PTSA_MAX_VALUE = 65535
 PLAYER_PVSB_MAX_VALUE = 16383
+
+
+def fold_bonuses_into_salary(row, headers):
+    """Move each contract year's bonus (PSBn) into that same year's salary
+    (PSAn) and zero the bonus, so every year's cap hit stays exactly the same
+    while the guaranteed money (the part that turns into a cap penalty when a
+    player is cut or traded) goes away. PCSA/PTSA are sums of salary+bonus per
+    year, so they're unchanged by this; PVSB and PSBO (identical in every
+    player in a real save checked, and the signing-bonus total the sign dialog
+    already derives from the PSB sum) are rewritten to match what's left.
+
+    Salary is a narrower field than salary+bonus can reach (at least one real
+    player already has a combined year over the limit), so if a year's total
+    doesn't fit, the salary is filled to its max and the remainder stays in
+    that year's bonus rather than being silently dropped - the cap hit is
+    preserved either way. Returns (changed, overflowed)."""
+    changed = False
+    overflowed = False
+    has_bonus_cols = False
+    for sal_col, bon_col in zip(PLAYER_CONTRACT_COLS, PLAYER_BONUS_COLS):
+        if bon_col not in headers:
+            continue
+        has_bonus_cols = True
+        bonus = safe_int(row.get(bon_col, "")) or 0
+        if bonus <= 0 or sal_col not in headers:
+            continue
+        salary = safe_int(row.get(sal_col, "")) or 0
+        combined = salary + bonus
+        new_salary = min(combined, PLAYER_SALARY_MAX_VALUE)
+        new_bonus = combined - new_salary
+        row[sal_col] = str(new_salary)
+        row[bon_col] = str(new_bonus)
+        changed = True
+        if new_bonus:
+            overflowed = True
+    if has_bonus_cols:
+        remaining = sum(safe_int(row.get(c, "")) or 0 for c in PLAYER_BONUS_COLS if c in headers)
+        for col in ("PVSB", "PSBO"):
+            if col in headers:
+                new_val = str(min(remaining, PLAYER_PVSB_MAX_VALUE))
+                if row.get(col, "") != new_val:
+                    row[col] = new_val
+                    changed = True
+    return changed, overflowed
+
+
 STAFF_SKPT_MAX_VALUE = 131071
 AGE_COL = "PAGE"
 YEARS_COL = "PYRP"
@@ -4230,7 +4276,11 @@ class App(tk.Tk):
         team_name = TEAM_NAMES.get(tid, tid)
         ok = messagebox.askyesno(
             "Confirm team bonus reset",
-            f"Set PSB0 through PSB6 to 0 for every player on {team_name}?"
+            f"Add each year's bonus into that year's salary, then set every bonus to 0, "
+            f"for every player on {team_name}?\n\n"
+            "Each year's cap hit stays the same. Bonus is really guaranteed money - "
+            "it's what causes a cap penalty when a player is cut or traded - so this "
+            "removes that penalty without changing what the player costs per year."
         )
         if not ok:
             return
@@ -4242,19 +4292,30 @@ class App(tk.Tk):
             return
 
         updated_players = 0
+        overflow_players = 0
         for row in self.model.players:
             if (row.get(team_col, "") or "").strip() != tid:
                 continue
-            for col in PLAYER_BONUS_COLS:
-                if col in headers:
-                    row[col] = "0"
-            updated_players += 1
+            changed, overflowed = fold_bonuses_into_salary(row, headers)
+            if changed:
+                updated_players += 1
+            if overflowed:
+                overflow_players += 1
 
+        if updated_players:
+            self.mark_dirty()
         self.refresh_players_for_team()
-        messagebox.showinfo(
-            "Team bonus updated",
-            f"Set PSB0 through PSB6 to 0 for {updated_players} player(s) on {team_name}."
+        msg = (
+            f"Folded bonuses into salary for {updated_players} player(s) on {team_name}. "
+            "Per-year cap hits are unchanged."
         )
+        if overflow_players:
+            msg += (
+                f"\n\n{overflow_players} player(s) had a year whose salary + bonus is more than the "
+                "salary field can hold - their salary was filled to its maximum and the "
+                "remainder was left as bonus for that year."
+            )
+        messagebox.showinfo("Team bonus updated", msg)
 
     def on_max_team_staff_skpt(self):
         """Max SKPT and every confirmed skill (Trainer/Coach/GM) for every staff
