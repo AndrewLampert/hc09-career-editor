@@ -1103,6 +1103,7 @@ class CSVModel:
         # {"PGPL": [row dicts, whole table], ...}. Written (with row appending
         # enabled for just these tables) by save_to_db, then dropped.
         self.pb_pending = {}
+        self.load_serial = 0
 
     # ---------- Bridge (node bridge.js) ----------
     def run_bridge(self, args):
@@ -1130,6 +1131,7 @@ class CSVModel:
             raise ValueError("Select a valid .db / USR-DATA save file.")
 
         self.pb_pending = {}   # unsaved playbook edits belong to the file being replaced
+        self.load_serial += 1  # lets the Playbooks tab notice a reload even when the file's mtime is unchanged
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_load_")
         try:
             self.run_bridge(["export", "--db", db_path, "--out", tmp_dir])
@@ -3094,6 +3096,8 @@ class PlaybookCopyDialog(tk.Toplevel):
 
         self.lbl_target = ttk.Label(self, font=("TkDefaultFont", 10, "bold"))
         self.lbl_target.pack(anchor="w", padx=10, pady=(10, 2))
+        self.lbl_shared = ttk.Label(self, foreground="#b9770e", wraplength=820, justify="left")
+        self.lbl_shared.pack(anchor="w", padx=10, pady=(0, 2))
         ttk.Label(self, foreground="gray", wraplength=820, justify="left",
                   text="Pick a playbook on the left, then a play, a set or a whole formation on the right. "
                        "Formations are matched by name (their IDs differ between playbooks), so a 4-3 from "
@@ -3156,8 +3160,19 @@ class PlaybookCopyDialog(tk.Toplevel):
 
     def _update_target_label(self):
         d = self.data
+        users = [f"offense: {', '.join(d.offense_used_by[self.target])}" for _ in [0] if d.offense_used_by.get(self.target)]
+        users += [f"defense: {', '.join(d.defense_used_by[self.target])}" for _ in [0] if d.defense_used_by.get(self.target)]
+        shared = len(d.offense_used_by.get(self.target, [])) + len(d.defense_used_by.get(self.target, []))
+        names = d.book_names.get(self.target, [])
+        extra = []
+        if shared:
+            extra.append(f"Used by {'; '.join(users)}. " + ("Changes apply to every team using it. " if shared > 1 else ""))
+        if len(names) > 1:
+            extra.append(f"This is one playbook shared under several names ({' / '.join(names)}), so the change shows under all of them.")
         self.lbl_target.configure(
             text=f"{d.book_label(self.target)}: {d.counted_plays(self.target)} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+        if hasattr(self, "lbl_shared"):
+            self.lbl_shared.configure(text=" ".join(extra))
 
     def _fill_into(self):
         d = self.data
@@ -3363,6 +3378,11 @@ class PlaybookData:
                 self.book_side[bokl] = "Offense" if side == "1" else "Defense"
 
         self.formation_name = {(r.get("PBFM") or "").strip(): (r.get("name") or "").strip() for r in g("pbfm")}
+        # What the game itself ships. Anything outside these is content the user
+        # made in-game (Create-a-Play / Create-a-Playbook): the reporter found
+        # copying that breaks flipping and puts punts in the Gun, so it is never copied.
+        self.stock_sets = {(r.get("SETL") or "").strip() for r in g("setl")}
+        self.stock_plays = {((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip()) for r in g("pbpl")}
         self.set_name = {}
         for r in g("setl") + v("setl"):
             self.set_name[(r.get("SETL") or "").strip()] = (r.get("name") or "").strip()
@@ -3410,6 +3430,17 @@ class PlaybookData:
     def formation_base(self, pbfm, srfm=""):
         """A formation's plain name ("Gun"), ignoring the "(copy N)" marker."""
         return (self.formation_name.get(pbfm) or self.formation_name.get(srfm) or f"Formation {pbfm}").strip()
+
+    def is_custom(self, setl, plyl=None, pbfm=None, srfm=""):
+        """Made in-game rather than shipped by the game. Can only be judged when
+        the game's own name tables are loaded."""
+        if not self.have_game_names:
+            return False
+        if pbfm is not None and pbfm not in self.formation_name and srfm not in self.formation_name:
+            return True
+        if setl is not None and setl not in self.stock_sets:
+            return True
+        return plyl is not None and (setl, plyl) not in self.stock_plays
 
     def _is_special(self, bases):
         return bool(bases) and all(b.lower() in PLAYBOOK_SPECIAL_FORMATIONS for b in bases)
@@ -3496,6 +3527,22 @@ class PlaybookData:
 
         def add_set(setl, plays, only_formation=None):
             nonlocal new_counted
+            if self.is_custom(setl):
+                plan["notes"].append(f'"{self.set_label(setl)}" is a custom set made in-game, so it was skipped - copying custom plays breaks flipping.')
+                plan["skipped_custom"] = True
+                return
+            custom_plays = [pl for pl, _tp in plays if self.is_custom(setl, pl)]
+            if custom_plays:
+                plays = [(pl, tp) for pl, tp in plays if pl not in custom_plays]
+                plan["notes"].append(f"{len(custom_plays)} custom play(s) in \"{self.set_label(setl)}\" were skipped.")
+                plan["skipped_custom"] = True
+            if not plays:
+                return
+            for f in self.set_formations.get((src, setl), []):
+                if f not in PLAYBOOK_CREATED_FORMATIONS and self.is_custom(None, None, f, self.formation_srfm.get((src, f), "")) and into_formation is None and setl not in self.book_sets.get(tgt, set()):
+                    plan["notes"].append(f'"{self.set_label(setl)}" sits under a custom formation in the source, so it was skipped.')
+                    plan["skipped_custom"] = True
+                    return
             set_is_new = setl not in self.book_sets.get(tgt, set())
             if not set_is_new:
                 # The target already has this set: leave its formation links alone.
@@ -3553,7 +3600,10 @@ class PlaybookData:
         plan["counted_before"] = self.counted_plays(tgt)
         plan["plays_after"] = plan["counted_before"] + new_counted
         if not any(plan["rows"].values()):
-            plan["error"] = "Nothing to add: everything selected is already in this playbook." if plan["already"] else "Nothing to add."
+            if plan.get("skipped_custom"):
+                plan["error"] = "Nothing to add: " + " ".join(plan["notes"])
+            else:
+                plan["error"] = "Nothing to add: everything selected is already in this playbook." if plan["already"] else "Nothing to add."
         elif plan["plays_after"] > PLAYBOOK_PLAY_CAP and new_counted:
             plan["error"] = (f"This would put {self.book_label(tgt)} at {plan['plays_after']} plays; the game allows "
                              f"{PLAYBOOK_PLAY_CAP} per playbook (special teams not counted).")
@@ -4695,7 +4745,7 @@ class App(tk.Tk):
     def _playbook_stamp_now(self):
         path = self.model.db_path
         try:
-            return (path, os.path.getmtime(path)) if path else None
+            return (path, os.path.getmtime(path), self.model.load_serial) if path else None
         except OSError:
             return None
 
@@ -4826,10 +4876,22 @@ class App(tk.Tk):
             self.pb_team_var.set(cur if cur else self._pb_team_names[0][1])
         self._refresh_pb_team()
 
+    def _playbook_data_is_stale(self):
+        """True (after starting a reload) if the save was loaded again since the
+        tab read it - e.g. Reload from File, which doesn't change the file's
+        timestamp - so edits are never built on discarded data."""
+        if self._playbook_data is not None and self._playbook_stamp != self._playbook_stamp_now():
+            self.refresh_playbooks()
+            self.lbl_playbook_status.configure(text="The save was reloaded, so the playbook data was refreshed. Choose the playbook and try again.")
+            return True
+        return False
+
     def on_playbook_add_plays(self, preselect=None):
         data, sel = self._playbook_data, self.tree_pb_books.selection()
         if data is None or not sel:
             messagebox.showinfo("Playbooks", "Open the tab with a save loaded, then select the playbook to add plays to.")
+            return
+        if self._playbook_data_is_stale():
             return
         PlaybookCopyDialog(self, data, sel[0], self._apply_playbook_plan, preselect)
 
@@ -4853,6 +4915,8 @@ class App(tk.Tk):
         """Apply a copy plan to the in-memory playbook tables (validated; raises
         ValueError if refused) and queue them for the next Save to File."""
         data = self._playbook_data
+        if self._playbook_data_is_stale():
+            raise ValueError("The save was reloaded since this dialog opened, so nothing was added. Close it and try again.")
         n = data.apply_plan(plan)
         self.model.pb_pending = {t: data.tables[t] for t in data.dirty_tables}
         self.mark_dirty()
