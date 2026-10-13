@@ -3881,15 +3881,20 @@ class App(tk.Tk):
             frm, text="All Teams", variable=self.staff_filter_var, value="all_teams",
             command=self.on_staff_filter_changed,
         ).pack(side="left", padx=(6, 0))
-        ttk.Label(frm, text="Layout:").pack(side="left", padx=(16, 4))
+        # Layout gets its own row just under the toolbar: on the Coach tab the
+        # toolbar is already full width, so anything added to it got cut off.
+        lay = ttk.Frame(parent.master)
+        lay.pack(fill="x", padx=10, after=parent)
+        ttk.Label(lay, text="Layout:").pack(side="left", padx=(0, 4))
         ttk.Radiobutton(
-            frm, text="Vertical", variable=self.staff_layout_var, value="vertical",
+            lay, text="Vertical", variable=self.staff_layout_var, value="vertical",
             command=self.on_staff_layout_changed,
         ).pack(side="left")
         ttk.Radiobutton(
-            frm, text="Horizontal", variable=self.staff_layout_var, value="horizontal",
+            lay, text="Horizontal", variable=self.staff_layout_var, value="horizontal",
             command=self.on_staff_layout_changed,
         ).pack(side="left", padx=(6, 0))
+        ttk.Label(lay, text="(vertical: double-click a section heading to collapse or expand it)", foreground="gray").pack(side="left", padx=(16, 0))
 
     def _build_trainer_tab(self):
         root = ttk.Frame(self.notebook)
@@ -5909,7 +5914,8 @@ class App(tk.Tk):
         xscroll.pack(side="bottom", fill="x", pady=(0, 6))
         yscroll.pack(side="right", fill="y")
         vtree.pack(side="left", fill="both", expand=True)
-        view = {"kind": kind, "tree": tree, "hframe": hframe, "vframe": vframe, "vtree": vtree}
+        view = {"kind": kind, "tree": tree, "hframe": hframe, "vframe": vframe, "vtree": vtree,
+                "collapsed": set(), "sections": {}}
         self._vviews[id(tree)] = view
         vtree.bind("<Button-1>", lambda e, v=view: self._vertical_click(v, e))
         vtree.bind("<Double-1>", lambda e, v=view: self._vertical_double_click(v, e))
@@ -5999,6 +6005,8 @@ class App(tk.Tk):
         )
 
         sort = self._tree_sort_state.get(id(tree))
+        collapsed = view["collapsed"]
+        view["sections"] = {}
         last_section = object()
         n_sections = 0
         for field in (c for c in tree["columns"] if c not in self.STAFF_IDENTITY_COLS):
@@ -6007,8 +6015,13 @@ class App(tk.Tk):
                 last_section = section
                 if section is not None:
                     n_sections += 1
-                    vtree.insert("", tk.END, iid=f"__sec_{n_sections}", tags=("section",),
-                                 values=[f"\u2014 {section} \u2014"] + [""] * len(rec_cols))
+                    sec_iid = f"__sec_{n_sections}"
+                    view["sections"][sec_iid] = section
+                    arrow = "\u25b8" if section in collapsed else "\u25be"
+                    vtree.insert("", tk.END, iid=sec_iid, tags=("section",),
+                                 values=[f"{arrow} {section}"] + [""] * len(rec_cols))
+            if section is not None and section in collapsed:
+                continue
             label = STAFF_FIELD_LABELS.get(field, field)
             if sort and sort[0] == field:
                 label += " \u25bc" if sort[1] else " \u25b2"
@@ -6042,6 +6055,15 @@ class App(tk.Tk):
             view["tree"].selection_set(cols[k][1:])
 
     def _vertical_double_click(self, view, event):
+        row = view["vtree"].identify_row(event.y)
+        if row in view["sections"]:
+            title = view["sections"][row]
+            if title in view["collapsed"]:
+                view["collapsed"].discard(title)
+            else:
+                view["collapsed"].add(title)
+            self._sync_vertical(view["tree"])
+            return
         hit = self._vertical_cell_at(view, event)
         if not hit:
             return
