@@ -29,7 +29,7 @@ The config has no name for 11 fields the editor already edits (`PLJM`, `SKTD`, `
 
 ## Value lists
 
-Small lists are shown in full; `PNid` (3,585 names), `PCOL` (297 colleges) and the team lists are in the JSON file.
+The number in front of each label is the value stored in the save. Checked against a real save: every stored value in 14 coach fields (`CRPP CBPP DEPP QBPP OSPP DSPP CDTY OPPP DPPP NHPP COPS PTId CFDA CFFA`) falls inside its list, with none outside. Small lists are shown in full; `PNid` (3,585 names), `PCOL` (297 colleges) and the team lists are in the JSON file.
 
 - `CDTY` **Def Philosophy**: 5 3-4; 95 4-3
 - `CFDA` **Draft Player**: 0 User; 1 CPU
