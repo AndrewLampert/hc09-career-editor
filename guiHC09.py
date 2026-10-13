@@ -434,6 +434,35 @@ def fold_bonuses_into_salary(row, headers):
     return changed, overflowed
 
 
+def sort_table_cells(rows, reverse):
+    """rows: list of (cell_text, iid). Plain numbers - or text that starts with
+    one, like the "11: Cowboys (Dallas)" team display - sort numerically;
+    everything else (names, "-", "N/A", blanks) sorts as case-insensitive text
+    after all the numbers, in both directions, so missing values never end up
+    at the top of a descending sort. Python's sort is stable, so ties keep
+    their previous relative order."""
+    numeric, other = [], []
+    for text, iid in rows:
+        v = (text or "").strip()
+        num = None
+        try:
+            num = float(v)
+        except ValueError:
+            m = re.match(r"^-?\d+(\.\d+)?", v)
+            if m:
+                num = float(m.group(0))
+        if num is not None:
+            numeric.append((num, iid))
+        else:
+            other.append((v.lower(), iid))
+    numeric.sort(key=lambda r: r[0], reverse=reverse)
+    other.sort(key=lambda r: r[0], reverse=reverse)
+    return [iid for _, iid in numeric] + [iid for _, iid in other]
+
+
+PLAYER_LIST_SORT_OPTIONS = ["Position", "Name", "OVR (high first)", "Age (oldest first)", "Salary (highest first)"]
+
+
 STAFF_SKPT_MAX_VALUE = 131071
 AGE_COL = "PAGE"
 YEARS_COL = "PYRP"
@@ -2969,6 +2998,7 @@ class App(tk.Tk):
 
         self.model = CSVModel()
         self.dirty = False  # True whenever there are unsaved edits
+        self._tree_sort_state = {}  # id(tree) -> (column, reverse); survives table rebuilds
 
         self.selected_team_id = tk.StringVar(value="")
         self.selected_player_index = None
@@ -3536,6 +3566,15 @@ class App(tk.Tk):
         self.player_search_var.trace_add("write", self._on_player_search_changed)
         ttk.Button(search_frm, text="Clear", command=self.on_clear_player_search).pack(side="left", padx=(4, 0))
 
+        sort_frm = ttk.Frame(mid)
+        sort_frm.pack(fill="x", pady=(0, 4))
+        ttk.Label(sort_frm, text="Sort team list by:").pack(side="left")
+        saved_sort = self.ui_prefs.get("player_sort")
+        self.player_sort_var = tk.StringVar(value=saved_sort if saved_sort in PLAYER_LIST_SORT_OPTIONS else PLAYER_LIST_SORT_OPTIONS[0])
+        cmb_sort = ttk.Combobox(sort_frm, state="readonly", width=22, textvariable=self.player_sort_var, values=PLAYER_LIST_SORT_OPTIONS)
+        cmb_sort.pack(side="left", padx=(4, 0))
+        cmb_sort.bind("<<ComboboxSelected>>", self._on_player_sort_changed)
+
         self.lbl_players_header = ttk.Label(mid, text="Players on Team (play.csv)")
         self.lbl_players_header.pack(anchor="w")
         self.lst_players = tk.Listbox(mid, height=28, exportselection=False)
@@ -3634,7 +3673,7 @@ class App(tk.Tk):
         cols = ("stat", "cur_col", "cur_val", "max_col", "max_val")
         self.tree_stats = ttk.Treeview(right, columns=cols, show="headings", height=11)
         for c, w in zip(cols, [260, 90, 80, 90, 80]):
-            self.tree_stats.heading(c, text=c)
+            self.tree_stats.heading(c, text=c, command=lambda c=c: self._sort_tree(self.tree_stats, c))
             self.tree_stats.column(c, width=w, anchor="w", stretch=False)
         self.tree_stats.pack(fill="both", expand=True)
         self.tree_stats.bind("<<TreeviewSelect>>", self.on_stat_select)
@@ -3818,7 +3857,7 @@ class App(tk.Tk):
         self.tree_picks = ttk.Treeview(root, columns=cols, show="headings", height=12, selectmode="extended")
         for c in cols:
             text, width = headings[c]
-            self.tree_picks.heading(c, text=text)
+            self.tree_picks.heading(c, text=text, command=lambda c=c: self._sort_tree(self.tree_picks, c))
             self.tree_picks.column(c, width=width, anchor="w", stretch=False)
         self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 6))
         self.tree_picks.bind("<<TreeviewSelect>>", lambda e: self._update_pick_selection_label())
@@ -4439,6 +4478,32 @@ class App(tk.Tk):
         self.player_search_var.set("")  # triggers _on_player_search_changed -> reverts to team view
         self.refresh_players_for_team()
 
+    def _on_player_sort_changed(self, _event=None):
+        self.ui_prefs["player_sort"] = self.player_sort_var.get()
+        save_ui_prefs(self.ui_prefs)
+        # Only the team view is sortable this way; search results keep their own order.
+        if not (self.player_search_var.get() or "").strip():
+            self.refresh_players_for_team()
+
+    def _player_list_sort_key(self, item):
+        """item = (model_idx, row). Every option falls back to the same
+        position/name order, so ties stay predictable."""
+        r = item[1]
+        pos = POSITION_ORDER.get((r.get(PLAYER_POS_CODE, "") or "").strip(), 999)
+        first = r.get(PLAYER_FIRST_NAME_CODE, "").strip()
+        last = r.get(PLAYER_LAST_NAME_CODE, "").strip()
+        mode = self.player_sort_var.get()
+        if mode == "Name":
+            return (last.lower(), first.lower(), pos)
+        if mode == "OVR (high first)":
+            return (-(safe_int(r.get("POVR", "")) or 0), pos, first, last)
+        if mode == "Age (oldest first)":
+            return (-(safe_int(r.get(AGE_COL, "")) or 0), pos, first, last)
+        if mode == "Salary (highest first)":
+            cap = (safe_int(r.get("PSA0", "")) or 0) + (safe_int(r.get("PSB0", "")) or 0)
+            return (-cap, pos, first, last)
+        return (pos, first, last)
+
     def refresh_players_for_team(self, preselect_model_idx=None):
         """preselect_model_idx: keep this player (by index into
         self.model.players, not listbox position) selected across the
@@ -4465,12 +4530,9 @@ class App(tk.Tk):
         else:
             filtered = list(enumerate(self.model.players))
 
-        # Sort by position (custom order), then first name, then last name
-        filtered = sorted(filtered, key=lambda item: (
-            POSITION_ORDER.get((item[1].get(PLAYER_POS_CODE, "") or "").strip(), 999),
-            item[1].get(PLAYER_FIRST_NAME_CODE, "").strip(),
-            item[1].get(PLAYER_LAST_NAME_CODE, "").strip()
-        ))
+        # Default: position (custom order), then first name, then last name;
+        # the "Sort team list by" dropdown picks another order.
+        filtered = sorted(filtered, key=self._player_list_sort_key)
 
         self._player_index_map = [i for i, _ in filtered]
 
@@ -4608,6 +4670,7 @@ class App(tk.Tk):
                 iid=base_key,
                 values=(nice, cur_col or "N/A", cur_val or "-", max_col or "N/A", max_val or "-")
             )
+        self._finish_tree_refresh(self.tree_stats)
 
     def on_stat_select(self, event=None):
         sel = self.tree_stats.selection()
@@ -5166,6 +5229,7 @@ class App(tk.Tk):
                 values=(f"{tid}: {team_name}", orig_disp, round_disp, pick_disp, str(year_display)),
             )
 
+        self._finish_tree_refresh(self.tree_picks)
         self._update_pick_selection_label()
 
     def _update_pick_selection_label(self):
@@ -5286,12 +5350,13 @@ class App(tk.Tk):
             rows = sorted(rows, key=tg_key)
 
         # Clear and set columns
+        prev_sel = self.tree_trainer.selection()
         for iid in self.tree_trainer.get_children():
             self.tree_trainer.delete(iid)
 
         self.tree_trainer["columns"] = headers
         for h in headers:
-            self.tree_trainer.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_staff_tree(self.tree_trainer, h))
+            self.tree_trainer.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_tree(self.tree_trainer, h))
             self.tree_trainer.column(h, width=110 if h in STAFF_FIELD_LABELS else 160, anchor="w", stretch=False)
 
         for idx, r in rows:
@@ -5303,6 +5368,7 @@ class App(tk.Tk):
                 else:
                     vals.append((r.get(h, "") or ""))
             self.tree_trainer.insert("", tk.END, iid=str(idx), values=vals)
+        self._finish_tree_refresh(self.tree_trainer, prev_sel)
 
     def _on_trainer_select(self):
         sel = self.tree_trainer.selection()
@@ -5546,12 +5612,13 @@ class App(tk.Tk):
             rows = sorted(rows, key=lambda ir: ((ir[1].get("CLNM", "") or ""), (ir[1].get("CFNM", "") or "")))
 
         # clear and set columns
+        prev_sel = self.tree_coach.selection()
         for iid in self.tree_coach.get_children():
             self.tree_coach.delete(iid)
 
         self.tree_coach["columns"] = headers or []
         for h in headers or []:
-            self.tree_coach.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_staff_tree(self.tree_coach, h))
+            self.tree_coach.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_tree(self.tree_coach, h))
             self.tree_coach.column(h, width=90 if h in COACH_DEV_COLUMNS else 140, anchor="w", stretch=False)
 
         # Insert rows using original model indices as iids
@@ -5573,6 +5640,7 @@ class App(tk.Tk):
                 else:
                     vals.append((r.get(h, "") or ""))
             self.tree_coach.insert("", tk.END, iid=str(idx), values=vals)
+        self._finish_tree_refresh(self.tree_coach, prev_sel)
 
     def _on_coach_select(self):
         sel = self.tree_coach.selection()
@@ -5664,12 +5732,13 @@ class App(tk.Tk):
             rows = sorted(rows, key=tg_key)
 
         # Clear and set columns
+        prev_sel = self.tree_gm.selection()
         for iid in self.tree_gm.get_children():
             self.tree_gm.delete(iid)
 
         self.tree_gm["columns"] = headers
         for h in headers:
-            self.tree_gm.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_staff_tree(self.tree_gm, h))
+            self.tree_gm.heading(h, text=STAFF_FIELD_LABELS.get(h, h), command=lambda h=h: self._sort_tree(self.tree_gm, h))
             is_bucket_col = h in GM_POTENTIAL_EVAL_COLUMNS or h in GM_ROOKIE_SCOUTING_COLUMNS
             self.tree_gm.column(h, width=90 if is_bucket_col else (110 if h in STAFF_FIELD_LABELS else 160), anchor="w", stretch=False)
 
@@ -5693,6 +5762,7 @@ class App(tk.Tk):
                 else:
                     vals.append((r.get(h, "") or ""))
             self.tree_gm.insert("", tk.END, iid=str(idx), values=vals)
+        self._finish_tree_refresh(self.tree_gm, prev_sel)
 
     def _on_gm_select(self):
         sel = self.tree_gm.selection()
@@ -5734,39 +5804,42 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Invalid SKPT", str(e))
 
-    def _sort_staff_tree(self, tree, col):
-        """Click-to-sort for the Trainer/Coach/GM tables' column headings -
-        toggles ascending/descending per (tree, column) on each click, same
-        pattern as PlayerTypeFitDialog._sort_by. Sorts numerically when the
-        displayed text is a plain number or starts with one (e.g. the "11:
-        Cowboys (Dallas)" TGID display sorts by the leading team number),
-        otherwise falls back to a case-insensitive string sort."""
-        state = getattr(self, "_staff_sort_state", None)
-        if state is None:
-            state = {}
-            self._staff_sort_state = state
-        key = (id(tree), col)
-        reverse = state.get(key, False)
+    def _sort_tree(self, tree, col):
+        """Click-to-sort for a table's column heading: first click sorts
+        ascending, clicking the same column again flips to descending. The
+        choice is remembered per table (see _finish_tree_refresh) so it
+        survives the table being rebuilt after an edit instead of snapping
+        back to the default order."""
+        cur = self._tree_sort_state.get(id(tree))
+        reverse = bool(cur and cur[0] == col and not cur[1])
+        self._tree_sort_state[id(tree)] = (col, reverse)
+        self._apply_tree_sort(tree)
 
-        def sort_key(val):
-            v = (val or "").strip()
-            try:
-                return (0, float(v))
-            except ValueError:
-                pass
-            m = re.match(r"^-?\d+(\.\d+)?", v)
-            if m:
-                try:
-                    return (0, float(m.group(0)))
-                except ValueError:
-                    pass
-            return (1, v.lower())
-
-        rows = [(tree.set(iid, col), iid) for iid in tree.get_children()]
-        rows.sort(key=lambda r: sort_key(r[0]), reverse=reverse)
-        for index, (_, iid) in enumerate(rows):
+    def _apply_tree_sort(self, tree):
+        state = self._tree_sort_state.get(id(tree))
+        if not state:
+            return
+        col, reverse = state
+        if col not in tree["columns"]:
+            del self._tree_sort_state[id(tree)]
+            return
+        rows = [(tree.set(iid, col), iid) for iid in tree.get_children("")]
+        for index, iid in enumerate(sort_table_cells(rows, reverse)):
             tree.move(iid, "", index)
-        state[key] = not reverse
+        for c in tree["columns"]:
+            text = re.sub(r" [▲▼]$", "", str(tree.heading(c, "text")))
+            if c == col:
+                text += " ▼" if reverse else " ▲"
+            tree.heading(c, text=text)
+
+    def _finish_tree_refresh(self, tree, prev_selection=()):
+        """Call at the end of anything that rebuilds a table: puts the rows
+        back in the user's chosen sort order and restores the selection that
+        the rebuild wiped out."""
+        self._apply_tree_sort(tree)
+        keep = [iid for iid in prev_selection if tree.exists(iid)]
+        if keep:
+            tree.selection_set(keep)
 
     def _on_tree_double_click(self, event, tree: ttk.Treeview):
         # Identify clicked row/column
