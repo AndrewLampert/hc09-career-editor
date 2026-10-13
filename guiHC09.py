@@ -24,6 +24,7 @@ Run:
 import csv
 import os
 import re
+from collections import Counter, defaultdict
 import json
 import random
 import shutil
@@ -439,8 +440,9 @@ def sort_table_cells(rows, reverse):
     one, like the "11: Cowboys (Dallas)" team display - sort numerically;
     everything else (names, "-", "N/A", blanks) sorts as case-insensitive text
     after all the numbers, in both directions, so missing values never end up
-    at the top of a descending sort. Python's sort is stable, so ties keep
-    their previous relative order."""
+    at the top of a descending sort. Cells with the same number are ordered by
+    their text (so "3-2-6" comes before "3-4 Pressure"); identical cells keep
+    their previous relative order, since Python's sort is stable."""
     numeric, other = [], []
     for text, iid in rows:
         v = (text or "").strip()
@@ -452,12 +454,12 @@ def sort_table_cells(rows, reverse):
             if m:
                 num = float(m.group(0))
         if num is not None:
-            numeric.append((num, iid))
+            numeric.append((num, v.lower(), iid))
         else:
             other.append((v.lower(), iid))
-    numeric.sort(key=lambda r: r[0], reverse=reverse)
+    numeric.sort(key=lambda r: (r[0], r[1]), reverse=reverse)
     other.sort(key=lambda r: r[0], reverse=reverse)
-    return [iid for _, iid in numeric] + [iid for _, iid in other]
+    return [r[2] for r in numeric] + [iid for _, iid in other]
 
 
 PLAYER_LIST_SORT_OPTIONS = ["Position", "Name", "OVR (high first)", "Age (oldest first)", "Salary (highest first)"]
@@ -2975,6 +2977,164 @@ class PlayerTypeFitDialog(tk.Toplevel):
         self._sort_state[col] = not reverse
 
 
+# -----------------------------
+# Playbooks: a name-resolved view of the save's playbook tables.
+#
+# The save only stores IDs: PGPL (BOKL playbook, SETL set, PLYL play, PLTP
+# type), PGFM (formations in a playbook), PGSL (which sets belong to which
+# formation) and PGSS. The NAMES for stock content are not in the save at all -
+# they're in the game's own qkl_boot.ast (tables PLAB / PBFM / SETL / PBPL),
+# so they're extracted once into a local cache (see App._ensure_playbook_names)
+# the same way the Player Type Fit archetypes are. Anything the user created
+# in-game (custom plays/sets/playbooks) carries its own names in the save's
+# own PBPL / SETL / PLAB tables, which take priority over the stock ones.
+#
+# Verified against a real save: every PGPL (set, play) pair, PGSS set and
+# PGFM formation resolves except the user's custom content (named by the
+# save's own tables) and 3 formation IDs; PGPL.PLTP always equals the name
+# table's play-type code; BOKL equals PLAB.PBGI; TEAM.TOPB indexes the
+# offensive playbook by PLAB.BORD for all 32 teams. TEAM.TDPB (defense) does
+# NOT follow that scheme and its meaning is unknown, so defense usage is not
+# shown.
+# -----------------------------
+PLAYBOOK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "playbooks")
+PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
+PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB"]
+
+
+def read_csv_dicts(path):
+    """Plain CSV -> list of dicts (no model state touched, so it's safe on a worker thread)."""
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        return []
+
+
+def team_nickname(tid):
+    name = TEAM_NAMES.get(tid, "")
+    return name.split(" (")[0] if name else ""
+
+
+class PlaybookData:
+    def __init__(self, game, save, teams):
+        """game / save: {table name in lowercase: [row dicts]} - stock names
+        from the game files and the save's own tables. teams: TEAM rows."""
+        self.have_game_names = bool(game.get("plab"))
+        g = lambda t: game.get(t, [])
+        v = lambda t: save.get(t, [])
+
+        self.book_names = defaultdict(list)
+        self.book_side = {}
+        for r in g("plab") + v("plab"):
+            bokl = (r.get("PBGI") or "").strip()
+            name = (r.get("BNAM") or "").strip()
+            if bokl and name:
+                if name not in self.book_names[bokl]:
+                    self.book_names[bokl].append(name)
+                self.book_side[bokl] = "Offense" if (r.get("BOFF") or "").strip() == "1" else "Defense"
+
+        self.formation_name = {(r.get("PBFM") or "").strip(): (r.get("name") or "").strip() for r in g("pbfm")}
+        self.set_name = {}
+        for r in g("setl") + v("setl"):
+            self.set_name[(r.get("SETL") or "").strip()] = (r.get("name") or "").strip()
+        self.play_info = {}
+        for r in g("pbpl") + v("pbpl"):
+            self.play_info[((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip())] = (
+                (r.get("name") or "").strip(), (r.get("PLYT") or "").strip())
+
+        self.book_formations = defaultdict(list)   # BOKL -> [(PBFM, SRFM)]
+        for r in v("pgfm"):
+            self.book_formations[(r.get("BOKL") or "").strip()].append(((r.get("PBFM") or "").strip(), (r.get("SRFM") or "").strip()))
+        self.formation_sets = defaultdict(list)    # (BOKL, PBFM) -> [SETL]
+        for r in v("pgsl"):
+            self.formation_sets[((r.get("BOKL") or "").strip(), (r.get("PBFM") or "").strip())].append((r.get("SETL") or "").strip())
+        self.set_plays = defaultdict(list)         # (BOKL, SETL) -> [(PLYL, PLTP)]
+        self.play_books = defaultdict(set)         # (SETL, PLYL) -> {BOKL}
+        self.book_play_count = Counter()
+        for r in v("pgpl"):
+            bokl, setl, plyl = (r.get("BOKL") or "").strip(), (r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip()
+            self.set_plays[(bokl, setl)].append((plyl, (r.get("PLTP") or "").strip()))
+            self.play_books[(setl, plyl)].add(bokl)
+            self.book_play_count[bokl] += 1
+
+        # Offense only: TEAM.TOPB is the playbook's PLAB.BORD (confirmed for all 32 teams).
+        bord_to_book = {(r.get("BORD") or "").strip(): (r.get("PBGI") or "").strip()
+                        for r in g("plab") if (r.get("BOFF") or "").strip() == "1"}
+        self.book_used_by = defaultdict(list)
+        for t in teams:
+            tid = (t.get("TGID") or "").strip()
+            book = bord_to_book.get((t.get("TOPB") or "").strip())
+            if book and team_nickname(tid) and tid in dict(SIGN_DEST_TEAMS):
+                self.book_used_by[book].append(team_nickname(tid))
+
+    # ---- labels
+    def book_label(self, bokl):
+        names = self.book_names.get(bokl)
+        return " / ".join(names) if names else f"Playbook {bokl}"
+
+    def formation_label(self, pbfm, srfm=""):
+        if pbfm in self.formation_name:
+            return self.formation_name[pbfm]
+        if srfm in self.formation_name:
+            return f"{self.formation_name[srfm]} (copy {pbfm})"
+        return f"Formation {pbfm}"
+
+    def set_label(self, setl):
+        return self.set_name.get(setl) or f"Set {setl}"
+
+    def play_label(self, setl, plyl):
+        return self.play_info.get((setl, plyl), ("", ""))[0] or f"Play {plyl}"
+
+    # ---- tables for the UI
+    def books(self):
+        rows = []
+        for bokl in sorted(set(self.book_play_count) | set(self.book_formations), key=lambda b: int(b) if b.isdigit() else 0):
+            rows.append((bokl, self.book_label(bokl), self.book_side.get(bokl, ""), bokl,
+                         self.book_play_count.get(bokl, 0), ", ".join(self.book_used_by.get(bokl, []))))
+        return rows
+
+    def formations_for(self, bokl):
+        return [(pbfm, self.formation_label(pbfm, srfm), pbfm, len(self.formation_sets.get((bokl, pbfm), [])))
+                for pbfm, srfm in self.book_formations.get(bokl, [])]
+
+    def plays_for(self, bokl, pbfm=None):
+        if pbfm is None:
+            sets = []
+            for f, _srfm in self.book_formations.get(bokl, []):
+                for st in self.formation_sets.get((bokl, f), []):
+                    if st not in sets:
+                        sets.append(st)
+            for (b, st) in self.set_plays:
+                if b == bokl and st not in sets:
+                    sets.append(st)
+        else:
+            sets = self.formation_sets.get((bokl, pbfm), [])
+        out = []
+        for st in sets:
+            for plyl, pltp in self.set_plays.get((bokl, st), []):
+                out.append((f"{st}:{plyl}", self.play_label(st, plyl), self.set_label(st), pltp, st, plyl))
+        return out
+
+    def search(self, text):
+        # The game's own names have stray double spaces ("Cover 2  QB Spy"), so
+        # compare with whitespace collapsed on both sides.
+        norm = lambda t: " ".join(t.lower().split())
+        text = norm(text)
+        if not text:
+            return []
+        keys = set(self.play_info) | set(self.play_books)
+        hits = []
+        for st, plyl in keys:
+            name = self.play_label(st, plyl)
+            if text in norm(name) or text in norm(self.set_label(st)):
+                books = sorted(self.play_books.get((st, plyl), []), key=lambda b: int(b) if b.isdigit() else 0)
+                pltp = self.play_info.get((st, plyl), ("", ""))[1]
+                hits.append((f"{st}:{plyl}", name, self.set_label(st), pltp, st, plyl, len(books), books))
+        hits.sort(key=lambda h: (h[1].lower(), h[2].lower()))
+        return hits
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -3530,6 +3690,7 @@ class App(tk.Tk):
         self._build_trainer_tab()
         self._build_coach_tab()
         self._build_gm_tab()
+        self._build_playbooks_tab()
 
     def _build_players_tab(self):
         root = self.tab_players
@@ -3863,6 +4024,242 @@ class App(tk.Tk):
             self.tree_picks.column(c, width=width, anchor="w", stretch=False)
         self.tree_picks.pack(fill="both", expand=True, padx=10, pady=(0, 6))
         self.tree_picks.bind("<<TreeviewSelect>>", lambda e: self._update_pick_selection_label())
+
+    # ---------- Playbooks tab (read-only, names resolved) ----------
+    def _build_playbooks_tab(self):
+        root = ttk.Frame(self.notebook)
+        self.tab_playbooks = root
+        self.notebook.add(root, text="Playbooks")
+        self._playbook_data = None
+        self._playbook_stamp = None
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
+
+        top = ttk.Frame(root)
+        top.pack(fill="x", padx=10, pady=(10, 4))
+        ttk.Label(top, text="Playbooks").pack(side="left")
+        ttk.Button(top, text="Load / Refresh", command=lambda: self.refresh_playbooks(force=True)).pack(side="left", padx=8)
+        self.lbl_playbook_status = ttk.Label(top, text="Open this tab after loading a save.", foreground="gray")
+        self.lbl_playbook_status.pack(side="left", padx=(8, 0))
+
+        help_text = (
+            "Read-only for now: browse every playbook in the save with real play, set and formation names "
+            "(pulled from your own game files the first time, then cached). Use Find play to see a play's "
+            "codes (SETL / PLYL) and every playbook that contains it. Custom plays and playbooks you made "
+            "in-game are named from the save itself. Offense usage is shown for each playbook; defensive "
+            "playbook assignment isn't understood yet, so it isn't shown."
+        )
+        help_frame = ttk.Frame(root)
+        help_frame.pack(fill="x", padx=10)
+        lbl = tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray")
+        lbl.pack(fill="x", pady=(2, 6))
+        self._help_labels.append(lbl)
+
+        search = ttk.Frame(root)
+        search.pack(fill="x", padx=10, pady=(0, 4))
+        ttk.Label(search, text="Find play (name or set):").pack(side="left")
+        self.playbook_search_var = tk.StringVar()
+        ent = ttk.Entry(search, textvariable=self.playbook_search_var, width=26)
+        ent.pack(side="left", padx=(6, 6))
+        ent.bind("<Return>", lambda e: self.on_playbook_search())
+        ttk.Button(search, text="Find", command=self.on_playbook_search).pack(side="left")
+        ttk.Button(search, text="Clear", command=self.on_playbook_search_clear).pack(side="left", padx=(6, 0))
+        self.lbl_playbook_hit = ttk.Label(search, text="", foreground="gray")
+        self.lbl_playbook_hit.pack(side="left", padx=(12, 0))
+
+        panes = ttk.PanedWindow(root, orient="horizontal")
+        panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+
+        def make_tree(parent, cols, widths, height=14, weight=1):
+            frm = ttk.Frame(parent)
+            tree = ttk.Treeview(frm, columns=[c for c, _ in cols], show="headings", height=height, selectmode="browse")
+            for (c, text), w in zip(cols, widths):
+                tree.heading(c, text=text, command=lambda c=c, t=tree: self._sort_tree(t, c))
+                tree.column(c, width=w, anchor="w", stretch=(c == cols[0][0]))
+            sb = ttk.Scrollbar(frm, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y")
+            tree.pack(side="left", fill="both", expand=True)
+            parent.add(frm, weight=weight)
+            return tree
+
+        self.tree_pb_books = make_tree(panes, [("name", "Playbook"), ("side", "Side"), ("id", "ID"), ("plays", "Plays"), ("used", "Offense of")],
+                                       [210, 62, 44, 48, 150], weight=3)
+        self.tree_pb_forms = make_tree(panes, [("name", "Formation"), ("id", "ID"), ("sets", "Sets")], [160, 50, 44], weight=2)
+        self.tree_pb_plays = make_tree(panes, [("play", "Play"), ("set", "Set"), ("type", "Type"), ("setl", "SETL"), ("plyl", "PLYL")],
+                                       [190, 130, 46, 50, 50], weight=3)
+        self.tree_pb_books.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_book_selected())
+        self.tree_pb_forms.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_form_selected())
+
+        res = ttk.LabelFrame(root, text="Find results")
+        res.pack(fill="x", padx=10, pady=(0, 10))
+        self.tree_pb_found = ttk.Treeview(
+            res, columns=("play", "set", "type", "setl", "plyl", "n"), show="headings", height=6, selectmode="browse")
+        for c, text, w in (("play", "Play", 220), ("set", "Set", 150), ("type", "Type", 50), ("setl", "SETL", 56), ("plyl", "PLYL", 56), ("n", "In playbooks", 90)):
+            self.tree_pb_found.heading(c, text=text, command=lambda c=c: self._sort_tree(self.tree_pb_found, c))
+            self.tree_pb_found.column(c, width=w, anchor="w", stretch=(c == "play"))
+        self.tree_pb_found.pack(fill="x", padx=4, pady=4)
+        self.tree_pb_found.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_found_selected())
+        self.tree_pb_found.bind("<Double-1>", lambda e: self._on_playbook_found_open())
+        self._playbook_hits = {}
+
+    def _on_notebook_tab_changed(self, _event=None):
+        try:
+            current = self.notebook.nametowidget(self.notebook.select())
+        except Exception:
+            return
+        if current is self.tab_playbooks:
+            self.refresh_playbooks()
+
+    def _playbook_stamp_now(self):
+        path = self.model.db_path
+        try:
+            return (path, os.path.getmtime(path)) if path else None
+        except OSError:
+            return None
+
+    def _playbook_names_cached(self):
+        return all(os.path.isfile(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES)
+
+    def refresh_playbooks(self, force=False):
+        if not self.model.db_path or not self.model.players:
+            self.lbl_playbook_status.configure(text="Load a save first.")
+            return
+        stamp = self._playbook_stamp_now()
+        if not force and self._playbook_data is not None and stamp == self._playbook_stamp:
+            return
+
+        boot_ast = ""
+        if not self._playbook_names_cached():
+            # Asks for qkl_boot.ast on the main thread if it can't find it (same
+            # prompt as Player Type Fit); cancelling just means IDs without names.
+            boot_ast = self._find_boot_ast("Playbooks", "playbook, formation, set and play names")
+        db_path, teams = self.model.db_path, list(self.model.team)
+
+        def work():
+            if boot_ast:
+                self._extract_playbook_names(boot_ast)
+            game = {os.path.splitext(f)[0]: read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES}
+            tmp = tempfile.mkdtemp(prefix="hc09_playbooks_")
+            try:
+                self.model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", ",".join(PLAYBOOK_SAVE_TABLES)])
+                save = {t.lower(): read_csv_dicts(os.path.join(tmp, t.lower() + ".csv")) for t in PLAYBOOK_SAVE_TABLES}
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            return PlaybookData(game, save, teams), stamp
+
+        def done(result):
+            self._playbook_data, self._playbook_stamp = result
+            if boot_ast:
+                self.ui_prefs["boot_ast_path"] = boot_ast
+                save_ui_prefs(self.ui_prefs)
+            self._fill_playbook_books()
+
+        self.run_in_thread_with_busy("Loading playbooks...", work, done, error_title="Playbooks")
+
+    def _extract_playbook_names(self, boot_ast):
+        """Pull the playbook / formation / set / play name tables out of the
+        user's own qkl_boot.ast into a local cache (worker thread - bridge only).
+        PLAB is asked for separately: it exists in two entries but only one has
+        the PBGI playbook-ID column and actual rows."""
+        out = PLAYBOOK_CACHE_DIR
+        self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PLAB",
+                               "--require-fields", "PBGI,BNAM", "--require-rows", "--out-dir", out])
+        self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PBFM,SETL,PBPL",
+                               "--out-dir", out])
+
+    def _fill_playbook_books(self):
+        data = self._playbook_data
+        tree = self.tree_pb_books
+        keep = tree.selection()
+        for iid in tree.get_children():
+            tree.delete(iid)
+        for bokl, name, side, ident, plays, used in data.books():
+            tree.insert("", tk.END, iid=bokl, values=(name, side, ident, plays, used))
+        notes = [] if data.have_game_names else ["no game names - showing IDs only"]
+        self.lbl_playbook_status.configure(
+            text=f"{len(tree.get_children())} playbooks, {len(data.play_info)} named plays" + (" - " + notes[0] if notes else ""))
+        self._finish_tree_refresh(tree, keep)
+        if not tree.selection() and tree.get_children():
+            tree.selection_set(tree.get_children()[0])
+        elif not tree.get_children():
+            self._on_playbook_book_selected()
+
+    def _on_playbook_book_selected(self):
+        tree = self.tree_pb_forms
+        for iid in tree.get_children():
+            tree.delete(iid)
+        sel = self.tree_pb_books.selection()
+        if not sel or self._playbook_data is None:
+            self._fill_playbook_plays()
+            return
+        bokl = sel[0]
+        tree.insert("", tk.END, iid="__all__", values=("(all formations)", "", ""))
+        for iid, name, ident, n_sets in self._playbook_data.formations_for(bokl):
+            tree.insert("", tk.END, iid=iid, values=(name, ident, n_sets))
+        tree.selection_set("__all__")
+        self._fill_playbook_plays()
+
+    def _on_playbook_form_selected(self):
+        self._fill_playbook_plays()
+
+    def _fill_playbook_plays(self):
+        tree = self.tree_pb_plays
+        for iid in tree.get_children():
+            tree.delete(iid)
+        book = self.tree_pb_books.selection()
+        if not book or self._playbook_data is None:
+            return
+        form = self.tree_pb_forms.selection()
+        pbfm = None if (not form or form[0] == "__all__") else form[0]
+        seen = set()
+        for iid, play, setname, pltp, setl, plyl in self._playbook_data.plays_for(book[0], pbfm):
+            if iid in seen:
+                continue
+            seen.add(iid)
+            tree.insert("", tk.END, iid=iid, values=(play, setname, pltp, setl, plyl))
+        self._finish_tree_refresh(tree)
+
+    def on_playbook_search(self):
+        if self._playbook_data is None:
+            self.refresh_playbooks()
+            if self._playbook_data is None:
+                return
+        hits = self._playbook_data.search(self.playbook_search_var.get())
+        tree = self.tree_pb_found
+        for iid in tree.get_children():
+            tree.delete(iid)
+        self._playbook_hits = {}
+        for iid, name, setname, pltp, setl, plyl, n, books in hits[:500]:
+            self._playbook_hits[iid] = books
+            tree.insert("", tk.END, iid=iid, values=(name, setname, pltp, setl, plyl, n))
+        self._finish_tree_refresh(tree)
+        shown = len(tree.get_children())
+        self.lbl_playbook_hit.configure(
+            text=f"{len(hits)} match(es)" + (f", showing first {shown}" if len(hits) > shown else "")
+            if self.playbook_search_var.get().strip() else "")
+
+    def on_playbook_search_clear(self):
+        self.playbook_search_var.set("")
+        for iid in self.tree_pb_found.get_children():
+            self.tree_pb_found.delete(iid)
+        self._playbook_hits = {}
+        self.lbl_playbook_hit.configure(text="")
+
+    def _on_playbook_found_selected(self):
+        sel = self.tree_pb_found.selection()
+        if not sel or self._playbook_data is None:
+            return
+        books = self._playbook_hits.get(sel[0], [])
+        names = [self._playbook_data.book_label(b) for b in books]
+        shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+        self.lbl_playbook_hit.configure(text=f"In: {shown}" if names else "In no playbook in this save")
+
+    def _on_playbook_found_open(self):
+        sel = self.tree_pb_found.selection()
+        books = self._playbook_hits.get(sel[0], []) if sel else []
+        if books and self.tree_pb_books.exists(books[0]):
+            self.tree_pb_books.selection_set(books[0])
+            self.tree_pb_books.see(books[0])
 
     # ---------- Staff Tabs (Trainer / Coach / GM) ----------
     def _build_staff_team_filter(self, parent):
@@ -5091,7 +5488,7 @@ class App(tk.Tk):
             return
         PlayerTypeFitDialog(self, self.model)
 
-    def _find_boot_ast(self):
+    def _find_boot_ast(self, feature="Player Type Fit", what="player archetypes"):
         saved = self.ui_prefs.get("boot_ast_path") or ""
         if saved and os.path.isfile(saved):
             return saved
@@ -5101,8 +5498,8 @@ class App(tk.Tk):
             if os.path.isfile(sibling):
                 return sibling
         messagebox.showinfo(
-            "Player Type Fit needs game data",
-            "This feature reads the game's player archetypes straight from your own game files.\n\n"
+            f"{feature} needs game data",
+            f"This feature reads the game's {what} straight from your own game files.\n\n"
             f"Next, locate {BOOT_AST_FILENAME} (inside the game's PS3_GAME/USRDIR folder). "
             "This is only needed once.",
         )
