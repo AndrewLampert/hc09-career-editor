@@ -3017,6 +3017,8 @@ class App(tk.Tk):
         # wide rows, which is what made those tabs slow to render/scroll -
         # defaulting to "my team only" cuts that by ~30x and is remembered.
         self.staff_filter_var = tk.StringVar(value=self.ui_prefs.get("staff_filter", "my_team"))
+        self.staff_layout_var = tk.StringVar(value=self.ui_prefs.get("staff_layout", "vertical"))
+        self._vviews = {}  # id(horizontal staff tree) -> its vertical view widgets
 
         self.motivator_state = load_motivator_state()
         # Boosts applied since the last successful Save. Kept separate from
@@ -3879,6 +3881,20 @@ class App(tk.Tk):
             frm, text="All Teams", variable=self.staff_filter_var, value="all_teams",
             command=self.on_staff_filter_changed,
         ).pack(side="left", padx=(6, 0))
+        # Layout gets its own row just under the toolbar: on the Coach tab the
+        # toolbar is already full width, so anything added to it got cut off.
+        lay = ttk.Frame(parent.master)
+        lay.pack(fill="x", padx=10, after=parent)
+        ttk.Label(lay, text="Layout:").pack(side="left", padx=(0, 4))
+        ttk.Radiobutton(
+            lay, text="Vertical", variable=self.staff_layout_var, value="vertical",
+            command=self.on_staff_layout_changed,
+        ).pack(side="left")
+        ttk.Radiobutton(
+            lay, text="Horizontal", variable=self.staff_layout_var, value="horizontal",
+            command=self.on_staff_layout_changed,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Label(lay, text="(vertical: double-click a section heading to collapse or expand it)", foreground="gray").pack(side="left", padx=(16, 0))
 
     def _build_trainer_tab(self):
         root = ttk.Frame(self.notebook)
@@ -3905,11 +3921,13 @@ class App(tk.Tk):
         _lbl_help.pack(fill="x", pady=(6, 0))
         self._help_labels.append(_lbl_help)
 
-        self.tree_trainer = ttk.Treeview(root, show="headings", height=10)
-        self.tree_trainer.pack(fill="both", expand=True, padx=10, pady=(0, 0))
-        xscroll_trainer = ttk.Scrollbar(root, orient="horizontal", command=self.tree_trainer.xview)
-        xscroll_trainer.pack(fill="x", padx=10, pady=(0, 6))
+        hframe = self._begin_staff_table_area(root)
+        self.tree_trainer = ttk.Treeview(hframe, show="headings", height=10)
+        self.tree_trainer.pack(fill="both", expand=True)
+        xscroll_trainer = ttk.Scrollbar(hframe, orient="horizontal", command=self.tree_trainer.xview)
+        xscroll_trainer.pack(fill="x", pady=(0, 6))
         self.tree_trainer.configure(xscrollcommand=xscroll_trainer.set)
+        self._finish_staff_table_area(hframe, self.tree_trainer, "trainer")
 
         # Bottom editor for SKPT
         btm = ttk.Frame(root)
@@ -3919,7 +3937,7 @@ class App(tk.Tk):
         self.ent_trainer_skpt.pack(side="left", padx=(6, 8))
         ttk.Button(btm, text="Set to Max", command=self.set_trainer_skpt_to_max).pack(side="left", padx=4)
         ttk.Button(btm, text="Apply SKPT", command=self._apply_trainer_skpt).pack(side="left")
-        self.tree_trainer.bind("<<TreeviewSelect>>", lambda e: self._on_trainer_select())
+        self.tree_trainer.bind("<<TreeviewSelect>>", lambda e: self._on_trainer_select(), add="+")
         self.tree_trainer.bind("<Double-1>", lambda e: self._on_tree_double_click(e, self.tree_trainer))
 
     def _build_coach_tab(self):
@@ -3962,11 +3980,13 @@ class App(tk.Tk):
         _lbl_help.pack(fill="x", pady=(6, 0))
         self._help_labels.append(_lbl_help)
 
-        self.tree_coach = ttk.Treeview(root, show="headings", height=10)
-        self.tree_coach.pack(fill="both", expand=True, padx=10, pady=(0, 0))
-        xscroll_coach = ttk.Scrollbar(root, orient="horizontal", command=self.tree_coach.xview)
-        xscroll_coach.pack(fill="x", padx=10, pady=(0, 6))
+        hframe = self._begin_staff_table_area(root)
+        self.tree_coach = ttk.Treeview(hframe, show="headings", height=10)
+        self.tree_coach.pack(fill="both", expand=True)
+        xscroll_coach = ttk.Scrollbar(hframe, orient="horizontal", command=self.tree_coach.xview)
+        xscroll_coach.pack(fill="x", pady=(0, 6))
         self.tree_coach.configure(xscrollcommand=xscroll_coach.set)
+        self._finish_staff_table_area(hframe, self.tree_coach, "coach")
 
         # Bottom editor for SKPT
         btm = ttk.Frame(root)
@@ -3976,7 +3996,7 @@ class App(tk.Tk):
         self.ent_coach_skpt.pack(side="left", padx=(6, 8))
         ttk.Button(btm, text="Set to Max", command=self.set_coach_skpt_to_max).pack(side="left", padx=4)
         ttk.Button(btm, text="Apply SKPT", command=self._apply_coach_skpt).pack(side="left")
-        self.tree_coach.bind("<<TreeviewSelect>>", lambda e: self._on_coach_select())
+        self.tree_coach.bind("<<TreeviewSelect>>", lambda e: self._on_coach_select(), add="+")
         self.tree_coach.bind("<Double-1>", lambda e: self._on_tree_double_click(e, self.tree_coach))
 
     def _build_gm_tab(self):
@@ -4003,11 +4023,13 @@ class App(tk.Tk):
         _lbl_help.pack(fill="x", pady=(6, 0))
         self._help_labels.append(_lbl_help)
 
-        self.tree_gm = ttk.Treeview(root, show="headings", height=10)
-        self.tree_gm.pack(fill="both", expand=True, padx=10, pady=(0, 0))
-        xscroll_gm = ttk.Scrollbar(root, orient="horizontal", command=self.tree_gm.xview)
-        xscroll_gm.pack(fill="x", padx=10, pady=(0, 6))
+        hframe = self._begin_staff_table_area(root)
+        self.tree_gm = ttk.Treeview(hframe, show="headings", height=10)
+        self.tree_gm.pack(fill="both", expand=True)
+        xscroll_gm = ttk.Scrollbar(hframe, orient="horizontal", command=self.tree_gm.xview)
+        xscroll_gm.pack(fill="x", pady=(0, 6))
         self.tree_gm.configure(xscrollcommand=xscroll_gm.set)
+        self._finish_staff_table_area(hframe, self.tree_gm, "gm")
 
         # Bottom editor for SKPT
         btm = ttk.Frame(root)
@@ -4017,7 +4039,7 @@ class App(tk.Tk):
         self.ent_gm_skpt.pack(side="left", padx=(6, 8))
         ttk.Button(btm, text="Set to Max", command=self.set_gm_skpt_to_max).pack(side="left", padx=4)
         ttk.Button(btm, text="Apply SKPT", command=self._apply_gm_skpt).pack(side="left")
-        self.tree_gm.bind("<<TreeviewSelect>>", lambda e: self._on_gm_select())
+        self.tree_gm.bind("<<TreeviewSelect>>", lambda e: self._on_gm_select(), add="+")
         self.tree_gm.bind("<Double-1>", lambda e: self._on_tree_double_click(e, self.tree_gm))
 
     # ---------- Load / Save ----------
@@ -5814,6 +5836,7 @@ class App(tk.Tk):
         reverse = bool(cur and cur[0] == col and not cur[1])
         self._tree_sort_state[id(tree)] = (col, reverse)
         self._apply_tree_sort(tree)
+        self._sync_vertical(tree)
 
     def _apply_tree_sort(self, tree):
         state = self._tree_sort_state.get(id(tree))
@@ -5840,6 +5863,7 @@ class App(tk.Tk):
         keep = [iid for iid in prev_selection if tree.exists(iid)]
         if keep:
             tree.selection_set(keep)
+        self._sync_vertical(tree)
 
     def _on_tree_double_click(self, event, tree: ttk.Treeview):
         # Identify clicked row/column
@@ -5858,6 +5882,207 @@ class App(tk.Tk):
         if col_idx < 0 or col_idx >= len(cols):
             return
         colname = cols[col_idx]
+        bbox = tree.bbox(rowid, column=col)
+        if not bbox:
+            return
+        self._edit_staff_cell(tree, rowid, colname, tree, bbox)
+
+    # ---------- Vertical layout for the Trainer / Coach / GM tabs ----------
+    # The horizontal Treeview stays the single source of truth (selection, sort,
+    # the SKPT box, "Max Selected ...", Personality... all keep working off it);
+    # when the layout is Vertical it is simply not shown, and a second Treeview
+    # draws the same data turned on its side - one column per coach/GM/trainer,
+    # one row per stat - so reaching e.g. a coach's WR development means
+    # scrolling down a list, like the in-game staff screen, instead of across
+    # 80 columns.
+    STAFF_IDENTITY_COLS = ("TGID", "CFNM", "CLNM")
+
+    def _begin_staff_table_area(self, root):
+        area = ttk.Frame(root)
+        area.pack(fill="both", expand=True, padx=10)
+        hframe = ttk.Frame(area)
+        hframe.pack(fill="both", expand=True)
+        return hframe
+
+    def _finish_staff_table_area(self, hframe, tree, kind):
+        area = hframe.master
+        vframe = ttk.Frame(area)
+        vtree = ttk.Treeview(vframe, show="headings", selectmode="none", height=10)
+        yscroll = ttk.Scrollbar(vframe, orient="vertical", command=vtree.yview)
+        xscroll = ttk.Scrollbar(vframe, orient="horizontal", command=vtree.xview)
+        vtree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        xscroll.pack(side="bottom", fill="x", pady=(0, 6))
+        yscroll.pack(side="right", fill="y")
+        vtree.pack(side="left", fill="both", expand=True)
+        view = {"kind": kind, "tree": tree, "hframe": hframe, "vframe": vframe, "vtree": vtree,
+                "collapsed": set(), "sections": {}}
+        self._vviews[id(tree)] = view
+        vtree.bind("<Button-1>", lambda e, v=view: self._vertical_click(v, e))
+        vtree.bind("<Double-1>", lambda e, v=view: self._vertical_double_click(v, e))
+        tree.bind("<<TreeviewSelect>>", lambda e, t=tree: self._refresh_vertical_headings(t), add="+")
+        self._show_staff_layout(view)
+
+    def _show_staff_layout(self, view):
+        if self.staff_layout_var.get() == "vertical":
+            view["hframe"].pack_forget()
+            view["vframe"].pack(fill="both", expand=True)
+            self._sync_vertical(view["tree"])
+        else:
+            view["vframe"].pack_forget()
+            view["hframe"].pack(fill="both", expand=True)
+
+    def on_staff_layout_changed(self):
+        self.ui_prefs["staff_layout"] = self.staff_layout_var.get()
+        save_ui_prefs(self.ui_prefs)
+        for view in self._vviews.values():
+            self._show_staff_layout(view)
+
+    def _staff_field_section(self, kind, field):
+        """Section title a field is listed under in the vertical layout (None =
+        no section headings for this table)."""
+        if kind == "coach":
+            parsed = parse_dev_column(field)
+            return f"{COACH_DEV_CATEGORIES[parsed[0]][2]} Development" if parsed else "Skills"
+        if kind == "gm":
+            if parse_pe_column(field) is not None:
+                return "Potential Evaluation"
+            if parse_rs_column(field) is not None:
+                return "Rookie Scouting"
+            return "Skills"
+        return None
+
+    def _vertical_heading(self, view, iid, selected):
+        tree, kind = view["tree"], view["kind"]
+        cols = tree["columns"]
+        tid = tree.set(iid, "TGID") if "TGID" in cols else ""
+        nick = tid.split(": ", 1)[-1].split(" (")[0] if tid else "?"
+        if kind == "coach":
+            pos = tree.set(iid, "COPS") if "COPS" in cols else ""
+            last = tree.set(iid, "CLNM") if "CLNM" in cols else ""
+            who = f"{pos} {last}".strip()
+            text = who if self.staff_filter_var.get() == "my_team" else f"{nick}: {who}"
+        else:
+            text = nick
+        return ("\u25b6 " if selected else "") + text
+
+    def _refresh_vertical_headings(self, tree):
+        view = self._vviews.get(id(tree))
+        if not view or self.staff_layout_var.get() != "vertical":
+            return
+        sel = set(tree.selection())
+        vtree = view["vtree"]
+        for col in vtree["columns"][1:]:
+            iid = col[1:]
+            if tree.exists(iid):
+                vtree.heading(col, text=self._vertical_heading(view, iid, iid in sel))
+
+    def _sync_vertical(self, tree):
+        """Redraw the vertical view from the horizontal table's current rows
+        (and current order, so sorting by a stat reorders the columns)."""
+        view = self._vviews.get(id(tree))
+        if not view or self.staff_layout_var.get() != "vertical":
+            return
+        vtree, kind = view["vtree"], view["kind"]
+        xpos, ypos = vtree.xview()[0], vtree.yview()[0]
+        for iid in vtree.get_children():
+            vtree.delete(iid)
+
+        iids = list(tree.get_children(""))
+        rec_cols = [f"r{iid}" for iid in iids]
+        vtree["columns"] = ["field"] + rec_cols
+        vtree.heading("field", text="Stat  (click a name to sort)", anchor="w")
+        vtree.column("field", width=230, anchor="w", stretch=False)
+        rec_width = 110 if (kind == "coach" and self.staff_filter_var.get() == "my_team") else 150
+        for col in rec_cols:
+            vtree.column(col, width=rec_width, anchor="center", stretch=False)
+        self._refresh_vertical_headings(tree)
+
+        pal = getattr(self, "_ui_palette", None)
+        vtree.tag_configure(
+            "section",
+            background=pal["header_bg"] if pal else "#d9d9d9",
+            foreground=pal["text"] if pal else "black",
+        )
+
+        sort = self._tree_sort_state.get(id(tree))
+        collapsed = view["collapsed"]
+        view["sections"] = {}
+        last_section = object()
+        n_sections = 0
+        for field in (c for c in tree["columns"] if c not in self.STAFF_IDENTITY_COLS):
+            section = self._staff_field_section(kind, field)
+            if section != last_section:
+                last_section = section
+                if section is not None:
+                    n_sections += 1
+                    sec_iid = f"__sec_{n_sections}"
+                    view["sections"][sec_iid] = section
+                    arrow = "\u25b8" if section in collapsed else "\u25be"
+                    vtree.insert("", tk.END, iid=sec_iid, tags=("section",),
+                                 values=[f"{arrow} {section}"] + [""] * len(rec_cols))
+            if section is not None and section in collapsed:
+                continue
+            label = STAFF_FIELD_LABELS.get(field, field)
+            if sort and sort[0] == field:
+                label += " \u25bc" if sort[1] else " \u25b2"
+            vtree.insert("", tk.END, iid=field, values=[label] + [tree.set(iid, field) for iid in iids])
+
+        vtree.xview_moveto(xpos)
+        vtree.yview_moveto(ypos)
+
+    def _vertical_cell_at(self, view, event):
+        vtree = view["vtree"]
+        if vtree.identify_region(event.x, event.y) != "cell":
+            return None
+        row = vtree.identify_row(event.y)
+        try:
+            k = int(vtree.identify_column(event.x).replace("#", "")) - 1
+        except ValueError:
+            return None
+        cols = list(vtree["columns"])
+        if not row or row.startswith("__sec_") or k < 0 or k >= len(cols):
+            return None
+        return row, k, cols
+
+    def _vertical_click(self, view, event):
+        hit = self._vertical_cell_at(view, event)
+        if not hit:
+            return
+        row, k, cols = hit
+        if k == 0:
+            self._sort_tree(view["tree"], row)  # clicking a stat's name orders the columns by it
+        else:
+            view["tree"].selection_set(cols[k][1:])
+
+    def _vertical_double_click(self, view, event):
+        row = view["vtree"].identify_row(event.y)
+        if row in view["sections"]:
+            title = view["sections"][row]
+            if title in view["collapsed"]:
+                view["collapsed"].discard(title)
+            else:
+                view["collapsed"].add(title)
+            self._sync_vertical(view["tree"])
+            return
+        hit = self._vertical_cell_at(view, event)
+        if not hit:
+            return
+        row, k, cols = hit
+        if k == 0:
+            # Tk reports a quick second click on a stat name as a double-click
+            # instead of a click, so it has to sort here too or flipping the
+            # direction by clicking twice would silently do nothing.
+            self._vertical_click(view, event)
+            return
+        bbox = view["vtree"].bbox(row, column=cols[k])
+        if bbox:
+            self._edit_staff_cell(view["tree"], cols[k][1:], row, view["vtree"], bbox)
+
+    def _edit_staff_cell(self, tree, rowid, colname, host, bbox):
+        """Edit one staff stat. tree is always the real (horizontal) staff table,
+        rowid is the record's iid in it (= index into the model list) and colname
+        the field; host/bbox say where on screen to put the editor, so the same
+        code serves both the horizontal table and the vertical layout."""
         is_pe_column = tree is self.tree_gm and parse_pe_column(colname) is not None
         is_rs_column = tree is self.tree_gm and parse_rs_column(colname) is not None
         is_dev_column = tree is self.tree_coach and parse_dev_column(colname) is not None
@@ -5869,46 +6094,38 @@ class App(tk.Tk):
         if not is_pe_column and not is_rs_column and not is_dev_column and not is_cops_column and colname not in STAFF_NUMERIC_FIELDS:
             return
 
-        bbox = tree.bbox(rowid, column=col)
-        if not bbox:
-            return
         x, y, w, h = bbox
 
         if is_cops_column:
-            # Dropdown of position labels rather than a raw 0-10 number field -
-            # the tree displays the mapped label (e.g. "DC"), so editing should
-            # work in those same terms instead of requiring the user to know
-            # the underlying code.
+            # Pop-up menu of position labels rather than a raw 0-10 number field -
+            # the table shows the mapped label (e.g. "DC"), so editing works in
+            # those same terms. (A Combobox was tried first, but it loses focus
+            # the moment its list opens, which cancelled the edit.)
             try:
                 idx = int(rowid)
             except Exception:
                 return
-            label_to_code = {v: k for k, v in COACH_POSITION_LABELS.items()}
-            combo = ttk.Combobox(tree, state="readonly", values=list(COACH_POSITION_LABELS.values()))
-            combo.place(x=x, y=y, width=w, height=h)
             cur_code = (self.model.coaches[idx].get("COPS", "") or "").strip()
-            combo.set(COACH_POSITION_LABELS.get(cur_code, cur_code))
-            combo.focus_set()
+            chosen = tk.StringVar(value=cur_code)
 
-            def finish_cops(save: bool):
-                label = combo.get()
-                combo.destroy()
-                if not save:
-                    return
-                code = label_to_code.get(label)
-                if code is None:
+            def pick(code):
+                if code == cur_code:
                     return
                 self.model.coaches[idx]["COPS"] = code
                 self.mark_dirty()
                 self.refresh_coach()
 
-            combo.bind("<<ComboboxSelected>>", lambda e: finish_cops(True))
-            combo.bind("<Escape>", lambda e: finish_cops(False))
-            combo.bind("<FocusOut>", lambda e: finish_cops(True))
+            menu = tk.Menu(host, tearoff=0)
+            for code, label in COACH_POSITION_LABELS.items():
+                menu.add_radiobutton(label=label, variable=chosen, value=code, command=lambda c=code: pick(c))
+            try:
+                menu.tk_popup(host.winfo_rootx() + x, host.winfo_rooty() + y + h)
+            finally:
+                menu.grab_release()
             return
 
         # Create entry overlay
-        entry = ttk.Entry(tree)
+        entry = ttk.Entry(host)
         entry.place(x=x, y=y, width=w, height=h)
         # prefill with current value
         cur = tree.set(rowid, colname)
