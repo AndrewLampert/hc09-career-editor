@@ -2996,6 +2996,15 @@ class PlayerTypeFitDialog(tk.Toplevel):
 # offensive playbook by PLAB.BORD for all 32 teams. TEAM.TDPB (defense) does
 # NOT follow that scheme and its meaning is unknown, so defense usage is not
 # shown.
+#
+# Which playbook a team uses is stored on EVERY coach of that team: COCH.CPID
+# (offensive playbook) and COCH.CDID (defensive playbook), both a playbook's
+# PLAB.BGID within its side (BOFF). Confirmed for all 32 teams (valid IDs
+# everywhere; each team's coaches share the values, a few teams' coordinators
+# differ from their head coach). The HC09 XML config labels TEAM.TOPB / TDPB
+# "Offensive / Defense Playbook", but TDPB is really a small scheme-family
+# value (all the 3-4 teams share 1, the Tampa-2 teams share 3), so team usage is
+# read from the coordinators instead.
 # -----------------------------
 PLAYBOOK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
@@ -3016,23 +3025,97 @@ def team_nickname(tid):
     return name.split(" (")[0] if name else ""
 
 
+class PlaybookPickerDialog(tk.Toplevel):
+    """Pick one playbook by name from a filterable list. result = the chosen
+    (BGID, name, BOKL, BORD) row, or None if cancelled."""
+
+    def __init__(self, parent, title, rows, current_bgid=None):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title(title)
+        self.transient(parent)
+        self.resizable(True, True)
+        self.geometry("420x480")
+        self.result = None
+        self._rows = rows
+        self._shown = []
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=10, pady=(10, 4))
+        ttk.Label(top, text="Filter:").pack(side="left")
+        self.var = tk.StringVar()
+        ent = ttk.Entry(top, textvariable=self.var)
+        ent.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.var.trace_add("write", lambda *_: self._fill())
+
+        frm = ttk.Frame(self)
+        frm.pack(fill="both", expand=True, padx=10, pady=4)
+        self.lst = tk.Listbox(frm, exportselection=False)
+        sb = ttk.Scrollbar(frm, orient="vertical", command=self.lst.yview)
+        self.lst.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.lst.pack(side="left", fill="both", expand=True)
+        self.lst.bind("<Double-1>", lambda e: self._ok())
+
+        btn = ttk.Frame(self)
+        btn.pack(fill="x", padx=10, pady=(4, 10))
+        ttk.Button(btn, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Use this playbook", command=self._ok).pack(side="right", padx=(0, 8))
+        self._current = current_bgid
+        self._fill()
+        ent.focus_set()
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+
+    def _fill(self):
+        q = " ".join(self.var.get().lower().split())
+        self.lst.delete(0, tk.END)
+        self._shown = [r for r in self._rows if q in r[1].lower()]
+        for bgid, name, _bokl, _bord in self._shown:
+            self.lst.insert(tk.END, name + ("   (current)" if bgid == self._current else ""))
+        for i, r in enumerate(self._shown):
+            if r[0] == self._current:
+                self.lst.selection_set(i)
+                self.lst.see(i)
+                break
+        else:
+            if self._shown:
+                self.lst.selection_set(0)
+
+    def _ok(self):
+        sel = self.lst.curselection()
+        if sel:
+            self.result = self._shown[sel[0]]
+            self.destroy()
+
+
 class PlaybookData:
-    def __init__(self, game, save, teams):
+    def __init__(self, game, save, coaches):
         """game / save: {table name in lowercase: [row dicts]} - stock names
-        from the game files and the save's own tables. teams: TEAM rows."""
+        from the game files and the save's own tables. coaches: COCH rows."""
         self.have_game_names = bool(game.get("plab"))
         g = lambda t: game.get(t, [])
         v = lambda t: save.get(t, [])
 
         self.book_names = defaultdict(list)
         self.book_side = {}
+        self.bgid_book = {}                         # (BOFF "1"/"0", BGID) -> BOKL; save rows win over stock
+        self.bgid_info = {}                         # (BOFF, BGID) -> {"name", "bokl", "bord"}
         for r in g("plab") + v("plab"):
             bokl = (r.get("PBGI") or "").strip()
             name = (r.get("BNAM") or "").strip()
+            side = (r.get("BOFF") or "").strip()
+            bgid = (r.get("BGID") or "").strip()
+            if bokl and bgid:
+                self.bgid_book[(side, bgid)] = bokl
+                self.bgid_info[(side, bgid)] = {"name": name or f"Playbook {bokl}", "bokl": bokl, "bord": (r.get("BORD") or "").strip()}
             if bokl and name:
                 if name not in self.book_names[bokl]:
                     self.book_names[bokl].append(name)
-                self.book_side[bokl] = "Offense" if (r.get("BOFF") or "").strip() == "1" else "Defense"
+                self.book_side[bokl] = "Offense" if side == "1" else "Defense"
 
         self.formation_name = {(r.get("PBFM") or "").strip(): (r.get("name") or "").strip() for r in g("pbfm")}
         self.set_name = {}
@@ -3058,15 +3141,40 @@ class PlaybookData:
             self.play_books[(setl, plyl)].add(bokl)
             self.book_play_count[bokl] += 1
 
-        # Offense only: TEAM.TOPB is the playbook's PLAB.BORD (confirmed for all 32 teams).
-        bord_to_book = {(r.get("BORD") or "").strip(): (r.get("PBGI") or "").strip()
-                        for r in g("plab") if (r.get("BOFF") or "").strip() == "1"}
-        self.book_used_by = defaultdict(list)
-        for t in teams:
-            tid = (t.get("TGID") or "").strip()
-            book = bord_to_book.get((t.get("TOPB") or "").strip())
-            if book and team_nickname(tid) and tid in dict(SIGN_DEST_TEAMS):
-                self.book_used_by[book].append(team_nickname(tid))
+        self.set_usage(coaches)
+
+    def set_usage(self, coaches):
+        """Which real teams use each playbook, from the teams' coordinators
+        (OC = COPS 1 offense via CPID, DC = COPS 2 defense via CDID)."""
+        real = dict(SIGN_DEST_TEAMS)
+        self.offense_used_by = defaultdict(list)
+        self.defense_used_by = defaultdict(list)
+        for c in coaches:
+            tid = (c.get("TGID") or "").strip()
+            pos = (c.get("COPS") or "").strip()
+            if tid not in real or pos not in ("1", "2"):
+                continue
+            side, field, bucket = ("1", "CPID", self.offense_used_by) if pos == "1" else ("0", "CDID", self.defense_used_by)
+            book = self.bgid_book.get((side, (c.get(field) or "").strip()))
+            if book and team_nickname(tid) not in bucket[book]:
+                bucket[book].append(team_nickname(tid))
+
+    def side_books(self, side):
+        """Every selectable playbook for one side ("1" offense, "0" defense),
+        as (BGID, name, BOKL, BORD), stock order."""
+        rows = [(bgid, i["name"], i["bokl"], i["bord"]) for (sd, bgid), i in self.bgid_info.items() if sd == side]
+        return sorted(rows, key=lambda r: (int(r[3]) if r[3].isdigit() else 999, int(r[0]) if r[0].isdigit() else 0))
+
+    def team_book(self, coaches, tid, side):
+        """The BGID and name of the playbook a team's coordinator uses (OC for
+        offense, DC for defense), or (None, '')."""
+        pos, field = ("1", "CPID") if side == "1" else ("2", "CDID")
+        for c in coaches:
+            if (c.get("TGID") or "").strip() == tid and (c.get("COPS") or "").strip() == pos:
+                bgid = (c.get(field) or "").strip()
+                info = self.bgid_info.get((side, bgid))
+                return bgid, (info["name"] if info else f"Playbook #{bgid}")
+        return None, ""
 
     # ---- labels
     def book_label(self, bokl):
@@ -3091,7 +3199,8 @@ class PlaybookData:
         rows = []
         for bokl in sorted(set(self.book_play_count) | set(self.book_formations), key=lambda b: int(b) if b.isdigit() else 0):
             rows.append((bokl, self.book_label(bokl), self.book_side.get(bokl, ""), bokl,
-                         self.book_play_count.get(bokl, 0), ", ".join(self.book_used_by.get(bokl, []))))
+                         self.book_play_count.get(bokl, 0), ", ".join(self.offense_used_by.get(bokl, [])),
+                         ", ".join(self.defense_used_by.get(bokl, []))))
         return rows
 
     def formations_for(self, bokl):
@@ -4042,17 +4151,39 @@ class App(tk.Tk):
         self.lbl_playbook_status.pack(side="left", padx=(8, 0))
 
         help_text = (
-            "Read-only for now: browse every playbook in the save with real play, set and formation names "
-            "(pulled from your own game files the first time, then cached). Use Find play to see a play's "
-            "codes (SETL / PLYL) and every playbook that contains it. Custom plays and playbooks you made "
-            "in-game are named from the save itself. Offense usage is shown for each playbook; defensive "
-            "playbook assignment isn't understood yet, so it isn't shown."
+            "Browse every playbook in the save with real play, set and formation names (pulled from your own "
+            "game files the first time, then cached). Use Find play to see a play's codes (SETL / PLYL) and every "
+            "playbook that contains it. Custom plays and playbooks you made in-game are named from the save "
+            "itself. The last two columns show which teams use each playbook (read from their coordinators), "
+            "and Team playbooks below lets you change a team's offense or defense by name. Editing the plays "
+            "inside a playbook isn't available yet."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
         lbl = tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray")
         lbl.pack(fill="x", pady=(2, 6))
         self._help_labels.append(lbl)
+
+        team = ttk.LabelFrame(root, text="Team playbooks")
+        team.pack(fill="x", padx=10, pady=(0, 6))
+        trow = ttk.Frame(team)
+        trow.pack(fill="x", padx=6, pady=6)
+        ttk.Label(trow, text="Team:").pack(side="left")
+        self._pb_team_names = [(tid, team_nickname(tid)) for tid, _ in SIGN_DEST_TEAMS]
+        self.pb_team_var = tk.StringVar()
+        self.cmb_pb_team = ttk.Combobox(trow, state="readonly", width=16, textvariable=self.pb_team_var,
+                                        values=[n for _t, n in self._pb_team_names])
+        self.cmb_pb_team.pack(side="left", padx=(6, 14))
+        self.cmb_pb_team.bind("<<ComboboxSelected>>", lambda e: self._refresh_pb_team())
+        self.lbl_pb_off = ttk.Label(trow, text="Offense: -")
+        self.lbl_pb_off.pack(side="left")
+        ttk.Button(trow, text="Change...", command=lambda: self.on_change_team_playbook("1")).pack(side="left", padx=(6, 18))
+        self.lbl_pb_def = ttk.Label(trow, text="Defense: -")
+        self.lbl_pb_def.pack(side="left")
+        ttk.Button(trow, text="Change...", command=lambda: self.on_change_team_playbook("0")).pack(side="left", padx=(6, 0))
+        ttk.Label(team, foreground="gray", wraplength=1000, justify="left",
+                  text="Changing a playbook sets it on every coach of the team (that's where the game keeps it), then use Save to File. "
+                       "Experimental: not yet confirmed in-game - test on a copy of your save.").pack(anchor="w", padx=8, pady=(0, 6))
 
         search = ttk.Frame(root)
         search.pack(fill="x", padx=10, pady=(0, 4))
@@ -4082,8 +4213,8 @@ class App(tk.Tk):
             parent.add(frm, weight=weight)
             return tree
 
-        self.tree_pb_books = make_tree(panes, [("name", "Playbook"), ("side", "Side"), ("id", "ID"), ("plays", "Plays"), ("used", "Offense of")],
-                                       [210, 62, 44, 48, 150], weight=3)
+        self.tree_pb_books = make_tree(panes, [("name", "Playbook"), ("side", "Side"), ("id", "ID"), ("plays", "Plays"), ("off", "Offense of"), ("def", "Defense of")],
+                                       [200, 62, 44, 48, 120, 120], weight=3)
         self.tree_pb_forms = make_tree(panes, [("name", "Formation"), ("id", "ID"), ("sets", "Sets")], [160, 50, 44], weight=2)
         self.tree_pb_plays = make_tree(panes, [("play", "Play"), ("set", "Set"), ("type", "Type"), ("setl", "SETL"), ("plyl", "PLYL")],
                                        [190, 130, 46, 50, 50], weight=3)
@@ -4138,7 +4269,7 @@ class App(tk.Tk):
             # Asks for qkl_boot.ast on the main thread if it can't find it (same
             # prompt as Player Type Fit); cancelling just means IDs without names.
             boot_ast = self._find_boot_ast("Playbooks", "playbook, formation, set and play names")
-        db_path, teams = self.model.db_path, list(self.model.team)
+        db_path, coaches = self.model.db_path, list(self.model.coaches)
 
         def work():
             if boot_ast:
@@ -4150,7 +4281,7 @@ class App(tk.Tk):
                 save = {t.lower(): read_csv_dicts(os.path.join(tmp, t.lower() + ".csv")) for t in PLAYBOOK_SAVE_TABLES}
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-            return PlaybookData(game, save, teams), stamp
+            return PlaybookData(game, save, coaches), stamp
 
         def done(result):
             self._playbook_data, self._playbook_stamp = result
@@ -4172,14 +4303,66 @@ class App(tk.Tk):
         self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PBFM,SETL,PBPL",
                                "--out-dir", out])
 
+    def _pb_selected_tid(self):
+        name = self.pb_team_var.get()
+        for tid, nick in self._pb_team_names:
+            if nick == name:
+                return tid
+        return ""
+
+    def _refresh_pb_team(self):
+        data = self._playbook_data
+        tid = self._pb_selected_tid()
+        if data is None or not tid:
+            self.lbl_pb_off.configure(text="Offense: -")
+            self.lbl_pb_def.configure(text="Defense: -")
+            return
+        _b, off = data.team_book(self.model.coaches, tid, "1")
+        _b, dfn = data.team_book(self.model.coaches, tid, "0")
+        self.lbl_pb_off.configure(text=f"Offense: {off or '-'}")
+        self.lbl_pb_def.configure(text=f"Defense: {dfn or '-'}")
+
+    def on_change_team_playbook(self, side):
+        data = self._playbook_data
+        tid = self._pb_selected_tid()
+        if data is None or not tid:
+            messagebox.showinfo("Playbooks", "Load the playbook data and pick a team first.")
+            return
+        team_rows = [c for c in self.model.coaches if (c.get("TGID") or "").strip() == tid]
+        field = "CPID" if side == "1" else "CDID"
+        if not team_rows or any(field not in c for c in team_rows):
+            messagebox.showwarning("Playbooks", f"This save has no {field} column on the coaches.")
+            return
+        current, _name = data.team_book(self.model.coaches, tid, side)
+        label = "offensive" if side == "1" else "defensive"
+        dlg = PlaybookPickerDialog(self, f"{team_nickname(tid)}: {label} playbook", data.side_books(side), current)
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+        bgid, name, _bokl, bord = dlg.result
+        if bgid == current:
+            return
+        for c in team_rows:
+            c[field] = bgid
+        if side == "1":
+            for t in self.model.team:
+                # TEAM.TOPB follows the offensive book's PLAB.BORD (matches the coordinators for 28 of 32 teams)
+                if (t.get("TGID") or "").strip() == tid and "TOPB" in t and bord.isdigit():
+                    t["TOPB"] = bord
+        self.mark_dirty()
+        data.set_usage(self.model.coaches)
+        self._fill_playbook_books()
+        self._refresh_pb_team()
+        self.lbl_playbook_status.configure(text=f"{team_nickname(tid)} {label} playbook set to {name} - Save to File to keep it.")
+
     def _fill_playbook_books(self):
         data = self._playbook_data
         tree = self.tree_pb_books
         keep = tree.selection()
         for iid in tree.get_children():
             tree.delete(iid)
-        for bokl, name, side, ident, plays, used in data.books():
-            tree.insert("", tk.END, iid=bokl, values=(name, side, ident, plays, used))
+        for bokl, name, side, ident, plays, off, dfn in data.books():
+            tree.insert("", tk.END, iid=bokl, values=(name, side, ident, plays, off, dfn))
         notes = [] if data.have_game_names else ["no game names - showing IDs only"]
         self.lbl_playbook_status.configure(
             text=f"{len(tree.get_children())} playbooks, {len(data.play_info)} named plays" + (" - " + notes[0] if notes else ""))
@@ -4188,6 +4371,10 @@ class App(tk.Tk):
             tree.selection_set(tree.get_children()[0])
         elif not tree.get_children():
             self._on_playbook_book_selected()
+        if not self.pb_team_var.get():
+            cur = team_nickname(self.selected_team_id.get().strip())
+            self.pb_team_var.set(cur if cur else self._pb_team_names[0][1])
+        self._refresh_pb_team()
 
     def _on_playbook_book_selected(self):
         tree = self.tree_pb_forms
