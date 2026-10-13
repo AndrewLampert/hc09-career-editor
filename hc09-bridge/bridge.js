@@ -451,7 +451,29 @@ async function cmdPortraitList(args) {
 // in practice that event doesn't reliably fire once the very last entry has
 // been streamed, which would otherwise leave this hanging forever on a
 // genuine not-found case instead of failing with a clear error.
-async function findShippedTableEntry(astPath, tableName) {
+// An entry qualifies when it holds every requested table (with rows, if requireRows) and, if requireFields
+// is given, each of those tables has all of those fields. The field check
+// matters because two entries can carry a table of the same name with
+// different columns (e.g. PLAB, the playbook name list, exists in two entries
+// but only one has the PBGI playbook-ID column).
+async function entryHasTables(helper, tableNames, requireFields, requireRows) {
+    for (const name of tableNames) {
+        if (!helper.file.tables.some((t) => t.name === name)) return false;
+        if (requireFields.length) {
+            const have = helper.file[name].fieldDefinitions.map((f) => f.name);
+            if (!requireFields.every((f) => have.includes(f))) return false;
+        }
+        if (requireRows) {
+            // Some entries carry an empty copy of a table with the same columns
+            // (the real PLAB playbook list has 89 rows; another entry's has none).
+            await helper.file[name].readRecords();
+            if (!helper.file[name].records.length) return false;
+        }
+    }
+    return true;
+}
+
+async function findShippedTableEntry(astPath, tableNames, requireFields, requireRows) {
     const totalEntries = (await readToc(astPath)).length;
 
     return new Promise((resolve, reject) => {
@@ -480,13 +502,14 @@ async function findShippedTableEntry(astPath, tableName) {
             );
             fs.writeFileSync(tmpPath, rawBuf);
             return openDb(tmpPath)
-                .then((helper) => (helper.file.tables.some((t) => t.name === tableName) ? helper : null))
+                .then(async (helper) => ((await entryHasTables(helper, tableNames, requireFields, requireRows)) ? helper : null))
                 .catch(() => null)
                 .finally(() => {
                     try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
                 });
         };
 
+        const wanted = tableNames.join('+');
         parser.on('compressed-file', ({ stream, toc }) => {
             if (settled) { stream.resume(); return; }
             const index = toc.index;
@@ -499,7 +522,7 @@ async function findShippedTableEntry(astPath, tableName) {
                 if (helper) {
                     finish(null, { index, helper });
                 } else if (processedCount >= totalEntries) {
-                    finish(new Error(`table ${tableName} not found in any of ${totalEntries} entries of ${path.basename(astPath)}`));
+                    finish(new Error(`table ${wanted} not found in any of ${totalEntries} entries of ${path.basename(astPath)}`));
                 }
             }).catch((e) => finish(e));
         });
@@ -510,7 +533,7 @@ async function findShippedTableEntry(astPath, tableName) {
             // ever disagree (e.g. a differently-structured archive).
             pending.finally(() => {
                 if (!settled) {
-                    finish(new Error(`table ${tableName} not found in any entry of ${path.basename(astPath)}`));
+                    finish(new Error(`table ${wanted} not found in any entry of ${path.basename(astPath)}`));
                 }
             });
         });
@@ -522,8 +545,13 @@ async function findShippedTableEntry(astPath, tableName) {
 async function cmdShippedTableExport(args) {
     const astPath = args.ast;
     const preferredIndex = args['top-index'] !== undefined ? parseInt(args['top-index'], 10) : undefined;
-    const tableName = args.table;
-    const outPath = args.out;
+    // --table NAME --out file.csv  (one table), or
+    // --tables A,B,C --out-dir DIR (several tables that live in the same entry; DIR/<name>.csv each)
+    const tableNames = String(args.tables || args.table).split(',').map((t) => t.trim()).filter(Boolean);
+    const requireFields = args['require-fields'] ? String(args['require-fields']).split(',') : [];
+    const requireRows = Boolean(args['require-rows']);
+    const outDir = args['out-dir'];
+    if (!outDir && tableNames.length !== 1) throw new Error('--out-dir is required when exporting more than one table');
 
     // Fast path: if the caller already knows the right index (e.g. the PS3
     // default of 46, or one remembered from a previous run on this install),
@@ -537,7 +565,7 @@ async function cmdShippedTableExport(args) {
             fs.writeFileSync(tmpPath, raw);
             try {
                 const h = await openDb(tmpPath);
-                if (h.file.tables.some((t) => t.name === tableName)) helper = h;
+                if (await entryHasTables(h, tableNames, requireFields, requireRows)) helper = h;
             } finally {
                 try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
             }
@@ -547,25 +575,31 @@ async function cmdShippedTableExport(args) {
     }
 
     if (!helper) {
-        const found = await findShippedTableEntry(astPath, tableName);
+        const found = await findShippedTableEntry(astPath, tableNames, requireFields, requireRows);
         index = found.index;
         helper = found.helper;
     }
 
-    const table = helper.file[tableName];
-    await table.readRecords();
-    const headers = table.fieldDefinitions.map((f) => f.name);
-    const rows = table.records.map((record) => {
-        const obj = {};
-        for (const h of headers) {
-            const field = record.fields[h];
-            obj[h] = field ? field.value : '';
-        }
-        return obj;
-    });
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    writeCsv(outPath, headers, rows);
-    console.log(JSON.stringify({ table: tableName, records: rows.length, out: outPath, entryIndex: index }));
+    const exported = [];
+    for (const tableName of tableNames) {
+        const table = helper.file[tableName];
+        await table.readRecords();
+        const headers = table.fieldDefinitions.map((f) => f.name);
+        const rows = table.records.map((record) => {
+            const obj = {};
+            for (const h of headers) {
+                const field = record.fields[h];
+                obj[h] = field ? field.value : '';
+            }
+            return obj;
+        });
+        const outPath = outDir ? path.join(outDir, tableName.toLowerCase() + '.csv') : args.out;
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        writeCsv(outPath, headers, rows);
+        exported.push({ table: tableName, records: rows.length, out: outPath });
+    }
+    const first = exported[0];
+    console.log(JSON.stringify({ table: first.table, records: first.records, out: first.out, exported, entryIndex: index }));
 }
 
 function parseArgs(argv) {
@@ -616,7 +650,7 @@ async function main() {
             console.error('  node bridge.js portrait-extract-archive --ast <path> --top-index <N> --out <path>');
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             console.error('  node bridge.js portrait-list --archive <path>');
-            console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> [--top-index <N>] --table <NAME> --out <csv>');
+            console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> [--top-index <N>] [--require-fields A,B] [--require-rows] (--table <NAME> --out <csv> | --tables A,B --out-dir <dir>)');
             process.exit(1);
         }
     } catch (err) {
