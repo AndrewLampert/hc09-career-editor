@@ -5362,7 +5362,7 @@ class App(tk.Tk):
             lay, text="Horizontal", variable=self.staff_layout_var, value="horizontal",
             command=self.on_staff_layout_changed,
         ).pack(side="left", padx=(6, 0))
-        ttk.Label(lay, text="(vertical: double-click a section heading to collapse or expand it)", foreground="gray").pack(side="left", padx=(16, 0))
+        ttk.Label(lay, text="(vertical: click a name at the top to select it; double-click a section heading to collapse or expand it)", foreground="gray").pack(side="left", padx=(16, 0))
 
     def _build_trainer_tab(self):
         root = ttk.Frame(self.notebook)
@@ -5419,6 +5419,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_coach).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Coach's Stats", command=self.on_max_selected_coach).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Personality...", command=self.on_open_coach_personality_editor).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Game Plan...", command=self.on_open_coach_game_plan).pack(side="left", padx=(8, 0))
 
         # Search controls for coach first/last name
         self.coach_search_var = tk.StringVar()
@@ -5464,7 +5465,6 @@ class App(tk.Tk):
         self.ent_coach_skpt.pack(side="left", padx=(6, 8))
         ttk.Button(btm, text="Set to Max", command=self.set_coach_skpt_to_max).pack(side="left", padx=4)
         ttk.Button(btm, text="Apply SKPT", command=self._apply_coach_skpt).pack(side="left")
-        ttk.Button(btm, text="Game Plan...", command=self.on_open_coach_game_plan).pack(side="right")
         self.tree_coach.bind("<<TreeviewSelect>>", lambda e: self._on_coach_select(), add="+")
         self.tree_coach.bind("<Double-1>", lambda e: self._on_tree_double_click(e, self.tree_coach))
 
@@ -7474,7 +7474,7 @@ class App(tk.Tk):
         iids = list(tree.get_children(""))
         rec_cols = [f"r{iid}" for iid in iids]
         vtree["columns"] = ["field"] + rec_cols
-        vtree.heading("field", text="Stat  (click a name to sort)", anchor="w")
+        vtree.heading("field", text="Stat  (click one to sort)", anchor="w")
         vtree.column("field", width=230, anchor="w", stretch=False)
         rec_width = 110 if (kind == "coach" and self.staff_filter_var.get() == "my_team") else 150
         for col in rec_cols:
@@ -7528,7 +7528,23 @@ class App(tk.Tk):
             return None
         return row, k, cols
 
+    def _vertical_heading_record(self, view, event):
+        """The record (iid in the real staff table) whose name heading was clicked, or None."""
+        vtree = view["vtree"]
+        if vtree.identify_region(event.x, event.y) != "heading":
+            return None
+        try:
+            k = int(vtree.identify_column(event.x).replace("#", "")) - 1
+        except ValueError:
+            return None
+        cols = list(vtree["columns"])
+        return cols[k][1:] if 1 <= k < len(cols) else None
+
     def _vertical_click(self, view, event):
+        rec = self._vertical_heading_record(view, event)
+        if rec is not None:
+            view["tree"].selection_set(rec)   # the name at the top selects that coach, like a cell under it
+            return
         hit = self._vertical_cell_at(view, event)
         if not hit:
             return
@@ -7539,6 +7555,9 @@ class App(tk.Tk):
             view["tree"].selection_set(cols[k][1:])
 
     def _vertical_double_click(self, view, event):
+        if self._vertical_heading_record(view, event) is not None:
+            self._vertical_click(view, event)   # a quick second click on a name still selects
+            return
         row = view["vtree"].identify_row(event.y)
         if row in view["sections"]:
             title = view["sections"][row]
