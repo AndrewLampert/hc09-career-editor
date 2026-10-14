@@ -20,8 +20,9 @@ export/import through HC09Editor required.
 - **Trainer / Coach / GM** - edit staff skills and development, or max out the selected
   person's stats. The default vertical layout shows one column per person: click a
   name at the top to select them, click a stat to sort by it. The Coach tab also edits
-  a coach's position, personality and **Game Plan** (offensive and defensive scheme,
-  position philosophies, who handles what - by name, not number).
+  a coach's position and personality, and a team's **Team Philosophy** - the data behind
+  the game's Team Philosophy screen (offensive and defensive scheme, no-huddle, playbook
+  control, position philosophies), by name rather than number.
 - **Playbooks** - browse every playbook with real play, set and formation names; find
   which playbooks contain a play; change a team's offensive or defensive playbook; and
   **add plays** to your team's playbook by copying a play, a whole set or a whole
@@ -31,11 +32,14 @@ export/import through HC09Editor required.
   (read-only: ranks players against the game's player types), the recent-saves list,
   and *Options* (modern UI, dark mode).
 
-**What has been checked in the game:** switching a team's playbook, and adding a single
-play or a whole formation to a playbook. **Not yet:** whether the AI calls added plays in
-a game, and flipping and special teams after adds. The Game Plan editor's value names
-come from a community field list ([docs/hc09_field_reference.md](docs/hc09_field_reference.md));
-what each setting does in the game is still being tested, so try it on a copy of your save.
+**What has been checked in the game:** switching a team's playbook, adding a single play
+or a whole formation to a playbook, and Team Philosophy (the playcall settings and the QB,
+CB, FS, SS, kicker and punter philosophies were written with the editor and read off the
+game's screen, and changed in game and read back). **Not yet:** whether the AI calls added
+plays in a game, flipping and special teams after adds, and the running back, receiver,
+tight end, line and linebacker philosophies. The names for what isn't checked come from a
+community field list ([docs/hc09_field_reference.md](docs/hc09_field_reference.md)) whose
+labels are sometimes wrong, so try changes on a copy of your save.
 
 ## How it works
 
