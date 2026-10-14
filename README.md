@@ -33,12 +33,13 @@ export/import through HC09Editor required.
   and *Options* (modern UI, dark mode).
 
 **What has been checked in the game:** switching a team's playbook, adding a single play
-or a whole formation to a playbook, and the Team Philosophy table (no-huddle, playbook
-control and offensive scheme read back what the game shows). **Not yet:** whether the AI
-calls added plays in a game, flipping and special teams after adds, and the other Team
-Philosophy names. Those come from a community field list
-([docs/hc09_field_reference.md](docs/hc09_field_reference.md)) whose labels are sometimes
-wrong, so try changes on a copy of your save.
+or a whole formation to a playbook, and Team Philosophy (the playcall settings and the QB,
+CB, FS, SS, kicker and punter philosophies were written with the editor and read off the
+game's screen, and changed in game and read back). **Not yet:** whether the AI calls added
+plays in a game, flipping and special teams after adds, and the running back, receiver,
+tight end, line and linebacker philosophies. The names for what isn't checked come from a
+community field list ([docs/hc09_field_reference.md](docs/hc09_field_reference.md)) whose
+labels are sometimes wrong, so try changes on a copy of your save.
 
 ## How it works
 

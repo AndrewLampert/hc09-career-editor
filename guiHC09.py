@@ -831,11 +831,15 @@ COACH_POSITION_LABELS = {
 # shows, stored per team in the TPHS table (the same field codes also appear on each
 # coach row, COCH, but that screen does not read those). Value names come from the
 # community HC09 config (docs/hc09_field_reference.md); the number is what is stored
-# in the save. CHECKED IN THE GAME'S Team Philosophy screen (changed in game, then
-# read back from the save): NHPP 0 Heavily / 1 Balanced / 2 Rarely, OPPP 0 Head Coach /
-# 1 Offensive Coordinator, OSPP 0 West Coast Normal / 3 Spread / 4 Power Running (the
-# config says "Speed" for 3 and "Power Run" for 4). Every other name is the config's
-# and has not been checked.
+# in the save. CHECKED IN THE GAME'S Team Philosophy screen, both ways (changed in
+# game and read back from the save; written by the editor and read off the screen):
+# NHPP 0 Heavily / 1 Balanced / 2 Rarely; OPPP 0 Head Coach / 1 Offensive Coordinator;
+# OSPP 0 West Coast Normal / 2 Vertical Passing / 3 Spread / 4 Power Running (the
+# config says "Speed" for 3); DSPP 0 3-4; DPPP 1 Defensive Coordinator; BZPP 0 Heavy;
+# CVPP 2 Zone; DMPP 0 Aggressive; QBPP 0 Mobile/Speed; CBPP 61 Man; KKPP 75 Power (the
+# game words the position ones in full, e.g. "Man Coverage/Ballhawk CB", "Big Foot/
+# Distance K"); FS 67, SS 74 and punter 79 match what the screen shows. The other names
+# in each list are the config's and have not been checked.
 COACH_PLAN_VALUES = {
     "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Spread", 4: "Power Running"},
     "OPPP": {0: "Head Coach", 1: "Offensive Coordinator"},
@@ -7247,9 +7251,9 @@ class App(tk.Tk):
         nick = team_nickname(tid) or f"Team {tid}"
         TeamPhilosophyDialog(
             self, self.model.tphs, idx, f"{nick} team philosophy", lambda: None,
-            note="This is the data behind the game's Team Philosophy screen. Checked in the game: no-huddle, "
-                 "playbook control (Head Coach or Offensive Coordinator) and offensive scheme. Other names come from a "
-                 "community list and haven't been checked - try changes on a copy of your save.")
+            note="This is the data behind the game's Team Philosophy screen. Checked against the game: the playcall "
+                 "settings and the QB, CB, FS, SS, kicker and punter philosophies (at least one value each). The other "
+                 "names come from a community list - try changes on a copy of your save.")
 
     def _apply_coach_skpt(self):
         sel = self.tree_coach.selection()

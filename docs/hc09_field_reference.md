@@ -30,13 +30,26 @@ Generated from the **HC09 Detailed Config.xml** (made by JHamilton9 in 2020 for 
 
 Changing the three playcall settings on the game's Team Philosophy screen and saving moved exactly three fields, in the **`TPHS`** table (34 rows, keyed by `TGID`). That table, not the coach rows, is what the screen reads: the same field codes also sit on each coach's `COCH` row, but editing those did not change the screen. (The config files the philosophy fields under a table it calls `TPHL` and names `TPHS` "Team Health"; in a real save the philosophy columns are in `TPHS`. `TPHL` has the same 111-column layout with lower-case names and was not examined.)
 
-| Field | In-game name | Checked values | Config says |
-|---|---|---|---|
-| `NHPP` | No Huddle Philosophy | 0 Heavily, 1 Balanced, 2 Rarely | same |
-| `OPPP` | Offensive Playbook Control | 0 Head Coach, 1 Offensive Coordinator | "Off Call Preference": 0 HC, 1 OC (same meaning, different words) |
-| `OSPP` | Offensive Scheme | 0 West Coast Normal, **3 Spread**, **4 Power Running** | 3 is "Speed" - **wrong**; 4 is "Power Run" (wording); 1 and 2 are still the config's names, unchecked |
+It was then checked the other way: values written with the editor and read off the screen after loading the career. Every value below showed the expected name.
 
-The editor's **Team Philosophy...** button (Coach tab) edits `TPHS`. Every other name in it is the config's and has not been checked.
+| Field | In-game name | Values checked | Notes |
+|---|---|---|---|
+| `NHPP` | No Huddle Philosophy | 0 Heavily, 1 Balanced, 2 Rarely | same as the config |
+| `OPPP` | Offensive Playbook Control | 0 Head Coach, 1 Offensive Coordinator | config: "Off Call Preference", 0 HC, 1 OC |
+| `OSPP` | Offensive Scheme | 0 West Coast Normal, 2 Vertical Passing, **3 Spread**, **4 Power Running** | config says 3 is "Speed" (**wrong**) and 4 "Power Run"; 1 (West Coast Heavy Pass) unchecked |
+| `DSPP` | Defensive Scheme | 0 3-4 | 1 (4-3) and 2 (4-6) unchecked |
+| `DPPP` | Defensive Playbook Control | 1 Defensive Coordinator | 0 should be Head Coach, not seen |
+| `BZPP` | Blitz Philosophy | 0 Heavy ("Blitz Heavy") | 1 Normal, 2 Light unchecked |
+| `CVPP` | Pass Coverage Philosophy | 2 Zone ("Zone Coverage") | 0 Man, 1 Cover 2 unchecked |
+| `DMPP` | Defining Moment Philosophy | 0 Aggressive | 1 Conservative, 2 Balanced unchecked |
+| `QBPP` | QB Philosophy | 0 "Mobile/Speed QB" | other QB values unchecked |
+| `CBPP` | Cornerback Philosophy | 61 "Man Coverage/Ballhawk CB" | config: "Man" |
+| `KKPP` | Kicker Philosophy | 75 "Big Foot/Distance K" | config: "Power" |
+| `FSPP`, `SsPP`, `KPPP` | FS / SS / Punter Philosophy | 67 "Centerfielder FS", 74 "Smart/Productive SS", 79 "Pinpoint Accuracy P" | seen as the saved values; config: Centerfielder, Smart, Accuracy |
+
+The game words the position philosophies in full ("... QB", "... CB", "... K"); the config's short names are the same options. The running back, fullback, receiver, tight end, line and linebacker philosophies were not checked.
+
+The editor's **Team Philosophy...** button (Coach tab) edits `TPHS`.
 
 The config has no name for 11 fields the editor already edits (`PLJM`, `SKTD`, `SKTM`, `SKNG`, `SKNM`, `TSIE`, `TSIM`, `TSRH`, `TSRM`, `TSFR`, `TSFM`); those come from the editor's own in-game testing.
 
@@ -70,7 +83,7 @@ The number in front of each label is the value stored in the save. Checked again
 - `GDPP` **G Phil**: 30 Size; 31 Run Block; 32 Pass Block; 33 Zone Block; 34 Balanced
 - `MLPP` **MLB Phil**: 55 Balanced; 56 Coverage; 57 Power; 58 Tackler; 59 Prototype
 - `OLPP` **OLB Phil**: 50 Balanced; 51 Cover 2; 52 Run Stopper; 53 3-4 Pass Rush; 54 Prototype
-- `OSPP` **Off Scheme**: 0 West Coast Normal; 1 West Coast Heavy Pass; 2 Vertical Passing; 3 Speed (the game shows 3 as Spread); 4 Power Run (the game shows 4 as Power Running)
+- `OSPP` **Off Scheme**: 0 West Coast Normal; 1 West Coast Heavy Pass; 2 Vertical Passing; 3 Speed (the game shows 3 as Spread); 4 Power Run (the game shows 4 as Power Running; 2 Vertical Passing checked)
 - `PNPs` **Club Title**: 11 GM; 12 Owner; 13 Trainer; 14 ; 15 
 - `QBPP` **QB Phil**: 0 Mobile/Speed; 1 Strong Arm/Tools; 2 Pure Passer; 3 Field General; 4 Balanced
 - `SsPP` **SS Phil**: 70 Balanced; 71 Coverage; 72 Prototype; 73 Run Support; 74 Smart
