@@ -3092,13 +3092,19 @@ class PlaybookCopyDialog(tk.Toplevel):
     before anything is changed; on_apply(plan) performs the change."""
 
     AUTO = "Same formation name as the source (add it if missing)"
+    OTHER = "Another playbook..."
 
-    def __init__(self, app, data, target, on_apply, preselect=None):
+    def __init__(self, app, data, target, on_apply, preselect=None, choices=()):
+        """target: the BOKL plays are added INTO first. choices: [(label, BOKL)] shown
+        in the 'Adding INTO' list (the chosen team's own playbooks), so the target can
+        be switched without leaving the dialog."""
         super().__init__(app)
         p = getattr(app, "_ui_palette", None)
         if p:
             self.configure(background=p["bg"])
         self.app, self.data, self.target, self.on_apply = app, data, target, on_apply
+        self._choices = list(choices)
+        self._target_labels = {}
         self.title(f"Add plays INTO {data.book_label(target)}")
         self.transient(app)
         self.geometry("860x640")
@@ -3107,12 +3113,20 @@ class PlaybookCopyDialog(tk.Toplevel):
         self._sources = []
         self._into_ids = {}
 
-        self.lbl_target = ttk.Label(self, font=("TkDefaultFont", 10, "bold"))
-        self.lbl_target.pack(anchor="w", padx=10, pady=(10, 2))
+        trow = ttk.Frame(self)
+        trow.pack(fill="x", padx=10, pady=(10, 2))
+        ttk.Label(trow, text="Adding INTO:", font=("TkDefaultFont", 10, "bold")).pack(side="left")
+        self.target_var = tk.StringVar()
+        self.cmb_target = ttk.Combobox(trow, state="readonly", width=58, textvariable=self.target_var)
+        self.cmb_target.pack(side="left", padx=(8, 10))
+        self.cmb_target.bind("<<ComboboxSelected>>", lambda e: self._on_target_choice())
+        self.lbl_target = ttk.Label(trow, font=("TkDefaultFont", 10, "bold"))
+        self.lbl_target.pack(side="left")
         self.lbl_shared = ttk.Label(self, foreground="#b9770e", wraplength=820, justify="left")
         self.lbl_shared.pack(anchor="w", padx=10, pady=(0, 2))
         ttk.Label(self, foreground="gray", wraplength=820, justify="left",
-                  text="Copies from another playbook INTO the one named above - that one is the only playbook that changes. "
+                  text="Plays are added INTO the playbook chosen in \"Adding INTO\" - it starts as your team's, and the list lets you "
+                       "switch to your defense or any other playbook. That is the only playbook that changes. "
                        "Step 1: pick the playbook to copy FROM. Step 2: pick a play, a set or a whole formation from it. "
                        "Step 3: say where new sets go, check the summary, then add."
                   ).pack(anchor="w", padx=10, pady=(0, 6))
@@ -3153,17 +3167,15 @@ class PlaybookCopyDialog(tk.Toplevel):
 
         opt = ttk.Frame(self)
         opt.pack(fill="x", padx=10, pady=(6, 0))
-        ttk.Label(opt, text=f"3. If a copied set is new to {data.book_label(target)}, put it under:", font=("TkDefaultFont", 9, "bold")).pack(side="left")
+        self.lbl_step3 = ttk.Label(opt, font=("TkDefaultFont", 9, "bold"))
+        self.lbl_step3.pack(side="left")
         self.into_var = tk.StringVar(value=self.AUTO)
         self.cmb_into = ttk.Combobox(opt, state="readonly", width=44, textvariable=self.into_var)
         self.cmb_into.pack(side="left", padx=(8, 0))
         self.cmb_into.bind("<<ComboboxSelected>>", lambda e: self._on_pick())
         self._fill_into()
-        ttk.Label(self, foreground="gray", wraplength=820, justify="left",
-                  text=f"Sets {data.book_label(target)} already has stay where they are (the copied plays just join them) - this choice only "
-                       "applies to sets it doesn't have yet. Leave it on the first option to use the formation with the same name; "
-                       "pick one of your own formations to put the new sets under that instead (e.g. a source's \"Shotgun\" sets under your \"Gun\")."
-                  ).pack(anchor="w", padx=10, pady=(2, 0))
+        self.lbl_hint = ttk.Label(self, foreground="gray", wraplength=820, justify="left")
+        self.lbl_hint.pack(anchor="w", padx=10, pady=(2, 0))
 
         self.lbl_summary = ttk.Label(self, wraplength=820, justify="left")
         self.lbl_summary.pack(fill="x", padx=10, pady=(8, 2))
@@ -3172,10 +3184,12 @@ class PlaybookCopyDialog(tk.Toplevel):
         btn = ttk.Frame(self)
         btn.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
-        self.btn_add = ttk.Button(btn, text=f"Add to {data.book_label(target)}", command=self._add, state="disabled")
+        self.btn_add = ttk.Button(btn, command=self._add, state="disabled")
         self.btn_add.pack(side="right", padx=(0, 8))
 
         self._update_target_label()
+        self._refresh_target_texts()
+        self._refresh_target_combo()
         self._fill_sources(select=preselect[0] if preselect else None)
         if preselect:
             self._select_play(preselect[1], preselect[2])
@@ -3193,12 +3207,67 @@ class PlaybookCopyDialog(tk.Toplevel):
             extra.append(f"Used by {'; '.join(users)}. " + ("Changes apply to every team using it. " if shared > 1 else ""))
         if len(names) > 1:
             extra.append(f"This is one playbook shared under several names ({' / '.join(names)}), so the change shows under all of them.")
-        self.lbl_target.configure(
-            text=f"Adding INTO:  {d.book_label(self.target)}   -   {d.counted_plays(self.target)} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+        self.lbl_target.configure(text=f"{d.counted_plays(self.target)} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
         if not d.side_of(self.target):
             extra.append("Can't tell whether this playbook is offense or defense, so copying into it is disabled.")
         if hasattr(self, "lbl_shared"):
             self.lbl_shared.configure(text=" ".join(extra))
+
+    def _refresh_target_texts(self):
+        """Everything that names the playbook being added INTO."""
+        name = self.data.book_label(self.target)
+        self.title(f"Add plays INTO {name}")
+        self.lbl_step3.configure(text=f"3. If a copied set is new to {name}, put it under:")
+        self.lbl_hint.configure(
+            text=f"Sets {name} already has stay where they are (the copied plays just join them) - this choice only "
+                 "applies to sets it doesn't have yet. Leave it on the first option to use the formation with the same name; "
+                 "pick one of your own formations to put the new sets under that instead (e.g. a source's \"Shotgun\" sets under your \"Gun\").")
+        self.btn_add.configure(text=f"Add to {name}")
+
+    def _refresh_target_combo(self):
+        """The 'Adding INTO' list: the team's playbooks, the current target if it came from
+        'Another playbook...', then that option itself."""
+        d = self.data
+        self._target_labels = {}
+        for label, bokl in self._choices:
+            self._target_labels.setdefault(label, bokl)
+        if self.target not in self._target_labels.values():
+            side = d.side_of(self.target)
+            self._target_labels[f"{d.book_label(self.target)}" + (f" ({side.lower()})" if side else "")] = self.target
+        current = next(label for label, bokl in self._target_labels.items() if bokl == self.target)
+        self.cmb_target.configure(values=list(self._target_labels) + [self.OTHER])
+        self.target_var.set(current)
+
+    def _on_target_choice(self):
+        label = self.target_var.get()
+        if label == self.OTHER:
+            d = self.data
+            rows = [(b, f"{name}  ({side.lower() if side else 'side unknown'})", b, "") for b, name, side, *_ in d.books()]
+            dlg = PlaybookPickerDialog(self, "Add plays INTO which playbook?", rows, self.target)
+            self.wait_window(dlg)
+            self.grab_set()
+            if dlg.result:
+                self._set_target(dlg.result[2])
+            else:
+                self._refresh_target_combo()
+            return
+        bokl = self._target_labels.get(label)
+        if bokl and bokl != self.target:
+            self._set_target(bokl)
+
+    def _set_target(self, bokl):
+        """Switch the playbook being added INTO; the FROM list, the pick and the summary start over."""
+        self.target = bokl
+        self._plan = None
+        self.lbl_done.configure(text="")
+        self.into_var.set(self.AUTO)
+        self._update_target_label()
+        self._refresh_target_texts()
+        self._fill_into()
+        self._fill_sources()
+        self._on_source()
+        self._on_pick()     # nothing is picked any more: clears the summary and disables Add
+        self._refresh_target_combo()
 
     def _fill_into(self):
         d = self.data
@@ -3726,6 +3795,11 @@ class PlaybookData:
                 info = self.bgid_info.get((side, bgid))
                 return bgid, (info["name"] if info else f"Playbook #{bgid}")
         return None, ""
+
+    def team_bokl(self, coaches, tid, side):
+        """The BOKL (playbook table key) a team's coordinator uses for one side, or None."""
+        bgid, _name = self.team_book(coaches, tid, side)
+        return self.bgid_book.get((side, bgid)) if bgid else None
 
     # ---- labels
     def book_label(self, bokl):
@@ -4692,6 +4766,7 @@ class App(tk.Tk):
         self.notebook.add(root, text="Playbooks")
         self._playbook_data = None
         self._playbook_stamp = None
+        self._pb_team_manual = False   # True once the tab's Team box was changed by hand
         self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
 
         top = ttk.Frame(root)
@@ -4704,8 +4779,8 @@ class App(tk.Tk):
         help_text = (
             "Browse playbooks with real play, set and formation names (read from your own game files, then cached). "
             "Find play shows a play's codes and every playbook that has it. Team playbooks changes a team's offense or "
-            "defense by name. Add plays copies plays, sets or formations from another playbook into the selected one "
-            "(200 per playbook; special teams don't count)."
+            "defense by name. Add plays copies plays, sets or formations from another playbook into your team's "
+            "(or any playbook you choose in the dialog; 200 per playbook, special teams don't count)."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -4723,7 +4798,7 @@ class App(tk.Tk):
         self.cmb_pb_team = ttk.Combobox(trow, state="readonly", width=16, textvariable=self.pb_team_var,
                                         values=[n for _t, n in self._pb_team_names])
         self.cmb_pb_team.pack(side="left", padx=(6, 14))
-        self.cmb_pb_team.bind("<<ComboboxSelected>>", lambda e: self._refresh_pb_team())
+        self.cmb_pb_team.bind("<<ComboboxSelected>>", lambda e: self._on_pb_team_chosen())
         self.lbl_pb_off = ttk.Label(trow, text="Offense: -")
         self.lbl_pb_off.pack(side="left")
         ttk.Button(trow, text="Change...", command=lambda: self.on_change_team_playbook("1")).pack(side="left", padx=(6, 18))
@@ -4742,7 +4817,7 @@ class App(tk.Tk):
         ent.bind("<Return>", lambda e: self.on_playbook_search())
         ttk.Button(search, text="Find", command=self.on_playbook_search).pack(side="left")
         ttk.Button(search, text="Clear", command=self.on_playbook_search_clear).pack(side="left", padx=(6, 0))
-        self.btn_pb_add_found = ttk.Button(search, text="Add found play to the selected playbook...", command=self.on_playbook_add_found)
+        self.btn_pb_add_found = ttk.Button(search, text="Add found play to my team's playbook...", command=self.on_playbook_add_found)
         self.btn_pb_add_found.pack(side="left", padx=(12, 0))
         self.lbl_playbook_hit = ttk.Label(search, text="", foreground="gray")
         self.lbl_playbook_hit.pack(side="left", padx=(12, 0))
@@ -4776,7 +4851,8 @@ class App(tk.Tk):
         res.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
         bar = ttk.Frame(root)
         bar.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
-        ttk.Button(bar, text="Add plays to the selected playbook...", command=lambda: self.on_playbook_add_plays()).pack(side="left")
+        self.btn_pb_add = ttk.Button(bar, text="Add plays to my team's playbook...", command=lambda: self.on_playbook_add_plays())
+        self.btn_pb_add.pack(side="left")
         self.lbl_pb_cap = ttk.Label(bar, text="", foreground="gray")
         self.lbl_pb_cap.pack(side="left", padx=(12, 0))
         panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
@@ -4800,6 +4876,7 @@ class App(tk.Tk):
         except Exception:
             return
         if current is self.tab_playbooks:
+            self._sync_pb_team()
             self.refresh_playbooks()
 
     def _playbook_stamp_now(self):
@@ -4870,9 +4947,29 @@ class App(tk.Tk):
                 return tid
         return ""
 
+    def _on_pb_team_chosen(self):
+        self._pb_team_manual = True
+        self._refresh_pb_team()
+
+    def _sync_pb_team(self):
+        """The tab's Team box follows the team chosen for this save (the one picked at load, or
+        switched to in the team list) until it is changed by hand here."""
+        names = [n for _t, n in self._pb_team_names]
+        if not self._pb_team_manual:
+            cur = team_nickname(self.selected_team_id.get().strip())
+            if cur in names:
+                self.pb_team_var.set(cur)
+        if not self.pb_team_var.get():
+            self.pb_team_var.set(names[0])
+        self._refresh_pb_team()
+
     def _refresh_pb_team(self):
         data = self._playbook_data
         tid = self._pb_selected_tid()
+        nick = team_nickname(tid) if tid else ""
+        add_to = f"the {nick} playbook" if nick else "my team's playbook"
+        self.btn_pb_add.configure(text=f"Add plays to {add_to}...")
+        self.btn_pb_add_found.configure(text=f"Add found play to {add_to}...")
         if data is None or not tid:
             self.lbl_pb_off.configure(text="Offense: -")
             self.lbl_pb_def.configure(text="Defense: -")
@@ -4931,10 +5028,7 @@ class App(tk.Tk):
             tree.selection_set(tree.get_children()[0])
         elif not tree.get_children():
             self._on_playbook_book_selected()
-        if not self.pb_team_var.get():
-            cur = team_nickname(self.selected_team_id.get().strip())
-            self.pb_team_var.set(cur if cur else self._pb_team_names[0][1])
-        self._refresh_pb_team()
+        self._sync_pb_team()
 
     def _playbook_data_is_stale(self):
         """True (after starting a reload) if the save was loaded again since the
@@ -4946,29 +5040,53 @@ class App(tk.Tk):
             return True
         return False
 
-    def on_playbook_add_plays(self, preselect=None):
-        data, sel = self._playbook_data, self.tree_pb_books.selection()
-        if data is None or not sel:
-            messagebox.showinfo("Playbooks", "Open the tab with a save loaded, then select the playbook to add plays to.")
+    def _playbook_target_choices(self, side="Offense"):
+        """Where plays are added INTO. The first choice is the playbook of the team chosen on
+        this tab (it starts as the team picked when the save was loaded) for the given side,
+        followed by that team's other side and the playbook selected in the table.
+        Returns ([(label, BOKL)], default BOKL or None)."""
+        data = self._playbook_data
+        tid = self._pb_selected_tid()
+        nick = team_nickname(tid) if tid else ""
+        choices = []
+        for sd, word in (("1", "Offense"), ("0", "Defense")):
+            bokl = data.team_bokl(self.model.coaches, tid, sd) if tid else None
+            if bokl and bokl not in [b for _l, b in choices]:
+                choices.append((f"{nick} {word.lower()}: {data.book_label(bokl)}", bokl))
+        sel = self.tree_pb_books.selection()
+        if sel and sel[0] not in [b for _l, b in choices]:
+            choices.append((f"Table selection: {data.book_label(sel[0])}", sel[0]))
+        default = next((b for _l, b in choices if data.side_of(b) == side), choices[0][1] if choices else None)
+        return choices, default
+
+    def on_playbook_add_plays(self, preselect=None, side="Offense"):
+        data = self._playbook_data
+        if data is None:
+            messagebox.showinfo("Playbooks", "Open the tab with a save loaded first.")
             return
         if self._playbook_data_is_stale():
             return
-        PlaybookCopyDialog(self, data, sel[0], self._apply_playbook_plan, preselect)
+        choices, target = self._playbook_target_choices(side)
+        if target is None:
+            messagebox.showinfo("Playbooks", "Pick a team (or select a playbook in the table) to add plays to.")
+            return
+        PlaybookCopyDialog(self, data, target, self._apply_playbook_plan, preselect, choices)
 
     def on_playbook_add_found(self):
-        data, book = self._playbook_data, self.tree_pb_books.selection()
-        found = self.tree_pb_found.selection()
-        if data is None or not book or not found:
-            messagebox.showinfo("Playbooks", "Search for a play, select it in Find results, and select the playbook to add it to.")
+        data, found = self._playbook_data, self.tree_pb_found.selection()
+        if data is None or not found:
+            messagebox.showinfo("Playbooks", "Search for a play and select it in Find results first.")
             return
-        target = book[0]
         setl, plyl = found[0].split(":")
-        side = data.side_of(target)
-        sources = [b for b in self._playbook_hits.get(found[0], []) if b != target and side and data.side_of(b) == side]
+        hits = self._playbook_hits.get(found[0], [])
+        side = next((data.side_of(b) for b in hits if data.side_of(b)), "Offense")
+        _choices, target = self._playbook_target_choices(side)
+        tside = data.side_of(target) if target else ""
+        sources = [b for b in hits if b != target and tside and data.side_of(b) == tside]
         if not sources:
             messagebox.showinfo("Playbooks", "No other playbook of the same side contains that play, so there is nothing to copy it from.")
             return
-        self.on_playbook_add_plays(preselect=(sources[0], setl, plyl))
+        self.on_playbook_add_plays(preselect=(sources[0], setl, plyl), side=side)
 
     def _apply_playbook_plan(self, plan):
         """Apply a copy plan to the in-memory playbook tables (validated; raises
@@ -4989,11 +5107,9 @@ class App(tk.Tk):
         if self._playbook_data is not None and sel:
             name = self._playbook_data.book_label(sel[0])
             self.lbl_pb_cap.configure(
-                text=f"Selected playbook: {name}  -  {self._playbook_data.counted_plays(sel[0])} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
-            self.btn_pb_add_found.configure(text=f"Add found play to {name}...")
+                text=f"Viewing: {name}  -  {self._playbook_data.counted_plays(sel[0])} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
         else:
             self.lbl_pb_cap.configure(text="")
-            self.btn_pb_add_found.configure(text="Add found play to the selected playbook...")
         tree = self.tree_pb_forms
         for iid in tree.get_children():
             tree.delete(iid)
@@ -5505,6 +5621,7 @@ class App(tk.Tk):
         txt = self.lst_teams.get(sel[0])
         tid = txt.split(":", 1)[0].strip()
         self.selected_team_id.set(tid)
+        self._pb_team_manual = False   # the Playbooks tab follows the newest team choice
         self.refresh_players_for_team()
 
         per_save = self.ui_prefs.setdefault("per_save", {})
