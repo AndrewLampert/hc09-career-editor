@@ -5419,6 +5419,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_coach).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Coach's Stats", command=self.on_max_selected_coach).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Personality...", command=self.on_open_coach_personality_editor).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Game Plan...", command=self.on_open_coach_game_plan).pack(side="left", padx=(8, 0))
 
         # Search controls for coach first/last name
         self.coach_search_var = tk.StringVar()
@@ -5464,7 +5465,6 @@ class App(tk.Tk):
         self.ent_coach_skpt.pack(side="left", padx=(6, 8))
         ttk.Button(btm, text="Set to Max", command=self.set_coach_skpt_to_max).pack(side="left", padx=4)
         ttk.Button(btm, text="Apply SKPT", command=self._apply_coach_skpt).pack(side="left")
-        ttk.Button(btm, text="Game Plan...", command=self.on_open_coach_game_plan).pack(side="right")
         self.tree_coach.bind("<<TreeviewSelect>>", lambda e: self._on_coach_select(), add="+")
         self.tree_coach.bind("<Double-1>", lambda e: self._on_tree_double_click(e, self.tree_coach))
 
