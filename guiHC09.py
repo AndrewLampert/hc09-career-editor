@@ -673,7 +673,8 @@ TRAINER_MAXABLE_SKILL_FIELDS = ["TSIE", "TSIM", "TSRH", "TSRM", "TSFR", "TSFM"]
 # current value (see STAFF_NUMERIC_FIELDS note above on their unverified status).
 COACH_MAXABLE_SKILL_FIELDS = ["SKPC", "SKPX", "SKPA", "SKPF", "SKST", "SKSM", "SKCR", "SKCM", "POVS"]
 
-# =============================================================================
+# ======================================================================
+
 # COACH SKILL INVESTIGATION LOG - ALL 4 NAMED SKILLS NOW CONFIRMED
 # =============================================================================
 # The COCH table has ~200 fields and no obvious names for a coach's skills -
@@ -823,6 +824,72 @@ COACH_POSITION_LABELS = {
     "0": "HC", "1": "OC", "2": "DC", "3": "STC", "4": "QBC", "5": "RBC",
     "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
 }
+
+# Coach game plan: the schemes, tendencies and philosophies stored on each coach
+# row (COCH), with the names the community HC09 config gives their values (see
+# docs/hc09_field_reference.md). The number is what is stored in the save; checked
+# against a real save, every stored value of these fields is in its list. What
+# each setting does in-game has NOT been tested - they are valid options, not
+# verified effects.
+COACH_PLAN_VALUES = {
+    "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Speed", 4: "Power Run"},
+    "OPPP": {0: "HC", 1: "OC"},
+    "NHPP": {0: "Heavily", 1: "Balanced", 2: "Rarely"},
+    "DSPP": {0: "3-4", 1: "4-3", 2: "4-6"},
+    "CDTY": {5: "3-4", 95: "4-3"},
+    "DPPP": {0: "HC", 1: "DC"},
+    "BZPP": {0: "Heavy", 1: "Normal", 2: "Light"},
+    "CVPP": {0: "Man", 1: "Cover 2", 2: "Zone"},
+    "DMPP": {0: "Aggressive", 1: "Conservative", 2: "Balanced"},
+    "QBPP": {0: "Mobile/Speed", 1: "Strong Arm/Tools", 2: "Pure Passer", 3: "Field General", 4: "Balanced"},
+    "HBPP": {5: "Speed", 6: "Moves", 7: "Power", 8: "Receiving", 9: "Workhorse", 10: "Balanced"},
+    "FBPP": {11: "Ball Carrier", 12: "Blocking", 13: "Receiving", 14: "Balanced"},
+    "WRPP": {15: "Strong", 16: "Tall", 17: "Speed", 18: "Route-Runner", 19: "Balanced"},
+    "TEPP": {20: "Playmaker", 21: "H-Back", 22: "Balanced", 23: "Soft Hands", 24: "Blocking"},
+    "TKPP": {25: "Size", 26: "Run Block", 27: "Pass Block", 28: "Zone Block", 29: "Balanced"},
+    "GDPP": {30: "Size", 31: "Run Block", 32: "Pass Block", 33: "Zone Block", 34: "Balanced"},
+    "CRPP": {35: "Size", 36: "Run Block", 37: "Pass Block", 38: "Zone Block", 39: "Balanced"},
+    "DEPP": {40: "Balanced", 41: "Prototype", 42: "Speed", 43: "Run Stopper", 44: "3-4"},
+    "DTPP": {45: "Balanced", 46: "Prototype", 47: "One-Gap", 48: "Run Stopper", 49: "3-4"},
+    "OLPP": {50: "Balanced", 51: "Cover 2", 52: "Run Stopper", 53: "3-4 Pass Rush", 54: "Prototype"},
+    "MLPP": {55: "Balanced", 56: "Coverage", 57: "Power", 58: "Tackler", 59: "Prototype"},
+    "CBPP": {60: "Balanced", 61: "Man", 62: "Strong", 63: "Prototype", 64: "Cover 2"},
+    "FSPP": {65: "Balanced", 66: "Man Coverage", 67: "Centerfielder", 68: "Prototype", 69: "Run Support"},
+    "SsPP": {70: "Balanced", 71: "Coverage", 72: "Prototype", 73: "Run Support", 74: "Smart"},
+    "KKPP": {75: "Power", 76: "Accuracy", 77: "Balanced"},
+    "KPPP": {78: "Power", 79: "Accuracy", 80: "Balanced"},
+    "CFDA": {0: "User", 1: "CPU"},
+    "CFDP": {0: "User", 1: "CPU"},
+    "CFFA": {0: "User", 1: "CPU"},
+    "CFFR": {0: "User", 1: "CPU"},
+    "CFRP": {0: "User", 1: "CPU"},
+    "CFRR": {0: "User", 1: "CPU"},
+}
+
+COACH_PLAN_TABS = [
+    ("Game plan", [
+        ("Offense", [("OSPP", "Offensive scheme"), ("OPPP", "Offensive plays called by"), ("NHPP", "No-huddle")]),
+        ("Defense", [("DSPP", "Defensive scheme"), ("CDTY", "Defensive philosophy"), ("DPPP", "Defensive plays called by"),
+                     ("BZPP", "Blitzing"), ("CVPP", "Coverage")]),
+        ("Game management", [("DMPP", "Defining moments")]),
+    ]),
+    ("Position philosophies", [
+        ("Offense", [("QBPP", "QB"), ("HBPP", "HB"), ("FBPP", "FB"), ("WRPP", "WR"), ("TEPP", "TE"),
+                     ("TKPP", "Tackle"), ("GDPP", "Guard"), ("CRPP", "Center")]),
+        ("Defense", [("DEPP", "DE"), ("DTPP", "DT"), ("OLPP", "OLB"), ("MLPP", "MLB"), ("CBPP", "CB"), ("FSPP", "FS"), ("SsPP", "SS")]),
+        ("Kicking", [("KKPP", "Kicker"), ("KPPP", "Punter")]),
+    ]),
+    ("Who handles what", [
+        ("User or CPU", [("CFDA", "Draft players"), ("CFDP", "Sign draft picks"), ("CFFA", "Sign free agents"),
+                         ("CFFR", "Fill rosters"), ("CFRP", "Re-sign players"), ("CFRR", "Depth chart")]),
+    ]),
+]
+# Plain numbers with no value list; they sit around 50 in a real save (about 37-90), which looks like a
+# 0-100 scale, so edits are limited to that range.
+COACH_PLAN_NUMBERS = [
+    ("COTA", "CPU offensive play-call aggression"), ("CDTA", "CPU defensive play-call aggression"),
+    ("COTR", "Simulated offense run/pass ratio"), ("CDTR", "Simulated defense run/pass ratio"),
+]
 
 # -----------------------------
 # HARD-CODED MAX columns (matches YOUR header dump)
@@ -3086,6 +3153,92 @@ def team_nickname(tid):
     return name.split(" (")[0] if name else ""
 
 
+class CoachGamePlanDialog(tk.Toplevel):
+    """Edit a coach's game plan, position philosophies and User/CPU duties by
+    name. Only fields this save has are shown; Apply writes just what changed."""
+
+    def __init__(self, parent, rows_list, row_index, subject_label, refresh_callback):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Game plan")
+        self.minsize(560, 520)
+        self.transient(parent)
+        self.parent, self.rows_list, self.row_index, self.refresh_callback = parent, rows_list, row_index, refresh_callback
+        self.row = rows_list[row_index]
+        self.vars = {}      # field -> StringVar
+        self.names = {}     # field -> {display text: stored value}
+
+        ttk.Label(self, text=subject_label, font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
+        ttk.Label(self, foreground="gray", wraplength=520, justify="left", padding=(12, 2, 12, 6),
+                  text="Names come from the community HC09 field list. They are valid options for these fields, but what "
+                       "each one changes in-game hasn't been tested - try it on a copy of your save.").pack(anchor="w")
+
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        for tab_name, sections in COACH_PLAN_TABS:
+            frame = ttk.Frame(nb)
+            nb.add(frame, text=tab_name)
+            for section, fields in sections:
+                present = [(c, l) for c, l in fields if c in self.row]
+                if not present:
+                    continue
+                box = ttk.LabelFrame(frame, text=section)
+                box.pack(fill="x", padx=8, pady=(8, 0))
+                for i, (code, label) in enumerate(present):
+                    ttk.Label(box, text=label + ":", width=26, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
+                    self._add_list_field(box, i, code)
+        if any(c in self.row for c, _ in COACH_PLAN_NUMBERS):
+            frame = [f for f in nb.winfo_children()][0]
+            box = ttk.LabelFrame(frame, text="CPU tendencies (0-100)")
+            box.pack(fill="x", padx=8, pady=(8, 0))
+            for i, (code, label) in enumerate([(c, l) for c, l in COACH_PLAN_NUMBERS if c in self.row]):
+                ttk.Label(box, text=label + ":", width=26, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
+                var = tk.StringVar(value=(self.row.get(code, "") or "").strip())
+                ttk.Spinbox(box, from_=0, to=100, width=6, textvariable=var).grid(row=i, column=1, sticky="w", pady=3)
+                self.vars[code] = var
+
+        btn = ttk.Frame(self)
+        btn.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+
+    def _add_list_field(self, box, grid_row, code):
+        values = dict(COACH_PLAN_VALUES.get(code, {}))
+        current = safe_int(self.row.get(code, ""))
+        if current is not None and current not in values:
+            values[current] = f"(value {current})"   # stored value the list doesn't name - keep it selectable
+        names = {name: v for v, name in values.items()}
+        self.names[code] = names
+        var = tk.StringVar(value=values.get(current, ""))
+        ttk.Combobox(box, state="readonly", width=24, textvariable=var, values=list(names)).grid(row=grid_row, column=1, sticky="w", pady=3)
+        self.vars[code] = var
+
+    def _apply(self):
+        # Validate everything first so one bad number can't leave a half-applied plan.
+        updates = {}
+        for code, var in self.vars.items():
+            if code in self.names:
+                new = self.names[code].get(var.get())
+                if new is None:
+                    continue
+            else:
+                new = safe_int(var.get())
+                if new is None or not 0 <= new <= 100:
+                    messagebox.showerror("Game plan", f"{code}: enter a whole number from 0 to 100.", parent=self)
+                    return
+            if str(new) != (self.row.get(code, "") or "").strip():
+                updates[code] = str(new)
+        self.row.update(updates)
+        if updates:
+            self.parent.mark_dirty()
+            self.refresh_callback()
+        self.destroy()
+
+
 class PlaybookCopyDialog(tk.Toplevel):
     """Copy plays, whole sets or whole formations from another playbook into
     the target one. Shows exactly what would be added (and the 200-play limit)
@@ -5311,6 +5464,7 @@ class App(tk.Tk):
         self.ent_coach_skpt.pack(side="left", padx=(6, 8))
         ttk.Button(btm, text="Set to Max", command=self.set_coach_skpt_to_max).pack(side="left", padx=4)
         ttk.Button(btm, text="Apply SKPT", command=self._apply_coach_skpt).pack(side="left")
+        ttk.Button(btm, text="Game Plan...", command=self.on_open_coach_game_plan).pack(side="right")
         self.tree_coach.bind("<<TreeviewSelect>>", lambda e: self._on_coach_select(), add="+")
         self.tree_coach.bind("<Double-1>", lambda e: self._on_tree_double_click(e, self.tree_coach))
 
@@ -7014,6 +7168,20 @@ class App(tk.Tk):
             f"Coach: {name}", refresh_callback=self.refresh_coach,
             subject_kind="coach",
         )
+
+    def on_open_coach_game_plan(self):
+        sel = self.tree_coach.selection()
+        if not sel:
+            messagebox.showinfo("No coach", "Select a coach first.")
+            return
+        try:
+            idx = int(sel[0])
+        except Exception:
+            return
+        row = self.model.coaches[idx]
+        name = f"{(row.get('CFNM','') or '').strip()} {(row.get('CLNM','') or '').strip()}".strip()
+        pos = COACH_POSITION_LABELS.get((row.get("COPS", "") or "").strip(), "")
+        CoachGamePlanDialog(self, self.model.coaches, idx, f"Coach: {name}" + (f" ({pos})" if pos else ""), self.refresh_coach)
 
     def _apply_coach_skpt(self):
         sel = self.tree_coach.selection()
