@@ -107,6 +107,52 @@ async function openDb(dbPath) {
     return helper;
 }
 
+// Table header layout (see madden-file-tools' TDBParser): bytes 0-3 prior-table
+// CRC, 20-21 maxRecords, 22-23 currentRecords, 36-39 header CRC, where the
+// header CRC is ~crc32_be over bytes 4..0x24. Checked against all 208 tables of
+// a real save, so a table whose row count is changed can have its header CRC
+// recomputed exactly.
+const TDBCRC = require('madden-file-tools/services/CRC');
+const tdbUtil = require('madden-file-tools/services/utilService');
+const tdbCrc = new TDBCRC();
+const crcOf = (buf) => tdbUtil.toUint32(~tdbCrc.crc32_be(0, buf, buf.length));
+const emptyBuf = Buffer.alloc(0);
+
+function rewriteHeaderCrc(table) {
+    const hb = table.headerBuffer;
+    hb.writeUInt32BE(crcOf(hb.slice(4, 0x24)), 0x24);
+}
+
+// Structural self-check of an opened DB: every table header checksum, the
+// prior-CRC chain between consecutive tables, the end-of-file checksum and
+// row counts within capacity. A save we wrote that fails this is not safe to
+// hand to the game.
+function verifyDbStructure(helper) {
+    const tables = helper.file.tables;
+    const issues = [];
+    tables.forEach((t, i) => {
+        const hb = t.headerBuffer;
+        if (!hb) return;
+        if (crcOf(hb.slice(4, 0x24)) !== hb.readUInt32BE(0x24)) issues.push(`header checksum wrong: ${t.name}`);
+        if (t.header.currentRecords > t.header.maxRecords) issues.push(`more rows than capacity: ${t.name}`);
+        if (i > 0) {
+            const prev = tables[i - 1];
+            const expected = crcOf(Buffer.concat([prev.fieldDefinitionBuffer || emptyBuf, prev.dataBuffer || emptyBuf]));
+            if (expected !== hb.readUInt32BE(0)) issues.push(`checksum chain broken: ${prev.name} -> ${t.name}`);
+        }
+    });
+    const last = tables[tables.length - 1];
+    const eof = crcOf(Buffer.concat([last.fieldDefinitionBuffer || emptyBuf, last.dataBuffer || emptyBuf]));
+    if (eof !== helper.file.eofCrcBuffer.readUInt32BE(0)) issues.push('end-of-file checksum wrong');
+    return issues;
+}
+
+async function cmdVerifyDb(args) {
+    const helper = await openDb(args.db);
+    const issues = verifyDbStructure(helper);
+    console.log(JSON.stringify({ ok: issues.length === 0, tables: helper.file.tables.length, issues }));
+}
+
 async function cmdInspect(args) {
     const dbPath = args.db;
     const helper = await openDb(dbPath);
@@ -194,6 +240,10 @@ async function cmdImport(args) {
     // write and corrupts the file. Saving in place must call save(null).
     const outPath = (args.out && path.resolve(args.out) !== path.resolve(dbPath)) ? args.out : null;
     const tables = args.tables ? args.tables.split(',') : DEFAULT_TABLES;
+    // Tables the CSV may GROW (rows beyond what the save has are written into
+    // the table's spare allocated slots). Anything not listed here keeps the old
+    // strictly-position-matched behaviour, so an ordinary save can never append.
+    const appendTables = new Set(args['allow-append'] ? String(args['allow-append']).split(',') : []);
 
     const helper = await openDb(dbPath);
     const availableTables = new Set(helper.file.tables.map((t) => t.name));
@@ -224,11 +274,32 @@ async function cmdImport(args) {
 
         const headers = parsed[0];
         const dataRows = parsed.slice(1);
-        const records = table.records;
+        let records = table.records;
 
         let updatedRows = 0;
         let updatedFields = 0;
+        let appendedRows = 0;
         const warnings = [];
+
+        if (appendTables.has(tableName) && dataRows.length > records.length) {
+            const max = table.header.maxRecords;
+            if (dataRows.length > max || table._records.length < dataRows.length) {
+                // Refuse the whole table rather than write a partial/over-capacity one.
+                results.push({
+                    table: tableName, status: 'append-over-capacity-skipped', rows: 0, fieldsChanged: 0,
+                    warnings: [`CSV has ${dataRows.length} rows but the table can hold ${Math.min(max, table._records.length)}`],
+                });
+                continue;
+            }
+            appendedRows = dataRows.length - records.length;
+            for (let i = records.length; i < dataRows.length; i++) {
+                table._records[i].isPopulated = true;
+            }
+            table.header.currentRecords = dataRows.length;
+            table.headerBuffer.writeUInt16BE(dataRows.length, 22);
+            rewriteHeaderCrc(table);
+            records = table.records;
+        }
 
         // Rows are matched to records by pure position (see cmdImport's own
         // docs) - if this table has an identity-looking column (PGID, PNid,
@@ -292,7 +363,7 @@ async function cmdImport(args) {
             updatedRows++;
         });
 
-        results.push({ table: tableName, status: 'ok', rows: updatedRows, fieldsChanged: updatedFields, warnings });
+        results.push({ table: tableName, status: 'ok', rows: updatedRows, fieldsChanged: updatedFields, appendedRows, warnings });
     }
 
     await helper.save(outPath);
@@ -639,6 +710,8 @@ async function main() {
             await cmdPortraitLookup(args);
         } else if (cmd === 'portrait-list') {
             await cmdPortraitList(args);
+        } else if (cmd === 'verify-db') {
+            await cmdVerifyDb(args);
         } else if (cmd === 'shipped-table-export') {
             await cmdShippedTableExport(args);
         } else {
@@ -646,7 +719,8 @@ async function main() {
             console.error('  node bridge.js inspect --db <path>');
             console.error('  node bridge.js fields --db <path> --table <name>');
             console.error('  node bridge.js export --db <path> --out <dir> [--tables PLAY,DRPK,...]');
-            console.error('  node bridge.js import --db <path> --in <dir> [--out <path>] [--tables PLAY,DRPK,...]');
+            console.error('  node bridge.js import --db <path> --in <dir> [--out <path>] [--tables PLAY,DRPK,...] [--allow-append PGPL,...]');
+            console.error('  node bridge.js verify-db --db <path>');
             console.error('  node bridge.js portrait-extract-archive --ast <path> --top-index <N> --out <path>');
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             console.error('  node bridge.js portrait-list --archive <path>');
