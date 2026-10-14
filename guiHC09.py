@@ -1175,9 +1175,18 @@ class CSVModel:
                 # growing is enabled for exactly the edited tables.
                 args += ["--tables", ",".join([c for c, *_ in DB_TABLE_ATTRS] + list(pending)),
                          "--allow-append", ",".join(pending)]
-            result = self.run_bridge(args)
             if pending:
+                try:
+                    result = self.run_bridge(args)
+                except Exception as e:
+                    # The import may have died partway through writing the file.
+                    shutil.copy2(backup_path, self.db_path)
+                    raise RuntimeError(
+                        "The playbook edits could not be saved, so your save was restored from its backup. "
+                        f"Details: {e}") from e
                 self._check_playbook_save(result, pending, backup_path)
+            else:
+                self.run_bridge(args)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         if pending:
@@ -1193,9 +1202,13 @@ class CSVModel:
         problems = [f"{t}: {by_table.get(t, {}).get('status', 'missing')}" for t in pending
                     if by_table.get(t, {}).get("status") != "ok"]
         if not problems:
-            check = self.run_bridge(["verify-db", "--db", self.db_path])
-            if not check.get("ok"):
-                problems = check.get("issues") or ["structure check failed"]
+            try:
+                check = self.run_bridge(["verify-db", "--db", self.db_path])
+                if not check.get("ok"):
+                    problems = check.get("issues") or ["structure check failed"]
+            except Exception as e:
+                # A file the checker can't even open or parse is not a file to keep.
+                problems = [f"the structure check could not run ({e})"]
         if problems:
             shutil.copy2(backup_path, self.db_path)
             raise RuntimeError(
