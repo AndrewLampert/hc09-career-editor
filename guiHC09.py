@@ -3184,6 +3184,8 @@ class PlaybookCopyDialog(tk.Toplevel):
             extra.append(f"This is one playbook shared under several names ({' / '.join(names)}), so the change shows under all of them.")
         self.lbl_target.configure(
             text=f"{d.book_label(self.target)}: {d.counted_plays(self.target)} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+        if not d.side_of(self.target):
+            extra.append("Can't tell whether this playbook is offense or defense, so copying into it is disabled.")
         if hasattr(self, "lbl_shared"):
             self.lbl_shared.configure(text=" ".join(extra))
 
@@ -3199,11 +3201,11 @@ class PlaybookCopyDialog(tk.Toplevel):
     def _fill_sources(self, select=None):
         d = self.data
         q = " ".join(self.filter_var.get().lower().split())
-        side = d.book_side.get(self.target)
+        side = d.side_of(self.target)
         self.lst.delete(0, tk.END)
         self._sources = []
         for bokl, name, bside, _i, plays, _o, _d in d.books():
-            if bokl == self.target or (side and bside and bside != side) or q not in name.lower():
+            if bokl == self.target or not side or bside != side or q not in name.lower():
                 continue
             self._sources.append(bokl)
             self.lst.insert(tk.END, f"{name}  ({plays})")
@@ -3385,10 +3387,10 @@ class PlaybookData:
             if bokl and bgid:
                 self.bgid_book[(side, bgid)] = bokl
                 self.bgid_info[(side, bgid)] = {"name": name or f"Playbook {bokl}", "bokl": bokl, "bord": (r.get("BORD") or "").strip()}
-            if bokl and name:
-                if name not in self.book_names[bokl]:
-                    self.book_names[bokl].append(name)
+            if bokl and side in ("0", "1"):
                 self.book_side[bokl] = "Offense" if side == "1" else "Defense"
+            if bokl and name and name not in self.book_names[bokl]:
+                self.book_names[bokl].append(name)
 
         self.formation_name = {(r.get("PBFM") or "").strip(): (r.get("name") or "").strip() for r in g("pbfm")}
         # What the game itself ships. Anything outside these is content the user
@@ -3438,6 +3440,30 @@ class PlaybookData:
             self.set_plays[(b, st)].append((pl, key(r, "PLTP")))
             self.play_books[(st, pl)].add(b)
             self.book_play_count[b] += 1
+        self._infer_sides()
+
+    def _infer_sides(self):
+        """Playbooks that have no row in the game's playbook list (custom ones)
+        have no recorded side. A stock set only ever appears on one side (checked:
+        173 sets, none on both), so a book whose stock sets all agree is on that
+        side. A book with no recognisable sets, or sets from both sides, stays unknown."""
+        seen = defaultdict(set)
+        for (b, st) in self.set_plays:
+            if self.book_side.get(b):
+                seen[st].add(self.book_side[b])
+        set_side = {st: next(iter(v)) for st, v in seen.items() if len(v) == 1}
+        self.inferred_side = {}
+        books = {b for (b, _st) in self.set_plays} | set(self.book_formations)
+        for b in books:
+            if b in self.book_side:
+                continue
+            sides = {set_side[st] for (bb, st) in self.set_plays if bb == b and st in set_side}
+            if len(sides) == 1:
+                self.inferred_side[b] = next(iter(sides))
+
+    def side_of(self, bokl):
+        """"Offense", "Defense" or "" if it can't be told."""
+        return self.book_side.get(bokl) or self.inferred_side.get(bokl) or ""
 
     # ---- editing: copy plays / sets / formations from one playbook into another
     def formation_base(self, pbfm, srfm=""):
@@ -3516,8 +3542,17 @@ class PlaybookData:
         if not src or not tgt or src == tgt:
             plan["error"] = "Pick a different playbook to copy from."
             return plan
-        ss, ts = self.book_side.get(src), self.book_side.get(tgt)
-        if ss and ts and ss != ts:
+        if not self.have_game_names:
+            plan["error"] = ("Editing playbooks needs the game's own name tables (to tell offense from defense and to recognise "
+                             "custom plays). Open the Playbooks tab with qkl_boot.ast located and try again.")
+            return plan
+        ss, ts = self.side_of(src), self.side_of(tgt)
+        for book, side in ((src, ss), (tgt, ts)):
+            if not side:
+                plan["error"] = (f"Can't tell whether {self.book_label(book)} is an offensive or a defensive playbook, so copying "
+                                 "to or from it is blocked to avoid mixing the two.")
+                return plan
+        if ss != ts:
             word = {"Offense": "an offensive", "Defense": "a defensive"}
             plan["error"] = f"{self.book_label(src)} is {word[ss]} playbook and {self.book_label(tgt)} is {word[ts]} one."
             return plan
@@ -3699,7 +3734,7 @@ class PlaybookData:
     def books(self):
         rows = []
         for bokl in sorted(set(self.book_play_count) | set(self.book_formations), key=lambda b: int(b) if b.isdigit() else 0):
-            rows.append((bokl, self.book_label(bokl), self.book_side.get(bokl, ""), bokl,
+            rows.append((bokl, self.book_label(bokl), self.side_of(bokl), bokl,
                          self.book_play_count.get(bokl, 0), ", ".join(self.offense_used_by.get(bokl, [])),
                          ", ".join(self.defense_used_by.get(bokl, []))))
         return rows
@@ -4916,9 +4951,8 @@ class App(tk.Tk):
             return
         target = book[0]
         setl, plyl = found[0].split(":")
-        side = data.book_side.get(target)
-        sources = [b for b in self._playbook_hits.get(found[0], [])
-                   if b != target and not (side and data.book_side.get(b) and data.book_side[b] != side)]
+        side = data.side_of(target)
+        sources = [b for b in self._playbook_hits.get(found[0], []) if b != target and side and data.side_of(b) == side]
         if not sources:
             messagebox.showinfo("Playbooks", "No other playbook of the same side contains that play, so there is nothing to copy it from.")
             return
