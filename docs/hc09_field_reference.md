@@ -23,7 +23,7 @@ Generated from the **HC09 Detailed Config.xml** (made by JHamilton9 in 2020 for 
 | `SKPA` | Perf. Input A | Performance Potential | **conflict worth testing**: the editor found Performance = MIN(SKPA, SKPF) in-game; the config calls SKPA "Performance Potential" and SKPF "Performance Current" |
 | `SKPF` | Perf. Input B | Performance Current | see SKPA; the editor's in-game tests take priority |
 | `TDPB` | not used | "Defense Playbook" | **Label is wrong.** Values are only {0,1,3,4,5,6} and teams with the same scheme share one (the 3-4 teams share 1, the Tampa-2 teams share 3), so it is a scheme family, not a playbook index. A team's real defensive playbook is `COCH.CDID`. |
-| `OSPP` | scheme 3 = Spread (checked in game) | 3 = "Speed" | **Label is wrong** for value 3; see "Checked in the game: Team Philosophy" below |
+| `OSPP` | 3 = Spread, 4 = Power Running (checked in game) | 3 = "Speed", 4 = "Power Run" | **Label is wrong** for value 3; see "Checked in the game: Team Philosophy" below |
 | `TOPB` | offense, by `PLAB.BORD` | "Offensive Playbook" | Matches the coordinators for 28 of 32 teams; the coaches' `CPID` is the real assignment. |
 
 ### Checked in the game: Team Philosophy
@@ -32,9 +32,9 @@ Changing the three playcall settings on the game's Team Philosophy screen and sa
 
 | Field | In-game name | Checked values | Config says |
 |---|---|---|---|
-| `NHPP` | No Huddle Philosophy | 0 Heavily, 1 Balanced | same |
+| `NHPP` | No Huddle Philosophy | 0 Heavily, 1 Balanced, 2 Rarely | same |
 | `OPPP` | Offensive Playbook Control | 0 Head Coach, 1 Offensive Coordinator | "Off Call Preference": 0 HC, 1 OC (same meaning, different words) |
-| `OSPP` | Offensive Scheme | 0 West Coast Normal, **3 Spread** | 3 is "Speed" - **wrong**; 1, 2 and 4 are still the config's names, unchecked |
+| `OSPP` | Offensive Scheme | 0 West Coast Normal, **3 Spread**, **4 Power Running** | 3 is "Speed" - **wrong**; 4 is "Power Run" (wording); 1 and 2 are still the config's names, unchecked |
 
 The editor's **Team Philosophy...** button (Coach tab) edits `TPHS`. Every other name in it is the config's and has not been checked.
 
@@ -70,7 +70,7 @@ The number in front of each label is the value stored in the save. Checked again
 - `GDPP` **G Phil**: 30 Size; 31 Run Block; 32 Pass Block; 33 Zone Block; 34 Balanced
 - `MLPP` **MLB Phil**: 55 Balanced; 56 Coverage; 57 Power; 58 Tackler; 59 Prototype
 - `OLPP` **OLB Phil**: 50 Balanced; 51 Cover 2; 52 Run Stopper; 53 3-4 Pass Rush; 54 Prototype
-- `OSPP` **Off Scheme**: 0 West Coast Normal; 1 West Coast Heavy Pass; 2 Vertical Passing; 3 Speed (the game shows 3 as Spread); 4 Power Run
+- `OSPP` **Off Scheme**: 0 West Coast Normal; 1 West Coast Heavy Pass; 2 Vertical Passing; 3 Speed (the game shows 3 as Spread); 4 Power Run (the game shows 4 as Power Running)
 - `PNPs` **Club Title**: 11 GM; 12 Owner; 13 Trainer; 14 ; 15 
 - `QBPP` **QB Phil**: 0 Mobile/Speed; 1 Strong Arm/Tools; 2 Pure Passer; 3 Field General; 4 Balanced
 - `SsPP` **SS Phil**: 70 Balanced; 71 Coverage; 72 Prototype; 73 Run Support; 74 Smart

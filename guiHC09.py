@@ -832,11 +832,12 @@ COACH_POSITION_LABELS = {
 # coach row, COCH, but that screen does not read those). Value names come from the
 # community HC09 config (docs/hc09_field_reference.md); the number is what is stored
 # in the save. CHECKED IN THE GAME'S Team Philosophy screen (changed in game, then
-# read back from the save): NHPP 0 Heavily / 1 Balanced, OPPP 0 Head Coach / 1
-# Offensive Coordinator, OSPP 0 West Coast Normal / 3 Spread (the config says "Speed"
-# for 3). Every other name is the config's and has not been checked.
+# read back from the save): NHPP 0 Heavily / 1 Balanced / 2 Rarely, OPPP 0 Head Coach /
+# 1 Offensive Coordinator, OSPP 0 West Coast Normal / 3 Spread / 4 Power Running (the
+# config says "Speed" for 3 and "Power Run" for 4). Every other name is the config's
+# and has not been checked.
 COACH_PLAN_VALUES = {
-    "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Spread", 4: "Power Run"},
+    "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Spread", 4: "Power Running"},
     "OPPP": {0: "Head Coach", 1: "Offensive Coordinator"},
     "NHPP": {0: "Heavily", 1: "Balanced", 2: "Rarely"},
     "DSPP": {0: "3-4", 1: "4-3", 2: "4-6"},
