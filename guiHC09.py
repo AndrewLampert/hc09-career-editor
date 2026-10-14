@@ -3091,7 +3091,7 @@ class PlaybookCopyDialog(tk.Toplevel):
     the target one. Shows exactly what would be added (and the 200-play limit)
     before anything is changed; on_apply(plan) performs the change."""
 
-    AUTO = "(match by name)"
+    AUTO = "Same formation name as the source (add it if missing)"
 
     def __init__(self, app, data, target, on_apply, preselect=None):
         super().__init__(app)
@@ -3099,7 +3099,7 @@ class PlaybookCopyDialog(tk.Toplevel):
         if p:
             self.configure(background=p["bg"])
         self.app, self.data, self.target, self.on_apply = app, data, target, on_apply
-        self.title(f"Add plays to {data.book_label(target)}")
+        self.title(f"Add plays INTO {data.book_label(target)}")
         self.transient(app)
         self.geometry("860x640")
         self.minsize(640, 460)
@@ -3112,17 +3112,19 @@ class PlaybookCopyDialog(tk.Toplevel):
         self.lbl_shared = ttk.Label(self, foreground="#b9770e", wraplength=820, justify="left")
         self.lbl_shared.pack(anchor="w", padx=10, pady=(0, 2))
         ttk.Label(self, foreground="gray", wraplength=820, justify="left",
-                  text="Pick a playbook on the left, then a play, a set or a whole formation on the right. "
-                       "Formations are matched by name (their IDs differ between playbooks), so a 4-3 from "
-                       "another book lands in your 4-3.").pack(anchor="w", padx=10, pady=(0, 6))
+                  text="Copies from another playbook INTO the one named above - that one is the only playbook that changes. "
+                       "Step 1: pick the playbook to copy FROM. Step 2: pick a play, a set or a whole formation from it. "
+                       "Step 3: say where new sets go, check the summary, then add."
+                  ).pack(anchor="w", padx=10, pady=(0, 6))
 
         body = ttk.PanedWindow(self, orient="horizontal")
         body.pack(fill="both", expand=True, padx=10, pady=4)
 
         left = ttk.Frame(body)
+        ttk.Label(left, text="1. Copy FROM this playbook", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(0, 3))
         top = ttk.Frame(left)
         top.pack(fill="x")
-        ttk.Label(top, text="Copy from:").pack(side="left")
+        ttk.Label(top, text="Filter:").pack(side="left")
         self.filter_var = tk.StringVar()
         ttk.Entry(top, textvariable=self.filter_var).pack(side="left", fill="x", expand=True, padx=(6, 0))
         self.filter_var.trace_add("write", lambda *_: self._fill_sources())
@@ -3137,6 +3139,8 @@ class PlaybookCopyDialog(tk.Toplevel):
         body.add(left, weight=1)
 
         right = ttk.Frame(body)
+        self.lbl_right = ttk.Label(right, text="2. Pick what to copy (choose a playbook first)", font=("TkDefaultFont", 9, "bold"))
+        self.lbl_right.pack(anchor="w", pady=(0, 3))
         rf = ttk.Frame(right)
         rf.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(rf, show="tree", selectmode="browse")
@@ -3149,19 +3153,26 @@ class PlaybookCopyDialog(tk.Toplevel):
 
         opt = ttk.Frame(self)
         opt.pack(fill="x", padx=10, pady=(6, 0))
-        ttk.Label(opt, text="New sets go under:").pack(side="left")
+        ttk.Label(opt, text=f"3. If a copied set is new to {data.book_label(target)}, put it under:", font=("TkDefaultFont", 9, "bold")).pack(side="left")
         self.into_var = tk.StringVar(value=self.AUTO)
-        self.cmb_into = ttk.Combobox(opt, state="readonly", width=28, textvariable=self.into_var)
-        self.cmb_into.pack(side="left", padx=(6, 0))
+        self.cmb_into = ttk.Combobox(opt, state="readonly", width=44, textvariable=self.into_var)
+        self.cmb_into.pack(side="left", padx=(8, 0))
         self.cmb_into.bind("<<ComboboxSelected>>", lambda e: self._on_pick())
         self._fill_into()
+        ttk.Label(self, foreground="gray", wraplength=820, justify="left",
+                  text=f"Sets {data.book_label(target)} already has stay where they are (the copied plays just join them) - this choice only "
+                       "applies to sets it doesn't have yet. Leave it on the first option to use the formation with the same name; "
+                       "pick one of your own formations to put the new sets under that instead (e.g. a source's \"Shotgun\" sets under your \"Gun\")."
+                  ).pack(anchor="w", padx=10, pady=(2, 0))
 
         self.lbl_summary = ttk.Label(self, wraplength=820, justify="left")
-        self.lbl_summary.pack(fill="x", padx=10, pady=(8, 4))
+        self.lbl_summary.pack(fill="x", padx=10, pady=(8, 2))
+        self.lbl_done = ttk.Label(self, wraplength=820, justify="left", foreground="#1e8449")
+        self.lbl_done.pack(fill="x", padx=10, pady=(0, 4))
         btn = ttk.Frame(self)
         btn.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
-        self.btn_add = ttk.Button(btn, text="Add to playbook", command=self._add, state="disabled")
+        self.btn_add = ttk.Button(btn, text=f"Add to {data.book_label(target)}", command=self._add, state="disabled")
         self.btn_add.pack(side="right", padx=(0, 8))
 
         self._update_target_label()
@@ -3183,7 +3194,7 @@ class PlaybookCopyDialog(tk.Toplevel):
         if len(names) > 1:
             extra.append(f"This is one playbook shared under several names ({' / '.join(names)}), so the change shows under all of them.")
         self.lbl_target.configure(
-            text=f"{d.book_label(self.target)}: {d.counted_plays(self.target)} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+            text=f"Adding INTO:  {d.book_label(self.target)}   -   {d.counted_plays(self.target)} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
         if not d.side_of(self.target):
             extra.append("Can't tell whether this playbook is offense or defense, so copying into it is disabled.")
         if hasattr(self, "lbl_shared"):
@@ -3222,6 +3233,7 @@ class PlaybookCopyDialog(tk.Toplevel):
         d, src = self.data, self._source()
         for iid in self.tree.get_children():
             self.tree.delete(iid)
+        self.lbl_right.configure(text=f"2. Pick what to copy from {d.book_label(src)}" if src else "2. Pick what to copy (choose a playbook first)")
         if not src:
             return
         for f, sr in d.book_formations.get(src, []):
@@ -3278,8 +3290,8 @@ class PlaybookCopyDialog(tk.Toplevel):
             bits.append(f"{plan['new_sets']} new set(s)")
         if plan["new_formations"]:
             bits.append("a new formation: " + ", ".join(plan["new_formations"]))
-        text = (f"Will add {', '.join(bits)}. {self.data.book_label(self.target)} goes from "
-                f"{plan['counted_before']} to {plan['plays_after']} of {PLAYBOOK_PLAY_CAP} plays.")
+        text = (f"Will add {', '.join(bits)} FROM {self.data.book_label(src)} INTO {self.data.book_label(self.target)}, "
+                f"taking it from {plan['counted_before']} to {plan['plays_after']} of {PLAYBOOK_PLAY_CAP} plays.")
         if plan["already"]:
             text += f" ({plan['already']} already there.)"
         if plan["notes"]:
@@ -3290,14 +3302,17 @@ class PlaybookCopyDialog(tk.Toplevel):
     def _add(self):
         if not self._plan or self._plan["error"]:
             return
+        plan = self._plan
         try:
-            self.on_apply(self._plan)
+            n = self.on_apply(plan)
         except ValueError as e:
             messagebox.showerror("Add plays", str(e), parent=self)
             return
         self._update_target_label()
         self._fill_into()
         self._on_pick()
+        self.lbl_done.configure(text=f"Added {n} row(s) FROM {self.data.book_label(plan['src'])} INTO {self.data.book_label(plan['tgt'])}. "
+                                     "Use Save to File in the main window to keep them.")
 
 
 class PlaybookPickerDialog(tk.Toplevel):
@@ -4727,7 +4742,8 @@ class App(tk.Tk):
         ent.bind("<Return>", lambda e: self.on_playbook_search())
         ttk.Button(search, text="Find", command=self.on_playbook_search).pack(side="left")
         ttk.Button(search, text="Clear", command=self.on_playbook_search_clear).pack(side="left", padx=(6, 0))
-        ttk.Button(search, text="Add found play to selected playbook...", command=self.on_playbook_add_found).pack(side="left", padx=(12, 0))
+        self.btn_pb_add_found = ttk.Button(search, text="Add found play to the selected playbook...", command=self.on_playbook_add_found)
+        self.btn_pb_add_found.pack(side="left", padx=(12, 0))
         self.lbl_playbook_hit = ttk.Label(search, text="", foreground="gray")
         self.lbl_playbook_hit.pack(side="left", padx=(12, 0))
 
@@ -4760,14 +4776,14 @@ class App(tk.Tk):
         res.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
         bar = ttk.Frame(root)
         bar.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
-        ttk.Button(bar, text="Add plays to this playbook...", command=lambda: self.on_playbook_add_plays()).pack(side="left")
+        ttk.Button(bar, text="Add plays to the selected playbook...", command=lambda: self.on_playbook_add_plays()).pack(side="left")
         self.lbl_pb_cap = ttk.Label(bar, text="", foreground="gray")
         self.lbl_pb_cap.pack(side="left", padx=(12, 0))
         panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
         ttk.Label(
             res, foreground="gray",
             text="Search for a play above to see its codes and which playbooks have it. "
-                 "Click a row to list those playbooks; double-click to jump to one.",
+                 "Click a row to list the playbooks that have it (this doesn't change which playbook is selected above).",
         ).pack(anchor="w", padx=6, pady=(4, 0))
         self.tree_pb_found = ttk.Treeview(
             res, columns=("play", "set", "type", "setl", "plyl", "n"), show="headings", height=4, selectmode="browse")
@@ -4776,7 +4792,6 @@ class App(tk.Tk):
             self.tree_pb_found.column(c, width=w, anchor="w", stretch=(c == "play"))
         self.tree_pb_found.pack(fill="x", padx=4, pady=4)
         self.tree_pb_found.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_found_selected())
-        self.tree_pb_found.bind("<Double-1>", lambda e: self._on_playbook_found_open())
         self._playbook_hits = {}
 
     def _on_notebook_tab_changed(self, _event=None):
@@ -4965,16 +4980,20 @@ class App(tk.Tk):
         self.model.pb_pending = {t: data.tables[t] for t in data.dirty_tables}
         self.mark_dirty()
         self._fill_playbook_books()
-        self.lbl_playbook_status.configure(text=f"Added {n} playbook row(s) - Save to File to keep them.")
+        self.lbl_playbook_status.configure(
+            text=f"Added {n} row(s) from {data.book_label(plan['src'])} into {data.book_label(plan['tgt'])} - Save to File to keep them.")
         return n
 
     def _on_playbook_book_selected(self):
         sel = self.tree_pb_books.selection()
         if self._playbook_data is not None and sel:
+            name = self._playbook_data.book_label(sel[0])
             self.lbl_pb_cap.configure(
-                text=f"{self._playbook_data.counted_plays(sel[0])} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+                text=f"Selected playbook: {name}  -  {self._playbook_data.counted_plays(sel[0])} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+            self.btn_pb_add_found.configure(text=f"Add found play to {name}...")
         else:
             self.lbl_pb_cap.configure(text="")
+            self.btn_pb_add_found.configure(text="Add found play to the selected playbook...")
         tree = self.tree_pb_forms
         for iid in tree.get_children():
             tree.delete(iid)
@@ -5043,13 +5062,6 @@ class App(tk.Tk):
         names = [self._playbook_data.book_label(b) for b in books]
         shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
         self.lbl_playbook_hit.configure(text=f"In: {shown}" if names else "In no playbook in this save")
-
-    def _on_playbook_found_open(self):
-        sel = self.tree_pb_found.selection()
-        books = self._playbook_hits.get(sel[0], []) if sel else []
-        if books and self.tree_pb_books.exists(books[0]):
-            self.tree_pb_books.selection_set(books[0])
-            self.tree_pb_books.see(books[0])
 
     # ---------- Staff Tabs (Trainer / Coach / GM) ----------
     def _build_staff_team_filter(self, parent):
