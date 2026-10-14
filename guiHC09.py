@@ -4687,13 +4687,10 @@ class App(tk.Tk):
         self.lbl_playbook_status.pack(side="left", padx=(8, 0))
 
         help_text = (
-            "Browse every playbook in the save with real play, set and formation names (pulled from your own "
-            "game files the first time, then cached). Use Find play to see a play's codes (SETL / PLYL) and every "
-            "playbook that contains it. Custom plays and playbooks you made in-game are named from the save "
-            "itself. The last two columns show which teams use each playbook (read from their coordinators), "
-            "and Team playbooks below lets you change a team's offense or defense by name. Add plays copies "
-            "plays, sets or whole formations from another playbook into the selected one (200 plays per "
-            "playbook; special teams don't count). Removing or renaming plays isn't available yet."
+            "Browse playbooks with real play, set and formation names (read from your own game files, then cached). "
+            "Find play shows a play's codes and every playbook that has it. Team playbooks changes a team's offense or "
+            "defense by name. Add plays copies plays, sets or formations from another playbook into the selected one "
+            "(200 per playbook; special teams don't count)."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -4719,8 +4716,7 @@ class App(tk.Tk):
         self.lbl_pb_def.pack(side="left")
         ttk.Button(trow, text="Change...", command=lambda: self.on_change_team_playbook("0")).pack(side="left", padx=(6, 0))
         ttk.Label(team, foreground="gray", wraplength=1000, justify="left",
-                  text="Changing a playbook sets it on every coach of the team (that's where the game keeps it), then use Save to File. "
-                       "Experimental: not yet confirmed in-game - test on a copy of your save.").pack(anchor="w", padx=8, pady=(0, 6))
+                  text="Sets it on every coach of the team (where the game keeps it); then Save to File.").pack(anchor="w", padx=8, pady=(0, 6))
 
         search = ttk.Frame(root)
         search.pack(fill="x", padx=10, pady=(0, 4))
@@ -4736,9 +4732,8 @@ class App(tk.Tk):
         self.lbl_playbook_hit.pack(side="left", padx=(12, 0))
 
         panes = ttk.PanedWindow(root, orient="horizontal")
-        panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
 
-        def make_tree(parent, cols, widths, height=14, weight=1):
+        def make_tree(parent, cols, widths, height=6, weight=1):
             frm = ttk.Frame(parent)
             tree = ttk.Treeview(frm, columns=[c for c, _ in cols], show="headings", height=height, selectmode="browse")
             for (c, text), w in zip(cols, widths):
@@ -4759,21 +4754,23 @@ class App(tk.Tk):
         self.tree_pb_books.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_book_selected())
         self.tree_pb_forms.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_form_selected())
 
+        # The Add bar and Find results are packed to the bottom BEFORE the tables, so on a short
+        # window it is the tables that shrink, never these.
+        res = ttk.LabelFrame(root, text="Find results")
+        res.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
         bar = ttk.Frame(root)
-        bar.pack(fill="x", padx=10, pady=(0, 4))
+        bar.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
         ttk.Button(bar, text="Add plays to this playbook...", command=lambda: self.on_playbook_add_plays()).pack(side="left")
         self.lbl_pb_cap = ttk.Label(bar, text="", foreground="gray")
         self.lbl_pb_cap.pack(side="left", padx=(12, 0))
-
-        res = ttk.LabelFrame(root, text="Find results")
-        res.pack(fill="x", padx=10, pady=(0, 10))
+        panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
         ttk.Label(
             res, foreground="gray",
             text="Search for a play above to see its codes and which playbooks have it. "
                  "Click a row to list those playbooks; double-click to jump to one.",
         ).pack(anchor="w", padx=6, pady=(4, 0))
         self.tree_pb_found = ttk.Treeview(
-            res, columns=("play", "set", "type", "setl", "plyl", "n"), show="headings", height=6, selectmode="browse")
+            res, columns=("play", "set", "type", "setl", "plyl", "n"), show="headings", height=4, selectmode="browse")
         for c, text, w in (("play", "Play", 220), ("set", "Set", 150), ("type", "Type", 50), ("setl", "SETL", 56), ("plyl", "PLYL", 56), ("n", "In playbooks", 90)):
             self.tree_pb_found.heading(c, text=text, command=lambda c=c: self._sort_tree(self.tree_pb_found, c))
             self.tree_pb_found.column(c, width=w, anchor="w", stretch=(c == "play"))
