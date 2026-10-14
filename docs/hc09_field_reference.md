@@ -23,7 +23,20 @@ Generated from the **HC09 Detailed Config.xml** (made by JHamilton9 in 2020 for 
 | `SKPA` | Perf. Input A | Performance Potential | **conflict worth testing**: the editor found Performance = MIN(SKPA, SKPF) in-game; the config calls SKPA "Performance Potential" and SKPF "Performance Current" |
 | `SKPF` | Perf. Input B | Performance Current | see SKPA; the editor's in-game tests take priority |
 | `TDPB` | not used | "Defense Playbook" | **Label is wrong.** Values are only {0,1,3,4,5,6} and teams with the same scheme share one (the 3-4 teams share 1, the Tampa-2 teams share 3), so it is a scheme family, not a playbook index. A team's real defensive playbook is `COCH.CDID`. |
+| `OSPP` | scheme 3 = Spread (checked in game) | 3 = "Speed" | **Label is wrong** for value 3; see "Checked in the game: Team Philosophy" below |
 | `TOPB` | offense, by `PLAB.BORD` | "Offensive Playbook" | Matches the coordinators for 28 of 32 teams; the coaches' `CPID` is the real assignment. |
+
+### Checked in the game: Team Philosophy
+
+Changing the three playcall settings on the game's Team Philosophy screen and saving moved exactly three fields, in the **`TPHS`** table (34 rows, keyed by `TGID`). That table, not the coach rows, is what the screen reads: the same field codes also sit on each coach's `COCH` row, but editing those did not change the screen. (The config files the philosophy fields under a table it calls `TPHL` and names `TPHS` "Team Health"; in a real save the philosophy columns are in `TPHS`. `TPHL` has the same 111-column layout with lower-case names and was not examined.)
+
+| Field | In-game name | Checked values | Config says |
+|---|---|---|---|
+| `NHPP` | No Huddle Philosophy | 0 Heavily, 1 Balanced | same |
+| `OPPP` | Offensive Playbook Control | 0 Head Coach, 1 Offensive Coordinator | "Off Call Preference": 0 HC, 1 OC (same meaning, different words) |
+| `OSPP` | Offensive Scheme | 0 West Coast Normal, **3 Spread** | 3 is "Speed" - **wrong**; 1, 2 and 4 are still the config's names, unchecked |
+
+The editor's **Team Philosophy...** button (Coach tab) edits `TPHS`. Every other name in it is the config's and has not been checked.
 
 The config has no name for 11 fields the editor already edits (`PLJM`, `SKTD`, `SKTM`, `SKNG`, `SKNM`, `TSIE`, `TSIM`, `TSRH`, `TSRM`, `TSFR`, `TSFM`); those come from the editor's own in-game testing.
 
@@ -57,7 +70,7 @@ The number in front of each label is the value stored in the save. Checked again
 - `GDPP` **G Phil**: 30 Size; 31 Run Block; 32 Pass Block; 33 Zone Block; 34 Balanced
 - `MLPP` **MLB Phil**: 55 Balanced; 56 Coverage; 57 Power; 58 Tackler; 59 Prototype
 - `OLPP` **OLB Phil**: 50 Balanced; 51 Cover 2; 52 Run Stopper; 53 3-4 Pass Rush; 54 Prototype
-- `OSPP` **Off Scheme**: 0 West Coast Normal; 1 West Coast Heavy Pass; 2 Vertical Passing; 3 Speed; 4 Power Run
+- `OSPP` **Off Scheme**: 0 West Coast Normal; 1 West Coast Heavy Pass; 2 Vertical Passing; 3 Speed (the game shows 3 as Spread); 4 Power Run
 - `PNPs` **Club Title**: 11 GM; 12 Owner; 13 Trainer; 14 ; 15 
 - `QBPP` **QB Phil**: 0 Mobile/Speed; 1 Strong Arm/Tools; 2 Pure Passer; 3 Field General; 4 Balanced
 - `SsPP` **SS Phil**: 70 Balanced; 71 Coverage; 72 Prototype; 73 Run Support; 74 Smart
@@ -206,7 +219,7 @@ Unnamed: `IJSK`, `INJR`, `INTT`, `RHBU`, `ITUt`
 
 ## What could be built next (ranked)
 
-1. **Coach game plan** (`COCH`, Planning screen): offensive scheme `OSPP` (West Coast Normal/Heavy, Vertical Passing, ...), defensive scheme `DSPP` (3-4 / 4-3 / 4-6), `CDTY` defensive philosophy, who calls plays (`OPPP` HC or OC, `DPPP` HC or DC), CPU play-call aggression (`COTA`, `CDTA`), simulated run/pass ratios (`COTR`, `CDTR`), RB strategy `CRBT`, start young HB / rookie QB (`SRHP`, `SRQP`). Every field has a name and most have value lists, so this is an editor that shows words instead of numbers. Needs an in-game check of what each does.
+1. **Coach game plan** (built as the **Team Philosophy...** button, on `TPHS` rather than `COCH`; see "Checked in the game" above): offensive scheme `OSPP` (West Coast Normal/Heavy, Vertical Passing, ...), defensive scheme `DSPP` (3-4 / 4-3 / 4-6), `CDTY` defensive philosophy, who calls plays (`OPPP` HC or OC, `DPPP` HC or DC), CPU play-call aggression (`COTA`, `CDTA`), simulated run/pass ratios (`COTR`, `CDTR`), RB strategy `CRBT`, start young HB / rookie QB (`SRHP`, `SRQP`). Every field has a name and most have value lists, so this is an editor that shows words instead of numbers. Needs an in-game check of what each does.
 2. **Coach philosophies** (23 fields, each with a short list: QB "Mobile/Speed / Strong Arm/Tools / Pure Passer...", blitz, coverage, no-huddle, kicker, ...).
 3. **Who handles what** (`COCH` Responsibilities): User / CPU for drafting, signing draft picks and free agents, filling rosters, re-signing, depth chart (`CFDA`, `CFDP`, `CFFA`, `CFFR`, `CFRP`, `CFRR`), plus `CFUC` User Control.
 4. **Player info with names**: College (297-name list), position names, height, weight, home state/town, jersey number, Pro Bowl flag, throwing style, body-part health (all named above).

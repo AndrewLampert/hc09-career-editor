@@ -151,6 +151,7 @@ DB_TABLE_FILES = {
     "CSKL": "cskl.csv",
     "TEAM": "team.csv",
     "cINF": "cinf.csv",
+    "TPHS": "tphs.csv",
 }
 # (table code, CSVModel rows attr, headers attr, path attr) - drives
 # load_all_from_db/save_to_db/_finish_load's per-table wiring below, so
@@ -168,6 +169,7 @@ DB_TABLE_ATTRS = [
     ("CSKL", "cskl", "cskl_headers", "cskl_path"),
     ("TEAM", "team", "team_headers", "team_path"),
     ("cINF", "cinf", "cinf_headers", "cinf_path"),
+    ("TPHS", "tphs", "tphs_headers", "tphs_path"),
 ]
 
 # cINF (1 row, global/save-level state) has a SEYR field ("Season Year" per
@@ -825,19 +827,21 @@ COACH_POSITION_LABELS = {
     "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
 }
 
-# Coach game plan: the schemes, tendencies and philosophies stored on each coach
-# row (COCH), with the names the community HC09 config gives their values (see
-# docs/hc09_field_reference.md). The number is what is stored in the save; checked
-# against a real save, every stored value of these fields is in its list. What
-# each setting does in-game has NOT been tested - they are valid options, not
-# verified effects.
+# Team philosophy: the schemes and philosophies the game's Team Philosophy screen
+# shows, stored per team in the TPHS table (the same field codes also appear on each
+# coach row, COCH, but that screen does not read those). Value names come from the
+# community HC09 config (docs/hc09_field_reference.md); the number is what is stored
+# in the save. CHECKED IN THE GAME'S Team Philosophy screen (changed in game, then
+# read back from the save): NHPP 0 Heavily / 1 Balanced, OPPP 0 Head Coach / 1
+# Offensive Coordinator, OSPP 0 West Coast Normal / 3 Spread (the config says "Speed"
+# for 3). Every other name is the config's and has not been checked.
 COACH_PLAN_VALUES = {
-    "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Speed", 4: "Power Run"},
-    "OPPP": {0: "HC", 1: "OC"},
+    "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Spread", 4: "Power Run"},
+    "OPPP": {0: "Head Coach", 1: "Offensive Coordinator"},
     "NHPP": {0: "Heavily", 1: "Balanced", 2: "Rarely"},
     "DSPP": {0: "3-4", 1: "4-3", 2: "4-6"},
     "CDTY": {5: "3-4", 95: "4-3"},
-    "DPPP": {0: "HC", 1: "DC"},
+    "DPPP": {0: "Head Coach", 1: "Defensive Coordinator"},
     "BZPP": {0: "Heavy", 1: "Normal", 2: "Light"},
     "CVPP": {0: "Man", 1: "Cover 2", 2: "Zone"},
     "DMPP": {0: "Aggressive", 1: "Conservative", 2: "Balanced"},
@@ -868,8 +872,8 @@ COACH_PLAN_VALUES = {
 
 COACH_PLAN_TABS = [
     ("Game plan", [
-        ("Offense", [("OSPP", "Offensive scheme"), ("OPPP", "Offensive plays called by"), ("NHPP", "No-huddle")]),
-        ("Defense", [("DSPP", "Defensive scheme"), ("CDTY", "Defensive philosophy"), ("DPPP", "Defensive plays called by"),
+        ("Offense", [("OSPP", "Offensive scheme"), ("OPPP", "Offensive playbook control"), ("NHPP", "No-huddle philosophy")]),
+        ("Defense", [("DSPP", "Defensive scheme"), ("CDTY", "Defensive philosophy"), ("DPPP", "Defensive playbook control"),
                      ("BZPP", "Blitzing"), ("CVPP", "Coverage")]),
         ("Game management", [("DMPP", "Defining moments")]),
     ]),
@@ -1160,6 +1164,9 @@ class CSVModel:
         self.cinf = []               # list[dict] - single global row, has SEYR (current season year, see CINF_SEASON_YEAR_OFFSET)
         self.cinf_headers = []       # list[str]
         self.cinf_path = ""
+        self.tphs = []               # list[dict] - one row per team: the Team Philosophy screen (keyed by TGID)
+        self.tphs_headers = []       # list[str]
+        self.tphs_path = ""
 
         self.team_col = None
         self.max_map = {}
@@ -3153,16 +3160,17 @@ def team_nickname(tid):
     return name.split(" (")[0] if name else ""
 
 
-class CoachGamePlanDialog(tk.Toplevel):
-    """Edit a coach's game plan, position philosophies and User/CPU duties by
-    name. Only fields this save has are shown; Apply writes just what changed."""
+class TeamPhilosophyDialog(tk.Toplevel):
+    """Edit a team's philosophy (schemes, playbook control, position philosophies) by
+    name, on a row of the TPHS table. Only fields the row has are shown (and a tab
+    with none is left out); Apply writes just what changed."""
 
-    def __init__(self, parent, rows_list, row_index, subject_label, refresh_callback):
+    def __init__(self, parent, rows_list, row_index, subject_label, refresh_callback, note=""):
         super().__init__(parent)
         p = getattr(parent, "_ui_palette", None)
         if p:
             self.configure(background=p["bg"])
-        self.title("Game plan")
+        self.title("Team philosophy")
         self.minsize(520, 320)
         self.transient(parent)
         self.parent, self.rows_list, self.row_index, self.refresh_callback = parent, rows_list, row_index, refresh_callback
@@ -3179,24 +3187,24 @@ class CoachGamePlanDialog(tk.Toplevel):
 
         ttk.Label(self, text=subject_label, font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
         ttk.Label(self, foreground="gray", wraplength=520, justify="left", padding=(12, 2, 12, 6),
-                  text="Names come from the community HC09 field list. They are valid options for these fields, but what "
-                       "each one changes in-game hasn't been tested - try it on a copy of your save.").pack(anchor="w")
+                  text=note).pack(anchor="w")
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self._nb, self._canvases, self._inners = nb, [], []
         for tab_name, sections in COACH_PLAN_TABS:
+            shown = [(section, [(c, l) for c, l in fields if c in self.row]) for section, fields in sections]
+            shown = [(section, present) for section, present in shown if present]
+            if not shown:
+                continue
             frame = self._scroll_tab(nb, tab_name)
-            for section, fields in sections:
-                present = [(c, l) for c, l in fields if c in self.row]
-                if not present:
-                    continue
+            for section, present in shown:
                 box = ttk.LabelFrame(frame, text=section)
                 box.pack(fill="x", padx=8, pady=(8, 0))
                 for i, (code, label) in enumerate(present):
                     ttk.Label(box, text=label + ":", width=36, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
                     self._add_list_field(box, i, code)
-        if any(c in self.row for c, _ in COACH_PLAN_NUMBERS):
+        if self._inners and any(c in self.row for c, _ in COACH_PLAN_NUMBERS):
             box = ttk.LabelFrame(self._inners[0], text="CPU tendencies (0-100)")
             box.pack(fill="x", padx=8, pady=(8, 0))
             for i, (code, label) in enumerate([(c, l) for c, l in COACH_PLAN_NUMBERS if c in self.row]):
@@ -3278,7 +3286,7 @@ class CoachGamePlanDialog(tk.Toplevel):
             else:
                 new = safe_int(var.get())
                 if new is None or not 0 <= new <= 100:
-                    messagebox.showerror("Game plan", f"{code}: enter a whole number from 0 to 100.", parent=self)
+                    messagebox.showerror("Team philosophy", f"{code}: enter a whole number from 0 to 100.", parent=self)
                     return
             if str(new) != (self.row.get(code, "") or "").strip():
                 updates[code] = str(new)
@@ -5470,7 +5478,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_coach).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Coach's Stats", command=self.on_max_selected_coach).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Personality...", command=self.on_open_coach_personality_editor).pack(side="left", padx=(8, 0))
-        ttk.Button(top, text="Game Plan...", command=self.on_open_coach_game_plan).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Team Philosophy...", command=self.on_open_team_philosophy).pack(side="left", padx=(8, 0))
 
         # Search controls for coach first/last name
         self.coach_search_var = tk.StringVar()
@@ -7220,19 +7228,27 @@ class App(tk.Tk):
             subject_kind="coach",
         )
 
-    def on_open_coach_game_plan(self):
+    def on_open_team_philosophy(self):
+        """The team philosophy the game's Team Philosophy screen shows (TPHS table), for the
+        selected coach's team, or the team selected on the Players tab if no coach is."""
+        tid = ""
         sel = self.tree_coach.selection()
-        if not sel:
-            messagebox.showinfo("No coach", "Select a coach first.")
+        if sel:
+            try:
+                tid = (self.model.coaches[int(sel[0])].get("TGID") or "").strip()
+            except (ValueError, IndexError):
+                tid = ""
+        tid = tid or self.selected_team_id.get().strip()
+        idx = next((i for i, r in enumerate(self.model.tphs) if (r.get("TGID") or "").strip() == tid), None)
+        if idx is None:
+            messagebox.showinfo("Team philosophy", "This save has no team philosophy data for that team. Select a team's coach first.")
             return
-        try:
-            idx = int(sel[0])
-        except Exception:
-            return
-        row = self.model.coaches[idx]
-        name = f"{(row.get('CFNM','') or '').strip()} {(row.get('CLNM','') or '').strip()}".strip()
-        pos = COACH_POSITION_LABELS.get((row.get("COPS", "") or "").strip(), "")
-        CoachGamePlanDialog(self, self.model.coaches, idx, f"Coach: {name}" + (f" ({pos})" if pos else ""), self.refresh_coach)
+        nick = team_nickname(tid) or f"Team {tid}"
+        TeamPhilosophyDialog(
+            self, self.model.tphs, idx, f"{nick} team philosophy", lambda: None,
+            note="This is the data behind the game's Team Philosophy screen. Checked in the game: no-huddle, "
+                 "playbook control (Head Coach or Offensive Coordinator) and offensive scheme. Other names come from a "
+                 "community list and haven't been checked - try changes on a copy of your save.")
 
     def _apply_coach_skpt(self):
         sel = self.tree_coach.selection()

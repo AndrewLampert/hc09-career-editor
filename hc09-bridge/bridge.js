@@ -8,7 +8,7 @@ const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 const ASTParser = require('madden-file-tools/streams/ASTParser');
 const { Readable } = require('stream');
 
-const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM', 'cINF'];
+const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM', 'cINF', 'TPHS'];
 
 function csvEscape(value) {
     if (value === null || value === undefined) return '';
