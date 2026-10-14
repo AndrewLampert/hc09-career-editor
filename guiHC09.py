@@ -3163,12 +3163,19 @@ class CoachGamePlanDialog(tk.Toplevel):
         if p:
             self.configure(background=p["bg"])
         self.title("Game plan")
-        self.minsize(560, 520)
+        self.minsize(520, 320)
         self.transient(parent)
         self.parent, self.rows_list, self.row_index, self.refresh_callback = parent, rows_list, row_index, refresh_callback
         self.row = rows_list[row_index]
         self.vars = {}      # field -> StringVar
         self.names = {}     # field -> {display text: stored value}
+
+        # The button row is packed first so it can never be pushed off the bottom of a short screen;
+        # each tab scrolls instead.
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
 
         ttk.Label(self, text=subject_label, font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
         ttk.Label(self, foreground="gray", wraplength=520, justify="left", padding=(12, 2, 12, 6),
@@ -3177,9 +3184,9 @@ class CoachGamePlanDialog(tk.Toplevel):
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self._nb, self._canvases, self._inners = nb, [], []
         for tab_name, sections in COACH_PLAN_TABS:
-            frame = ttk.Frame(nb)
-            nb.add(frame, text=tab_name)
+            frame = self._scroll_tab(nb, tab_name)
             for section, fields in sections:
                 present = [(c, l) for c, l in fields if c in self.row]
                 if not present:
@@ -3187,24 +3194,65 @@ class CoachGamePlanDialog(tk.Toplevel):
                 box = ttk.LabelFrame(frame, text=section)
                 box.pack(fill="x", padx=8, pady=(8, 0))
                 for i, (code, label) in enumerate(present):
-                    ttk.Label(box, text=label + ":", width=26, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
+                    ttk.Label(box, text=label + ":", width=36, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
                     self._add_list_field(box, i, code)
         if any(c in self.row for c, _ in COACH_PLAN_NUMBERS):
-            frame = [f for f in nb.winfo_children()][0]
-            box = ttk.LabelFrame(frame, text="CPU tendencies (0-100)")
+            box = ttk.LabelFrame(self._inners[0], text="CPU tendencies (0-100)")
             box.pack(fill="x", padx=8, pady=(8, 0))
             for i, (code, label) in enumerate([(c, l) for c, l in COACH_PLAN_NUMBERS if c in self.row]):
-                ttk.Label(box, text=label + ":", width=26, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
+                ttk.Label(box, text=label + ":", width=36, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
                 var = tk.StringVar(value=(self.row.get(code, "") or "").strip())
-                ttk.Spinbox(box, from_=0, to=100, width=6, textvariable=var).grid(row=i, column=1, sticky="w", pady=3)
+                spin = ttk.Spinbox(box, from_=0, to=100, width=6, textvariable=var)
+                spin.grid(row=i, column=1, sticky="w", pady=3)
+                spin.bind("<MouseWheel>", self._wheel)
                 self.vars[code] = var
 
-        btn = ttk.Frame(self)
-        btn.pack(fill="x", padx=12, pady=(0, 12))
-        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
-        ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        self.bind("<MouseWheel>", self._wheel)
         self.bind("<Escape>", lambda e: self.destroy())
+        self._fit_to_screen(parent)
         self.grab_set()
+
+    def _scroll_tab(self, nb, title):
+        """Add a tab whose content scrolls; returns the frame to put the fields in."""
+        outer = ttk.Frame(nb)
+        nb.add(outer, text=title)
+        pal = getattr(self.parent, "_ui_palette", None)
+        canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0, **({"background": pal["bg"]} if pal else {}))
+        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = ttk.Frame(canvas)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
+        canvas.bind("<Configure>", lambda e, c=canvas, w=win: c.itemconfigure(w, width=e.width))
+        self._canvases.append(canvas)
+        self._inners.append(inner)
+        return inner
+
+    def _wheel(self, event):
+        """Mouse wheel scrolls the open tab - also over a drop-down or number box, so a scroll
+        can't silently change a value."""
+        try:
+            canvas = self._canvases[self._nb.index("current")]
+        except (tk.TclError, IndexError):
+            return "break"
+        if canvas.yview() != (0.0, 1.0):
+            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        return "break"
+
+    def _fit_to_screen(self, parent):
+        """Open tall enough to show a whole tab if the screen allows, otherwise at most 80% of the
+        screen height (the tabs scroll), beside the main window rather than off the edge."""
+        self.update_idletasks()
+        canvas = self._canvases[0]
+        need_h = self.winfo_reqheight() - canvas.winfo_reqheight() + max(i.winfo_reqheight() for i in self._inners) + 6
+        need_w = max(600, max(i.winfo_reqwidth() for i in self._inners) + 90)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = min(need_w, sw - 40), max(320, min(need_h, int(sh * 0.8)))
+        x = max(0, min(parent.winfo_rootx() + 40, sw - w - 20))
+        y = max(0, min(parent.winfo_rooty() + 20, sh - h - 80))
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
     def _add_list_field(self, box, grid_row, code):
         values = dict(COACH_PLAN_VALUES.get(code, {}))
@@ -3214,7 +3262,9 @@ class CoachGamePlanDialog(tk.Toplevel):
         names = {name: v for v, name in values.items()}
         self.names[code] = names
         var = tk.StringVar(value=values.get(current, ""))
-        ttk.Combobox(box, state="readonly", width=24, textvariable=var, values=list(names)).grid(row=grid_row, column=1, sticky="w", pady=3)
+        cb = ttk.Combobox(box, state="readonly", width=24, textvariable=var, values=list(names))
+        cb.grid(row=grid_row, column=1, sticky="w", pady=3)
+        cb.bind("<MouseWheel>", self._wheel)
         self.vars[code] = var
 
     def _apply(self):
@@ -4391,6 +4441,7 @@ class App(tk.Tk):
             style.configure("TEntry", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
             style.configure("TCombobox", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
             style.map("TCombobox", fieldbackground=[("readonly", p["surface"])])
+            style.configure("TSpinbox", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
 
             style.configure("TNotebook", background=p["bg"], bordercolor=p["border"], tabmargins=(6, 6, 6, 0))
             style.configure("TNotebook.Tab", padding=(16, 8), background=p["bg"], foreground=p["subtle"], font=(UI_FONT_FAMILY, 9, "bold"))
