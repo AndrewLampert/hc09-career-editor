@@ -1099,6 +1099,11 @@ class CSVModel:
         self.csv_formats = {}
 
         self.db_path = ""       # path to the .db / USR-DATA save file
+        # Playbook tables edited in the Playbooks tab and not yet saved:
+        # {"PGPL": [row dicts, whole table], ...}. Written (with row appending
+        # enabled for just these tables) by save_to_db, then dropped.
+        self.pb_pending = {}
+        self.load_serial = 0
 
     # ---------- Bridge (node bridge.js) ----------
     def run_bridge(self, args):
@@ -1125,6 +1130,8 @@ class CSVModel:
         if not db_path or not os.path.isfile(db_path):
             raise ValueError("Select a valid .db / USR-DATA save file.")
 
+        self.pb_pending = {}   # unsaved playbook edits belong to the file being replaced
+        self.load_serial += 1  # lets the Playbooks tab notice a reload even when the file's mtime is unchanged
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_load_")
         try:
             self.run_bridge(["export", "--db", db_path, "--out", tmp_dir])
@@ -1148,21 +1155,65 @@ class CSVModel:
             raise ValueError("No save file loaded.")
 
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_save_")
+        pending = {t: rows for t, rows in self.pb_pending.items() if t in PLAYBOOK_TABLE_HEADERS}
         try:
             for code, rows_attr, headers_attr, _path_attr in DB_TABLE_ATTRS:
                 rows = getattr(self, rows_attr)
                 if rows:
                     self._write_csv(os.path.join(tmp_dir, DB_TABLE_FILES[code]), rows, getattr(self, headers_attr))
+            for table, rows in pending.items():
+                self._write_csv(os.path.join(tmp_dir, table.lower() + ".csv"), rows, PLAYBOOK_TABLE_HEADERS[table])
 
             backup_path = self.db_path + ".bak"
             shutil.copy2(self.db_path, backup_path)
 
             # No --out: save in place. (Passing --out equal to --db would hit a
             # clone-to-self race in HC09Helper.save() and corrupt the file.)
-            self.run_bridge(["import", "--db", self.db_path, "--in", tmp_dir])
+            args = ["import", "--db", self.db_path, "--in", tmp_dir]
+            if pending:
+                # Playbook edits add rows, which an ordinary import never does, so
+                # growing is enabled for exactly the edited tables.
+                args += ["--tables", ",".join([c for c, *_ in DB_TABLE_ATTRS] + list(pending)),
+                         "--allow-append", ",".join(pending)]
+            if pending:
+                try:
+                    result = self.run_bridge(args)
+                except Exception as e:
+                    # The import may have died partway through writing the file.
+                    shutil.copy2(backup_path, self.db_path)
+                    raise RuntimeError(
+                        "The playbook edits could not be saved, so your save was restored from its backup. "
+                        f"Details: {e}") from e
+                self._check_playbook_save(result, pending, backup_path)
+            else:
+                self.run_bridge(args)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+        if pending:
+            self.pb_pending = {}
         return backup_path
+
+    def _check_playbook_save(self, import_result, pending, backup_path):
+        """After a save that grew playbook tables: every pending table must have
+        been written, and the file must pass the bridge's structure check
+        (every table header checksum, the checksum chain, row counts). If not,
+        put the backup back rather than leave a save the game might reject."""
+        by_table = {r.get("table"): r for r in (import_result or {}).get("results", [])}
+        problems = [f"{t}: {by_table.get(t, {}).get('status', 'missing')}" for t in pending
+                    if by_table.get(t, {}).get("status") != "ok"]
+        if not problems:
+            try:
+                check = self.run_bridge(["verify-db", "--db", self.db_path])
+                if not check.get("ok"):
+                    problems = check.get("issues") or ["structure check failed"]
+            except Exception as e:
+                # A file the checker can't even open or parse is not a file to keep.
+                problems = [f"the structure check could not run ({e})"]
+        if problems:
+            shutil.copy2(backup_path, self.db_path)
+            raise RuntimeError(
+                "The playbook edits could not be saved safely, so your save was restored from its backup. "
+                "Details: " + "; ".join(str(p) for p in problems[:4]))
 
     def _write_csv(self, path, rows, headers):
         with open(path, "w", newline="", encoding="utf-8") as f:
@@ -3009,6 +3060,16 @@ class PlayerTypeFitDialog(tk.Toplevel):
 PLAYBOOK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
 PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB"]
+# The four tables that make up a playbook's contents, in CSV column order.
+PLAYBOOK_TABLE_HEADERS = {
+    "PGPL": ["BOKL", "SETL", "PLYL", "PLTP"],   # plays in a playbook
+    "PGFM": ["BOKL", "PBFM", "SRFM"],           # formations in a playbook
+    "PGSS": ["BOKL", "SETL"],                   # sets in a playbook
+    "PGSL": ["BOKL", "SETL", "PBFM"],           # which formation each set sits under
+}
+PLAYBOOK_PLAY_CAP = 200   # in-game limit per playbook (200 offensive or 200 defensive), special teams not counted
+PLAYBOOK_CREATED_FORMATIONS = {"8190", "8191"}   # the per-save "Created Plays" formations (offense / defense)
+PLAYBOOK_SPECIAL_FORMATIONS = {"kickoff", "safety punt", "special teams", "kick return", "safety kick return", "special"}
 
 
 def read_csv_dicts(path):
@@ -3023,6 +3084,304 @@ def read_csv_dicts(path):
 def team_nickname(tid):
     name = TEAM_NAMES.get(tid, "")
     return name.split(" (")[0] if name else ""
+
+
+class PlaybookCopyDialog(tk.Toplevel):
+    """Copy plays, whole sets or whole formations from another playbook into
+    the target one. Shows exactly what would be added (and the 200-play limit)
+    before anything is changed; on_apply(plan) performs the change."""
+
+    AUTO = "Same formation name as the source (add it if missing)"
+    OTHER = "Another playbook..."
+
+    def __init__(self, app, data, target, on_apply, preselect=None, choices=()):
+        """target: the BOKL plays are added INTO first. choices: [(label, BOKL)] shown
+        in the 'Adding INTO' list (the chosen team's own playbooks), so the target can
+        be switched without leaving the dialog."""
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.app, self.data, self.target, self.on_apply = app, data, target, on_apply
+        self._choices = list(choices)
+        self._target_labels = {}
+        self.title(f"Add plays INTO {data.book_label(target)}")
+        self.transient(app)
+        self.geometry("860x640")
+        self.minsize(640, 460)
+        self._plan = None
+        self._sources = []
+        self._into_ids = {}
+
+        trow = ttk.Frame(self)
+        trow.pack(fill="x", padx=10, pady=(10, 2))
+        ttk.Label(trow, text="Adding INTO:", font=("TkDefaultFont", 10, "bold")).pack(side="left")
+        self.target_var = tk.StringVar()
+        self.cmb_target = ttk.Combobox(trow, state="readonly", width=58, textvariable=self.target_var)
+        self.cmb_target.pack(side="left", padx=(8, 10))
+        self.cmb_target.bind("<<ComboboxSelected>>", lambda e: self._on_target_choice())
+        self.lbl_target = ttk.Label(trow, font=("TkDefaultFont", 10, "bold"))
+        self.lbl_target.pack(side="left")
+        self.lbl_shared = ttk.Label(self, foreground="#b9770e", wraplength=820, justify="left")
+        self.lbl_shared.pack(anchor="w", padx=10, pady=(0, 2))
+        ttk.Label(self, foreground="gray", wraplength=820, justify="left",
+                  text="Plays are added INTO the playbook chosen in \"Adding INTO\" - it starts as your team's, and the list lets you "
+                       "switch to your defense or any other playbook. That is the only playbook that changes. "
+                       "Step 1: pick the playbook to copy FROM. Step 2: pick a play, a set or a whole formation from it. "
+                       "Step 3: say where new sets go, check the summary, then add."
+                  ).pack(anchor="w", padx=10, pady=(0, 6))
+
+        body = ttk.PanedWindow(self, orient="horizontal")
+        body.pack(fill="both", expand=True, padx=10, pady=4)
+
+        left = ttk.Frame(body)
+        ttk.Label(left, text="1. Copy FROM this playbook", font=("TkDefaultFont", 9, "bold")).pack(anchor="w", pady=(0, 3))
+        top = ttk.Frame(left)
+        top.pack(fill="x")
+        ttk.Label(top, text="Filter:").pack(side="left")
+        self.filter_var = tk.StringVar()
+        ttk.Entry(top, textvariable=self.filter_var).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.filter_var.trace_add("write", lambda *_: self._fill_sources())
+        lf = ttk.Frame(left)
+        lf.pack(fill="both", expand=True, pady=(4, 0))
+        self.lst = tk.Listbox(lf, exportselection=False, width=30)
+        lsb = ttk.Scrollbar(lf, orient="vertical", command=self.lst.yview)
+        self.lst.configure(yscrollcommand=lsb.set)
+        lsb.pack(side="right", fill="y")
+        self.lst.pack(side="left", fill="both", expand=True)
+        self.lst.bind("<<ListboxSelect>>", lambda e: self._on_source())
+        body.add(left, weight=1)
+
+        right = ttk.Frame(body)
+        self.lbl_right = ttk.Label(right, text="2. Pick what to copy (choose a playbook first)", font=("TkDefaultFont", 9, "bold"))
+        self.lbl_right.pack(anchor="w", pady=(0, 3))
+        rf = ttk.Frame(right)
+        rf.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(rf, show="tree", selectmode="browse")
+        rsb = ttk.Scrollbar(rf, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=rsb.set)
+        rsb.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._on_pick())
+        body.add(right, weight=2)
+
+        opt = ttk.Frame(self)
+        opt.pack(fill="x", padx=10, pady=(6, 0))
+        self.lbl_step3 = ttk.Label(opt, font=("TkDefaultFont", 9, "bold"))
+        self.lbl_step3.pack(side="left")
+        self.into_var = tk.StringVar(value=self.AUTO)
+        self.cmb_into = ttk.Combobox(opt, state="readonly", width=44, textvariable=self.into_var)
+        self.cmb_into.pack(side="left", padx=(8, 0))
+        self.cmb_into.bind("<<ComboboxSelected>>", lambda e: self._on_pick())
+        self._fill_into()
+        self.lbl_hint = ttk.Label(self, foreground="gray", wraplength=820, justify="left")
+        self.lbl_hint.pack(anchor="w", padx=10, pady=(2, 0))
+
+        self.lbl_summary = ttk.Label(self, wraplength=820, justify="left")
+        self.lbl_summary.pack(fill="x", padx=10, pady=(8, 2))
+        self.lbl_done = ttk.Label(self, wraplength=820, justify="left", foreground="#1e8449")
+        self.lbl_done.pack(fill="x", padx=10, pady=(0, 4))
+        btn = ttk.Frame(self)
+        btn.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_add = ttk.Button(btn, command=self._add, state="disabled")
+        self.btn_add.pack(side="right", padx=(0, 8))
+
+        self._update_target_label()
+        self._refresh_target_texts()
+        self._refresh_target_combo()
+        self._fill_sources(select=preselect[0] if preselect else None)
+        if preselect:
+            self._select_play(preselect[1], preselect[2])
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+
+    def _update_target_label(self):
+        d = self.data
+        users = [f"offense: {', '.join(d.offense_used_by[self.target])}" for _ in [0] if d.offense_used_by.get(self.target)]
+        users += [f"defense: {', '.join(d.defense_used_by[self.target])}" for _ in [0] if d.defense_used_by.get(self.target)]
+        shared = len(d.offense_used_by.get(self.target, [])) + len(d.defense_used_by.get(self.target, []))
+        names = d.book_names.get(self.target, [])
+        extra = []
+        if shared:
+            extra.append(f"Used by {'; '.join(users)}. " + ("Changes apply to every team using it. " if shared > 1 else ""))
+        if len(names) > 1:
+            extra.append(f"This is one playbook shared under several names ({' / '.join(names)}), so the change shows under all of them.")
+        self.lbl_target.configure(text=f"{d.counted_plays(self.target)} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+        if not d.side_of(self.target):
+            extra.append("Can't tell whether this playbook is offense or defense, so copying into it is disabled.")
+        if hasattr(self, "lbl_shared"):
+            self.lbl_shared.configure(text=" ".join(extra))
+
+    def _refresh_target_texts(self):
+        """Everything that names the playbook being added INTO."""
+        name = self.data.book_label(self.target)
+        self.title(f"Add plays INTO {name}")
+        self.lbl_step3.configure(text=f"3. If a copied set is new to {name}, put it under:")
+        self.lbl_hint.configure(
+            text=f"Sets {name} already has stay where they are (the copied plays just join them) - this choice only "
+                 "applies to sets it doesn't have yet. Leave it on the first option to use the formation with the same name; "
+                 "pick one of your own formations to put the new sets under that instead (e.g. a source's \"Shotgun\" sets under your \"Gun\").")
+        self.btn_add.configure(text=f"Add to {name}")
+
+    def _refresh_target_combo(self):
+        """The 'Adding INTO' list: the team's playbooks, the current target if it came from
+        'Another playbook...', then that option itself."""
+        d = self.data
+        self._target_labels = {}
+        for label, bokl in self._choices:
+            self._target_labels.setdefault(label, bokl)
+        if self.target not in self._target_labels.values():
+            side = d.side_of(self.target)
+            self._target_labels[f"{d.book_label(self.target)}" + (f" ({side.lower()})" if side else "")] = self.target
+        current = next(label for label, bokl in self._target_labels.items() if bokl == self.target)
+        self.cmb_target.configure(values=list(self._target_labels) + [self.OTHER])
+        self.target_var.set(current)
+
+    def _on_target_choice(self):
+        label = self.target_var.get()
+        if label == self.OTHER:
+            d = self.data
+            rows = [(b, f"{name}  ({side.lower() if side else 'side unknown'})", b, "") for b, name, side, *_ in d.books()]
+            dlg = PlaybookPickerDialog(self, "Add plays INTO which playbook?", rows, self.target)
+            self.wait_window(dlg)
+            self.grab_set()
+            if dlg.result:
+                self._set_target(dlg.result[2])
+            else:
+                self._refresh_target_combo()
+            return
+        bokl = self._target_labels.get(label)
+        if bokl and bokl != self.target:
+            self._set_target(bokl)
+
+    def _set_target(self, bokl):
+        """Switch the playbook being added INTO; the FROM list, the pick and the summary start over."""
+        self.target = bokl
+        self._plan = None
+        self.lbl_done.configure(text="")
+        self.into_var.set(self.AUTO)
+        self._update_target_label()
+        self._refresh_target_texts()
+        self._fill_into()
+        self._fill_sources()
+        self._on_source()
+        self._on_pick()     # nothing is picked any more: clears the summary and disables Add
+        self._refresh_target_combo()
+
+    def _fill_into(self):
+        d = self.data
+        self._into_ids = {self.AUTO: None}
+        for f, sr in d.book_formations.get(self.target, []):
+            if f in PLAYBOOK_CREATED_FORMATIONS:
+                continue
+            self._into_ids[d.formation_base(f, sr)] = f
+        self.cmb_into.configure(values=list(self._into_ids))
+
+    def _fill_sources(self, select=None):
+        d = self.data
+        q = " ".join(self.filter_var.get().lower().split())
+        side = d.side_of(self.target)
+        self.lst.delete(0, tk.END)
+        self._sources = []
+        for bokl, name, bside, _i, plays, _o, _d in d.books():
+            if bokl == self.target or not side or bside != side or q not in name.lower():
+                continue
+            self._sources.append(bokl)
+            self.lst.insert(tk.END, f"{name}  ({plays})")
+        if select in self._sources:
+            self.lst.selection_set(self._sources.index(select))
+            self.lst.see(self._sources.index(select))
+            self._on_source()
+
+    def _source(self):
+        sel = self.lst.curselection()
+        return self._sources[sel[0]] if sel else None
+
+    def _on_source(self):
+        d, src = self.data, self._source()
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        self.lbl_right.configure(text=f"2. Pick what to copy from {d.book_label(src)}" if src else "2. Pick what to copy (choose a playbook first)")
+        if not src:
+            return
+        for f, sr in d.book_formations.get(src, []):
+            if f in PLAYBOOK_CREATED_FORMATIONS:
+                continue
+            sets = d.formation_sets.get((src, f), [])
+            fnode = self.tree.insert("", tk.END, iid=f"F|{f}", text=f"{d.formation_base(f, sr)}  ({len(sets)} sets)")
+            for st in sets:
+                plays = d.set_plays.get((src, st), [])
+                snode = self.tree.insert(fnode, tk.END, iid=f"S|{f}|{st}", text=f"{d.set_label(st)}  ({len(plays)} plays)")
+                for pl, _tp in plays:
+                    self.tree.insert(snode, tk.END, iid=f"P|{f}|{st}|{pl}", text=d.play_label(st, pl))
+        self._on_pick()
+
+    def _select_play(self, setl, plyl):
+        for iid in self._all_nodes():
+            if iid.startswith("P|") and iid.split("|")[2:] == [setl, plyl]:
+                parent = self.tree.parent(iid)
+                self.tree.item(self.tree.parent(parent), open=True)
+                self.tree.item(parent, open=True)
+                self.tree.selection_set(iid)
+                self.tree.see(iid)
+                return
+
+    def _all_nodes(self):
+        out, stack = [], list(self.tree.get_children())
+        while stack:
+            n = stack.pop(0)
+            out.append(n)
+            stack = list(self.tree.get_children(n)) + stack
+        return out
+
+    def _on_pick(self):
+        self._plan = None
+        self.btn_add.configure(state="disabled")
+        src, sel = self._source(), self.tree.selection()
+        if not src or not sel:
+            self.lbl_summary.configure(text="Select a play, a set or a formation to see what would be added.", foreground="gray")
+            return
+        parts = sel[0].split("|")
+        into = self._into_ids.get(self.into_var.get())
+        if parts[0] == "F":
+            plan = self.data.plan_copy(src, self.target, "formation", parts[1], into)
+        elif parts[0] == "S":
+            plan = self.data.plan_copy(src, self.target, "set", parts[2], into)
+        else:
+            plan = self.data.plan_copy(src, self.target, "play", (parts[2], parts[3]), into)
+        self._plan = plan
+        if plan["error"]:
+            self.lbl_summary.configure(text=plan["error"], foreground="#c0392b")
+            return
+        bits = [f"{plan['new_plays']} play(s)"]
+        if plan["new_sets"]:
+            bits.append(f"{plan['new_sets']} new set(s)")
+        if plan["new_formations"]:
+            bits.append("a new formation: " + ", ".join(plan["new_formations"]))
+        text = (f"Will add {', '.join(bits)} FROM {self.data.book_label(src)} INTO {self.data.book_label(self.target)}, "
+                f"taking it from {plan['counted_before']} to {plan['plays_after']} of {PLAYBOOK_PLAY_CAP} plays.")
+        if plan["already"]:
+            text += f" ({plan['already']} already there.)"
+        if plan["notes"]:
+            text += " " + " ".join(plan["notes"])
+        self.lbl_summary.configure(text=text, foreground="")
+        self.btn_add.configure(state="normal")
+
+    def _add(self):
+        if not self._plan or self._plan["error"]:
+            return
+        plan = self._plan
+        try:
+            n = self.on_apply(plan)
+        except ValueError as e:
+            messagebox.showerror("Add plays", str(e), parent=self)
+            return
+        self._update_target_label()
+        self._fill_into()
+        self._on_pick()
+        self.lbl_done.configure(text=f"Added {n} row(s) FROM {self.data.book_label(plan['src'])} INTO {self.data.book_label(plan['tgt'])}. "
+                                     "Use Save to File in the main window to keep them.")
 
 
 class PlaybookPickerDialog(tk.Toplevel):
@@ -3112,12 +3471,17 @@ class PlaybookData:
             if bokl and bgid:
                 self.bgid_book[(side, bgid)] = bokl
                 self.bgid_info[(side, bgid)] = {"name": name or f"Playbook {bokl}", "bokl": bokl, "bord": (r.get("BORD") or "").strip()}
-            if bokl and name:
-                if name not in self.book_names[bokl]:
-                    self.book_names[bokl].append(name)
+            if bokl and side in ("0", "1"):
                 self.book_side[bokl] = "Offense" if side == "1" else "Defense"
+            if bokl and name and name not in self.book_names[bokl]:
+                self.book_names[bokl].append(name)
 
         self.formation_name = {(r.get("PBFM") or "").strip(): (r.get("name") or "").strip() for r in g("pbfm")}
+        # What the game itself ships. Anything outside these is content the user
+        # made in-game (Create-a-Play / Create-a-Playbook): the reporter found
+        # copying that breaks flipping and puts punts in the Gun, so it is never copied.
+        self.stock_sets = {(r.get("SETL") or "").strip() for r in g("setl")}
+        self.stock_plays = {((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip()) for r in g("pbpl")}
         self.set_name = {}
         for r in g("setl") + v("setl"):
             self.set_name[(r.get("SETL") or "").strip()] = (r.get("name") or "").strip()
@@ -3126,22 +3490,278 @@ class PlaybookData:
             self.play_info[((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip())] = (
                 (r.get("name") or "").strip(), (r.get("PLYT") or "").strip())
 
+        # The four content tables are kept as editable row lists; everything
+        # below is an index over them, rebuilt after each edit.
+        self.tables = {name: list(v(name.lower())) for name in PLAYBOOK_TABLE_HEADERS}
+        self.dirty_tables = set()
+        self._index_structure()
+
+        self.set_usage(coaches)
+
+    def _index_structure(self):
+        t = self.tables
+        key = lambda r, f: (r.get(f) or "").strip()
         self.book_formations = defaultdict(list)   # BOKL -> [(PBFM, SRFM)]
-        for r in v("pgfm"):
-            self.book_formations[(r.get("BOKL") or "").strip()].append(((r.get("PBFM") or "").strip(), (r.get("SRFM") or "").strip()))
+        self.formation_srfm = {}                   # (BOKL, PBFM) -> SRFM
+        for r in t["PGFM"]:
+            b, f, sr = key(r, "BOKL"), key(r, "PBFM"), key(r, "SRFM")
+            self.book_formations[b].append((f, sr))
+            self.formation_srfm[(b, f)] = sr
+        self.book_sets = defaultdict(set)          # BOKL -> {SETL}  (PGSS)
+        for r in t["PGSS"]:
+            self.book_sets[key(r, "BOKL")].add(key(r, "SETL"))
         self.formation_sets = defaultdict(list)    # (BOKL, PBFM) -> [SETL]
-        for r in v("pgsl"):
-            self.formation_sets[((r.get("BOKL") or "").strip(), (r.get("PBFM") or "").strip())].append((r.get("SETL") or "").strip())
+        self.set_formations = defaultdict(list)    # (BOKL, SETL) -> [PBFM]
+        for r in t["PGSL"]:
+            b, st, f = key(r, "BOKL"), key(r, "SETL"), key(r, "PBFM")
+            self.formation_sets[(b, f)].append(st)
+            self.set_formations[(b, st)].append(f)
         self.set_plays = defaultdict(list)         # (BOKL, SETL) -> [(PLYL, PLTP)]
         self.play_books = defaultdict(set)         # (SETL, PLYL) -> {BOKL}
         self.book_play_count = Counter()
-        for r in v("pgpl"):
-            bokl, setl, plyl = (r.get("BOKL") or "").strip(), (r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip()
-            self.set_plays[(bokl, setl)].append((plyl, (r.get("PLTP") or "").strip()))
-            self.play_books[(setl, plyl)].add(bokl)
-            self.book_play_count[bokl] += 1
+        for r in t["PGPL"]:
+            b, st, pl = key(r, "BOKL"), key(r, "SETL"), key(r, "PLYL")
+            self.set_plays[(b, st)].append((pl, key(r, "PLTP")))
+            self.play_books[(st, pl)].add(b)
+            self.book_play_count[b] += 1
+        self._infer_sides()
 
-        self.set_usage(coaches)
+    def _infer_sides(self):
+        """Playbooks that have no row in the game's playbook list (custom ones)
+        have no recorded side. A stock set only ever appears on one side (checked:
+        173 sets, none on both), so a book whose stock sets all agree is on that
+        side. A book with no recognisable sets, or sets from both sides, stays unknown."""
+        seen = defaultdict(set)
+        for (b, st) in self.set_plays:
+            if self.book_side.get(b):
+                seen[st].add(self.book_side[b])
+        set_side = {st: next(iter(v)) for st, v in seen.items() if len(v) == 1}
+        self.inferred_side = {}
+        books = {b for (b, _st) in self.set_plays} | set(self.book_formations)
+        for b in books:
+            if b in self.book_side:
+                continue
+            sides = {set_side[st] for (bb, st) in self.set_plays if bb == b and st in set_side}
+            if len(sides) == 1:
+                self.inferred_side[b] = next(iter(sides))
+
+    def side_of(self, bokl):
+        """"Offense", "Defense" or "" if it can't be told."""
+        return self.book_side.get(bokl) or self.inferred_side.get(bokl) or ""
+
+    # ---- editing: copy plays / sets / formations from one playbook into another
+    def formation_base(self, pbfm, srfm=""):
+        """A formation's plain name ("Gun"), ignoring the "(copy N)" marker."""
+        return (self.formation_name.get(pbfm) or self.formation_name.get(srfm) or f"Formation {pbfm}").strip()
+
+    def is_custom(self, setl, plyl=None, pbfm=None, srfm=""):
+        """Made in-game rather than shipped by the game. Can only be judged when
+        the game's own name tables are loaded."""
+        if not self.have_game_names:
+            return False
+        if pbfm is not None and pbfm not in self.formation_name and srfm not in self.formation_name:
+            return True
+        if setl is not None and setl not in self.stock_sets:
+            return True
+        return plyl is not None and (setl, plyl) not in self.stock_plays
+
+    def _is_special(self, bases):
+        return bool(bases) and all(b.lower() in PLAYBOOK_SPECIAL_FORMATIONS for b in bases)
+
+    def counted_plays(self, bokl):
+        """Plays that count against the game's per-playbook cap (special teams don't)."""
+        n = 0
+        for (b, st), plays in self.set_plays.items():
+            if b != bokl:
+                continue
+            bases = {self.formation_base(f, self.formation_srfm.get((bokl, f), ""))
+                     for f in self.set_formations.get((bokl, st), []) if f not in PLAYBOOK_CREATED_FORMATIONS}
+            if not self._is_special(bases):
+                n += len(plays)
+        return n
+
+    def violations(self):
+        """Breaks of the rules every stock playbook satisfies (verified on all 98
+        books of a real save): a play's set must be in the playbook's set list and
+        under a formation; every linked formation must exist in the playbook; every
+        set has plays; every formation has sets; no duplicate rows."""
+        out = set()
+        for b in set(self.book_formations) | set(self.book_sets) | {k[0] for k in self.set_plays}:
+            forms = {f for f, _ in self.book_formations.get(b, [])}
+            sets = self.book_sets.get(b, set())
+            played = {st for (bb, st) in self.set_plays if bb == b}
+            linked = {st for (bb, st) in self.set_formations if bb == b}
+            for st in played:
+                if st not in sets: out.add(("play set not in set list", b, st))
+                if st not in linked: out.add(("play set not under a formation", b, st))
+            for st in sets:
+                if st not in played: out.add(("set without plays", b, st))
+                if st not in linked: out.add(("set not under a formation", b, st))
+            for (bb, st), fs in self.set_formations.items():
+                if bb != b: continue
+                for f in fs:
+                    if f not in forms: out.add(("formation link to a formation the playbook lacks", b, f))
+                if len(fs) != len(set(fs)): out.add(("duplicate set link", b, st))
+            for f in forms:
+                if not self.formation_sets.get((b, f)): out.add(("formation without sets", b, f))
+        for name, key in (("PGPL", ("BOKL", "SETL", "PLYL")), ("PGFM", ("BOKL", "PBFM")), ("PGSS", ("BOKL", "SETL")), ("PGSL", ("BOKL", "SETL", "PBFM"))):
+            seen = Counter(tuple((r.get(k) or "").strip() for k in key) for r in self.tables[name])
+            for k, c in seen.items():
+                if c > 1: out.add((f"duplicate {name} row", *k))
+        return out
+
+    def plan_copy(self, src, tgt, kind, key, into_formation=None):
+        """What copying from playbook src into tgt would add. kind: "play"
+        (key = (SETL, PLYL)), "set" (key = SETL) or "formation" (key = the
+        source's PBFM). Formation IDs are unique to each playbook, so a source
+        formation is matched to the target's formation of the same NAME
+        (X's 4-3 into your 4-3); only when the target has none is the source's
+        formation added to it. A set the target already has is left where it is
+        (the plays just join it); into_formation (a target PBFM) overrides the
+        by-name matching for sets that are new to the target, e.g. to put a
+        source's "Shotgun" sets under your "Gun". Nothing is written until
+        apply_plan()."""
+        plan = {"src": src, "tgt": tgt, "rows": {t: [] for t in PLAYBOOK_TABLE_HEADERS}, "new_plays": 0, "new_sets": 0,
+                "new_formations": [], "already": 0, "notes": [], "error": None, "plays_after": None, "counted_before": 0}
+        if not src or not tgt or src == tgt:
+            plan["error"] = "Pick a different playbook to copy from."
+            return plan
+        if not self.have_game_names:
+            plan["error"] = ("Editing playbooks needs the game's own name tables (to tell offense from defense and to recognise "
+                             "custom plays). Open the Playbooks tab with qkl_boot.ast located and try again.")
+            return plan
+        ss, ts = self.side_of(src), self.side_of(tgt)
+        for book, side in ((src, ss), (tgt, ts)):
+            if not side:
+                plan["error"] = (f"Can't tell whether {self.book_label(book)} is an offensive or a defensive playbook, so copying "
+                                 "to or from it is blocked to avoid mixing the two.")
+                return plan
+        if ss != ts:
+            word = {"Offense": "an offensive", "Defense": "a defensive"}
+            plan["error"] = f"{self.book_label(src)} is {word[ss]} playbook and {self.book_label(tgt)} is {word[ts]} one."
+            return plan
+
+        planned_forms, planned_sets, planned_links, planned_plays = {}, set(), set(), set()
+        new_counted = 0
+
+        def target_formation(pbfm):
+            if (tgt, pbfm) in self.formation_srfm or pbfm in planned_forms:
+                return pbfm
+            srfm = self.formation_srfm.get((src, pbfm), pbfm)
+            base = self.formation_base(pbfm, srfm).lower()
+            for pf, sf in list(self.book_formations.get(tgt, [])) + list(planned_forms.items()):
+                if self.formation_base(pf, sf).lower() == base:
+                    return pf
+            planned_forms[pbfm] = srfm
+            plan["rows"]["PGFM"].append({"BOKL": tgt, "PBFM": pbfm, "SRFM": srfm})
+            plan["new_formations"].append(self.formation_base(pbfm, srfm))
+            return pbfm
+
+        def add_set(setl, plays, only_formation=None):
+            nonlocal new_counted
+            if self.is_custom(setl):
+                plan["notes"].append(f'"{self.set_label(setl)}" is a custom set made in-game, so it was skipped - copying custom plays breaks flipping.')
+                plan["skipped_custom"] = True
+                return
+            custom_plays = [pl for pl, _tp in plays if self.is_custom(setl, pl)]
+            if custom_plays:
+                plays = [(pl, tp) for pl, tp in plays if pl not in custom_plays]
+                plan["notes"].append(f"{len(custom_plays)} custom play(s) in \"{self.set_label(setl)}\" were skipped.")
+                plan["skipped_custom"] = True
+            if not plays:
+                return
+            for f in self.set_formations.get((src, setl), []):
+                if f not in PLAYBOOK_CREATED_FORMATIONS and self.is_custom(None, None, f, self.formation_srfm.get((src, f), "")) and into_formation is None and setl not in self.book_sets.get(tgt, set()):
+                    plan["notes"].append(f'"{self.set_label(setl)}" sits under a custom formation in the source, so it was skipped.')
+                    plan["skipped_custom"] = True
+                    return
+            set_is_new = setl not in self.book_sets.get(tgt, set())
+            if not set_is_new:
+                # The target already has this set: leave its formation links alone.
+                mapped = [f for f in self.set_formations.get((tgt, setl), []) if f not in PLAYBOOK_CREATED_FORMATIONS]
+            elif into_formation is not None:
+                mapped = [into_formation]
+            else:
+                s_forms = [f for f in self.set_formations.get((src, setl), []) if f not in PLAYBOOK_CREATED_FORMATIONS]
+                if only_formation is not None:
+                    s_forms = [only_formation]
+                if not s_forms:
+                    plan["notes"].append(f'"{self.set_label(setl)}" is only under Created Plays in the source, so it was skipped.')
+                    return
+                mapped = []
+                for f in s_forms:
+                    tf = target_formation(f)
+                    if tf not in mapped:
+                        mapped.append(tf)
+            if set_is_new and setl not in planned_sets:
+                planned_sets.add(setl)
+                plan["rows"]["PGSS"].append({"BOKL": tgt, "SETL": setl})
+                plan["new_sets"] += 1
+            for tf in mapped:
+                if tf not in self.set_formations.get((tgt, setl), []) and (setl, tf) not in planned_links:
+                    planned_links.add((setl, tf))
+                    plan["rows"]["PGSL"].append({"BOKL": tgt, "SETL": setl, "PBFM": tf})
+            have = {pl for pl, _ in self.set_plays.get((tgt, setl), [])}
+            bases = {self.formation_base(f, planned_forms.get(f) or self.formation_srfm.get((tgt, f), "")) for f in mapped}
+            for plyl, pltp in plays:
+                if plyl in have or (setl, plyl) in planned_plays:
+                    plan["already"] += 1
+                    continue
+                planned_plays.add((setl, plyl))
+                plan["rows"]["PGPL"].append({"BOKL": tgt, "SETL": setl, "PLYL": plyl, "PLTP": pltp})
+                plan["new_plays"] += 1
+                if not self._is_special(bases):
+                    new_counted += 1
+
+        if kind == "play":
+            setl, plyl = key
+            plays = [(pl, tp) for pl, tp in self.set_plays.get((src, setl), []) if pl == plyl]
+            if not plays:
+                plan["error"] = "That play isn't in the source playbook."
+                return plan
+            add_set(setl, plays)
+        elif kind == "set":
+            add_set(key, list(self.set_plays.get((src, key), [])))
+        elif kind == "formation":
+            for st in self.formation_sets.get((src, key), []):
+                add_set(st, list(self.set_plays.get((src, st), [])), only_formation=key)
+        else:
+            plan["error"] = f"Unknown kind {kind}"
+            return plan
+
+        plan["counted_before"] = self.counted_plays(tgt)
+        plan["plays_after"] = plan["counted_before"] + new_counted
+        if not any(plan["rows"].values()):
+            if plan.get("skipped_custom"):
+                plan["error"] = "Nothing to add: " + " ".join(plan["notes"])
+            else:
+                plan["error"] = "Nothing to add: everything selected is already in this playbook." if plan["already"] else "Nothing to add."
+        elif plan["plays_after"] > PLAYBOOK_PLAY_CAP and new_counted:
+            plan["error"] = (f"This would put {self.book_label(tgt)} at {plan['plays_after']} plays; the game allows "
+                             f"{PLAYBOOK_PLAY_CAP} per playbook (special teams not counted).")
+        return plan
+
+    def apply_plan(self, plan):
+        """Append a plan's rows. Refuses (and undoes it) if that would break any
+        playbook rule that held before. Returns the number of rows added."""
+        if plan.get("error"):
+            raise ValueError(plan["error"])
+        before_violations = self.violations()
+        lengths = {t: len(r) for t, r in self.tables.items()}
+        dirty_before = set(self.dirty_tables)
+        for table, rows in plan["rows"].items():
+            if rows:
+                self.tables[table].extend(dict(r) for r in rows)
+                self.dirty_tables.add(table)
+        self._index_structure()
+        new = self.violations() - before_violations
+        if new:
+            for table, n in lengths.items():
+                del self.tables[table][n:]
+            self.dirty_tables = dirty_before
+            self._index_structure()
+            raise ValueError("That change would break the playbook's structure and was not applied: " + "; ".join(f"{v[0]}" for v in sorted(new)[:3]))
+        return sum(len(r) for r in plan["rows"].values())
 
     def set_usage(self, coaches):
         """Which real teams use each playbook, from the teams' coordinators
@@ -3176,6 +3796,11 @@ class PlaybookData:
                 return bgid, (info["name"] if info else f"Playbook #{bgid}")
         return None, ""
 
+    def team_bokl(self, coaches, tid, side):
+        """The BOKL (playbook table key) a team's coordinator uses for one side, or None."""
+        bgid, _name = self.team_book(coaches, tid, side)
+        return self.bgid_book.get((side, bgid)) if bgid else None
+
     # ---- labels
     def book_label(self, bokl):
         names = self.book_names.get(bokl)
@@ -3198,7 +3823,7 @@ class PlaybookData:
     def books(self):
         rows = []
         for bokl in sorted(set(self.book_play_count) | set(self.book_formations), key=lambda b: int(b) if b.isdigit() else 0):
-            rows.append((bokl, self.book_label(bokl), self.book_side.get(bokl, ""), bokl,
+            rows.append((bokl, self.book_label(bokl), self.side_of(bokl), bokl,
                          self.book_play_count.get(bokl, 0), ", ".join(self.offense_used_by.get(bokl, [])),
                          ", ".join(self.defense_used_by.get(bokl, []))))
         return rows
@@ -4141,6 +4766,7 @@ class App(tk.Tk):
         self.notebook.add(root, text="Playbooks")
         self._playbook_data = None
         self._playbook_stamp = None
+        self._pb_team_manual = False   # True once the tab's Team box was changed by hand
         self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
 
         top = ttk.Frame(root)
@@ -4151,12 +4777,10 @@ class App(tk.Tk):
         self.lbl_playbook_status.pack(side="left", padx=(8, 0))
 
         help_text = (
-            "Browse every playbook in the save with real play, set and formation names (pulled from your own "
-            "game files the first time, then cached). Use Find play to see a play's codes (SETL / PLYL) and every "
-            "playbook that contains it. Custom plays and playbooks you made in-game are named from the save "
-            "itself. The last two columns show which teams use each playbook (read from their coordinators), "
-            "and Team playbooks below lets you change a team's offense or defense by name. Editing the plays "
-            "inside a playbook isn't available yet."
+            "Browse playbooks with real play, set and formation names (read from your own game files, then cached). "
+            "Find play shows a play's codes and every playbook that has it. Team playbooks changes a team's offense or "
+            "defense by name. Add plays copies plays, sets or formations from another playbook into your team's "
+            "(or any playbook you choose in the dialog; 200 per playbook, special teams don't count)."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -4174,7 +4798,7 @@ class App(tk.Tk):
         self.cmb_pb_team = ttk.Combobox(trow, state="readonly", width=16, textvariable=self.pb_team_var,
                                         values=[n for _t, n in self._pb_team_names])
         self.cmb_pb_team.pack(side="left", padx=(6, 14))
-        self.cmb_pb_team.bind("<<ComboboxSelected>>", lambda e: self._refresh_pb_team())
+        self.cmb_pb_team.bind("<<ComboboxSelected>>", lambda e: self._on_pb_team_chosen())
         self.lbl_pb_off = ttk.Label(trow, text="Offense: -")
         self.lbl_pb_off.pack(side="left")
         ttk.Button(trow, text="Change...", command=lambda: self.on_change_team_playbook("1")).pack(side="left", padx=(6, 18))
@@ -4182,8 +4806,7 @@ class App(tk.Tk):
         self.lbl_pb_def.pack(side="left")
         ttk.Button(trow, text="Change...", command=lambda: self.on_change_team_playbook("0")).pack(side="left", padx=(6, 0))
         ttk.Label(team, foreground="gray", wraplength=1000, justify="left",
-                  text="Changing a playbook sets it on every coach of the team (that's where the game keeps it), then use Save to File. "
-                       "Experimental: not yet confirmed in-game - test on a copy of your save.").pack(anchor="w", padx=8, pady=(0, 6))
+                  text="Sets it on every coach of the team (where the game keeps it); then Save to File.").pack(anchor="w", padx=8, pady=(0, 6))
 
         search = ttk.Frame(root)
         search.pack(fill="x", padx=10, pady=(0, 4))
@@ -4194,13 +4817,14 @@ class App(tk.Tk):
         ent.bind("<Return>", lambda e: self.on_playbook_search())
         ttk.Button(search, text="Find", command=self.on_playbook_search).pack(side="left")
         ttk.Button(search, text="Clear", command=self.on_playbook_search_clear).pack(side="left", padx=(6, 0))
+        self.btn_pb_add_found = ttk.Button(search, text="Add found play to my team's playbook...", command=self.on_playbook_add_found)
+        self.btn_pb_add_found.pack(side="left", padx=(12, 0))
         self.lbl_playbook_hit = ttk.Label(search, text="", foreground="gray")
         self.lbl_playbook_hit.pack(side="left", padx=(12, 0))
 
         panes = ttk.PanedWindow(root, orient="horizontal")
-        panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
 
-        def make_tree(parent, cols, widths, height=14, weight=1):
+        def make_tree(parent, cols, widths, height=6, weight=1):
             frm = ttk.Frame(parent)
             tree = ttk.Treeview(frm, columns=[c for c, _ in cols], show="headings", height=height, selectmode="browse")
             for (c, text), w in zip(cols, widths):
@@ -4221,21 +4845,29 @@ class App(tk.Tk):
         self.tree_pb_books.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_book_selected())
         self.tree_pb_forms.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_form_selected())
 
+        # The Add bar and Find results are packed to the bottom BEFORE the tables, so on a short
+        # window it is the tables that shrink, never these.
         res = ttk.LabelFrame(root, text="Find results")
-        res.pack(fill="x", padx=10, pady=(0, 10))
+        res.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        bar = ttk.Frame(root)
+        bar.pack(side="bottom", fill="x", padx=10, pady=(0, 4))
+        self.btn_pb_add = ttk.Button(bar, text="Add plays to my team's playbook...", command=lambda: self.on_playbook_add_plays())
+        self.btn_pb_add.pack(side="left")
+        self.lbl_pb_cap = ttk.Label(bar, text="", foreground="gray")
+        self.lbl_pb_cap.pack(side="left", padx=(12, 0))
+        panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
         ttk.Label(
             res, foreground="gray",
             text="Search for a play above to see its codes and which playbooks have it. "
-                 "Click a row to list those playbooks; double-click to jump to one.",
+                 "Click a row to list the playbooks that have it (this doesn't change which playbook is selected above).",
         ).pack(anchor="w", padx=6, pady=(4, 0))
         self.tree_pb_found = ttk.Treeview(
-            res, columns=("play", "set", "type", "setl", "plyl", "n"), show="headings", height=6, selectmode="browse")
+            res, columns=("play", "set", "type", "setl", "plyl", "n"), show="headings", height=4, selectmode="browse")
         for c, text, w in (("play", "Play", 220), ("set", "Set", 150), ("type", "Type", 50), ("setl", "SETL", 56), ("plyl", "PLYL", 56), ("n", "In playbooks", 90)):
             self.tree_pb_found.heading(c, text=text, command=lambda c=c: self._sort_tree(self.tree_pb_found, c))
             self.tree_pb_found.column(c, width=w, anchor="w", stretch=(c == "play"))
         self.tree_pb_found.pack(fill="x", padx=4, pady=4)
         self.tree_pb_found.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_found_selected())
-        self.tree_pb_found.bind("<Double-1>", lambda e: self._on_playbook_found_open())
         self._playbook_hits = {}
 
     def _on_notebook_tab_changed(self, _event=None):
@@ -4244,12 +4876,13 @@ class App(tk.Tk):
         except Exception:
             return
         if current is self.tab_playbooks:
+            self._sync_pb_team()
             self.refresh_playbooks()
 
     def _playbook_stamp_now(self):
         path = self.model.db_path
         try:
-            return (path, os.path.getmtime(path)) if path else None
+            return (path, os.path.getmtime(path), self.model.load_serial) if path else None
         except OSError:
             return None
 
@@ -4262,6 +4895,9 @@ class App(tk.Tk):
             return
         stamp = self._playbook_stamp_now()
         if not force and self._playbook_data is not None and stamp == self._playbook_stamp:
+            return
+        if force and self.model.pb_pending and not messagebox.askyesno(
+                "Playbooks", "You have playbook changes that aren't saved yet. Reloading discards them. Reload anyway?"):
             return
 
         boot_ast = ""
@@ -4285,6 +4921,7 @@ class App(tk.Tk):
 
         def done(result):
             self._playbook_data, self._playbook_stamp = result
+            self.model.pb_pending = {}   # the reload replaced whatever was edited
             if boot_ast:
                 self.ui_prefs["boot_ast_path"] = boot_ast
                 save_ui_prefs(self.ui_prefs)
@@ -4310,9 +4947,29 @@ class App(tk.Tk):
                 return tid
         return ""
 
+    def _on_pb_team_chosen(self):
+        self._pb_team_manual = True
+        self._refresh_pb_team()
+
+    def _sync_pb_team(self):
+        """The tab's Team box follows the team chosen for this save (the one picked at load, or
+        switched to in the team list) until it is changed by hand here."""
+        names = [n for _t, n in self._pb_team_names]
+        if not self._pb_team_manual:
+            cur = team_nickname(self.selected_team_id.get().strip())
+            if cur in names:
+                self.pb_team_var.set(cur)
+        if not self.pb_team_var.get():
+            self.pb_team_var.set(names[0])
+        self._refresh_pb_team()
+
     def _refresh_pb_team(self):
         data = self._playbook_data
         tid = self._pb_selected_tid()
+        nick = team_nickname(tid) if tid else ""
+        add_to = f"the {nick} playbook" if nick else "my team's playbook"
+        self.btn_pb_add.configure(text=f"Add plays to {add_to}...")
+        self.btn_pb_add_found.configure(text=f"Add found play to {add_to}...")
         if data is None or not tid:
             self.lbl_pb_off.configure(text="Offense: -")
             self.lbl_pb_def.configure(text="Defense: -")
@@ -4371,12 +5028,88 @@ class App(tk.Tk):
             tree.selection_set(tree.get_children()[0])
         elif not tree.get_children():
             self._on_playbook_book_selected()
-        if not self.pb_team_var.get():
-            cur = team_nickname(self.selected_team_id.get().strip())
-            self.pb_team_var.set(cur if cur else self._pb_team_names[0][1])
-        self._refresh_pb_team()
+        self._sync_pb_team()
+
+    def _playbook_data_is_stale(self):
+        """True (after starting a reload) if the save was loaded again since the
+        tab read it - e.g. Reload from File, which doesn't change the file's
+        timestamp - so edits are never built on discarded data."""
+        if self._playbook_data is not None and self._playbook_stamp != self._playbook_stamp_now():
+            self.refresh_playbooks()
+            self.lbl_playbook_status.configure(text="The save was reloaded, so the playbook data was refreshed. Choose the playbook and try again.")
+            return True
+        return False
+
+    def _playbook_target_choices(self, side="Offense"):
+        """Where plays are added INTO. The first choice is the playbook of the team chosen on
+        this tab (it starts as the team picked when the save was loaded) for the given side,
+        followed by that team's other side and the playbook selected in the table.
+        Returns ([(label, BOKL)], default BOKL or None)."""
+        data = self._playbook_data
+        tid = self._pb_selected_tid()
+        nick = team_nickname(tid) if tid else ""
+        choices = []
+        for sd, word in (("1", "Offense"), ("0", "Defense")):
+            bokl = data.team_bokl(self.model.coaches, tid, sd) if tid else None
+            if bokl and bokl not in [b for _l, b in choices]:
+                choices.append((f"{nick} {word.lower()}: {data.book_label(bokl)}", bokl))
+        sel = self.tree_pb_books.selection()
+        if sel and sel[0] not in [b for _l, b in choices]:
+            choices.append((f"Table selection: {data.book_label(sel[0])}", sel[0]))
+        default = next((b for _l, b in choices if data.side_of(b) == side), choices[0][1] if choices else None)
+        return choices, default
+
+    def on_playbook_add_plays(self, preselect=None, side="Offense"):
+        data = self._playbook_data
+        if data is None:
+            messagebox.showinfo("Playbooks", "Open the tab with a save loaded first.")
+            return
+        if self._playbook_data_is_stale():
+            return
+        choices, target = self._playbook_target_choices(side)
+        if target is None:
+            messagebox.showinfo("Playbooks", "Pick a team (or select a playbook in the table) to add plays to.")
+            return
+        PlaybookCopyDialog(self, data, target, self._apply_playbook_plan, preselect, choices)
+
+    def on_playbook_add_found(self):
+        data, found = self._playbook_data, self.tree_pb_found.selection()
+        if data is None or not found:
+            messagebox.showinfo("Playbooks", "Search for a play and select it in Find results first.")
+            return
+        setl, plyl = found[0].split(":")
+        hits = self._playbook_hits.get(found[0], [])
+        side = next((data.side_of(b) for b in hits if data.side_of(b)), "Offense")
+        _choices, target = self._playbook_target_choices(side)
+        tside = data.side_of(target) if target else ""
+        sources = [b for b in hits if b != target and tside and data.side_of(b) == tside]
+        if not sources:
+            messagebox.showinfo("Playbooks", "No other playbook of the same side contains that play, so there is nothing to copy it from.")
+            return
+        self.on_playbook_add_plays(preselect=(sources[0], setl, plyl), side=side)
+
+    def _apply_playbook_plan(self, plan):
+        """Apply a copy plan to the in-memory playbook tables (validated; raises
+        ValueError if refused) and queue them for the next Save to File."""
+        data = self._playbook_data
+        if self._playbook_data_is_stale():
+            raise ValueError("The save was reloaded since this dialog opened, so nothing was added. Close it and try again.")
+        n = data.apply_plan(plan)
+        self.model.pb_pending = {t: data.tables[t] for t in data.dirty_tables}
+        self.mark_dirty()
+        self._fill_playbook_books()
+        self.lbl_playbook_status.configure(
+            text=f"Added {n} row(s) from {data.book_label(plan['src'])} into {data.book_label(plan['tgt'])} - Save to File to keep them.")
+        return n
 
     def _on_playbook_book_selected(self):
+        sel = self.tree_pb_books.selection()
+        if self._playbook_data is not None and sel:
+            name = self._playbook_data.book_label(sel[0])
+            self.lbl_pb_cap.configure(
+                text=f"Viewing: {name}  -  {self._playbook_data.counted_plays(sel[0])} of {PLAYBOOK_PLAY_CAP} plays (special teams not counted)")
+        else:
+            self.lbl_pb_cap.configure(text="")
         tree = self.tree_pb_forms
         for iid in tree.get_children():
             tree.delete(iid)
@@ -4445,13 +5178,6 @@ class App(tk.Tk):
         names = [self._playbook_data.book_label(b) for b in books]
         shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
         self.lbl_playbook_hit.configure(text=f"In: {shown}" if names else "In no playbook in this save")
-
-    def _on_playbook_found_open(self):
-        sel = self.tree_pb_found.selection()
-        books = self._playbook_hits.get(sel[0], []) if sel else []
-        if books and self.tree_pb_books.exists(books[0]):
-            self.tree_pb_books.selection_set(books[0])
-            self.tree_pb_books.see(books[0])
 
     # ---------- Staff Tabs (Trainer / Coach / GM) ----------
     def _build_staff_team_filter(self, parent):
@@ -4895,6 +5621,7 @@ class App(tk.Tk):
         txt = self.lst_teams.get(sel[0])
         tid = txt.split(":", 1)[0].strip()
         self.selected_team_id.set(tid)
+        self._pb_team_manual = False   # the Playbooks tab follows the newest team choice
         self.refresh_players_for_team()
 
         per_save = self.ui_prefs.setdefault("per_save", {})
