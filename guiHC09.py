@@ -840,12 +840,11 @@ COACH_POSITION_LABELS = {
 # game words the position ones in full, e.g. "Man Coverage/Ballhawk CB", "Big Foot/
 # Distance K"); FS 67, SS 74 and punter 79 match what the screen shows. The other names
 # in each list are the config's and have not been checked.
-COACH_PLAN_VALUES = {
+PHILOSOPHY_VALUES = {
     "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Spread", 4: "Power Running"},
     "OPPP": {0: "Head Coach", 1: "Offensive Coordinator"},
     "NHPP": {0: "Heavily", 1: "Balanced", 2: "Rarely"},
     "DSPP": {0: "3-4", 1: "4-3", 2: "4-6"},
-    "CDTY": {5: "3-4", 95: "4-3"},
     "DPPP": {0: "Head Coach", 1: "Defensive Coordinator"},
     "BZPP": {0: "Heavy", 1: "Normal", 2: "Light"},
     "CVPP": {0: "Man", 1: "Cover 2", 2: "Zone"},
@@ -867,18 +866,12 @@ COACH_PLAN_VALUES = {
     "SsPP": {70: "Balanced", 71: "Coverage", 72: "Prototype", 73: "Run Support", 74: "Smart"},
     "KKPP": {75: "Power", 76: "Accuracy", 77: "Balanced"},
     "KPPP": {78: "Power", 79: "Accuracy", 80: "Balanced"},
-    "CFDA": {0: "User", 1: "CPU"},
-    "CFDP": {0: "User", 1: "CPU"},
-    "CFFA": {0: "User", 1: "CPU"},
-    "CFFR": {0: "User", 1: "CPU"},
-    "CFRP": {0: "User", 1: "CPU"},
-    "CFRR": {0: "User", 1: "CPU"},
 }
 
-COACH_PLAN_TABS = [
+PHILOSOPHY_TABS = [
     ("Game plan", [
         ("Offense", [("OSPP", "Offensive scheme"), ("OPPP", "Offensive playbook control"), ("NHPP", "No-huddle philosophy")]),
-        ("Defense", [("DSPP", "Defensive scheme"), ("CDTY", "Defensive philosophy"), ("DPPP", "Defensive playbook control"),
+        ("Defense", [("DSPP", "Defensive scheme"), ("DPPP", "Defensive playbook control"),
                      ("BZPP", "Blitzing"), ("CVPP", "Coverage")]),
         ("Game management", [("DMPP", "Defining moments")]),
     ]),
@@ -888,16 +881,6 @@ COACH_PLAN_TABS = [
         ("Defense", [("DEPP", "DE"), ("DTPP", "DT"), ("OLPP", "OLB"), ("MLPP", "MLB"), ("CBPP", "CB"), ("FSPP", "FS"), ("SsPP", "SS")]),
         ("Kicking", [("KKPP", "Kicker"), ("KPPP", "Punter")]),
     ]),
-    ("Who handles what", [
-        ("User or CPU", [("CFDA", "Draft players"), ("CFDP", "Sign draft picks"), ("CFFA", "Sign free agents"),
-                         ("CFFR", "Fill rosters"), ("CFRP", "Re-sign players"), ("CFRR", "Depth chart")]),
-    ]),
-]
-# Plain numbers with no value list; they sit around 50 in a real save (about 37-90), which looks like a
-# 0-100 scale, so edits are limited to that range.
-COACH_PLAN_NUMBERS = [
-    ("COTA", "CPU offensive play-call aggression"), ("CDTA", "CPU defensive play-call aggression"),
-    ("COTR", "Simulated offense run/pass ratio"), ("CDTR", "Simulated defense run/pass ratio"),
 ]
 
 # -----------------------------
@@ -3197,7 +3180,7 @@ class TeamPhilosophyDialog(tk.Toplevel):
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self._nb, self._canvases, self._inners = nb, [], []
-        for tab_name, sections in COACH_PLAN_TABS:
+        for tab_name, sections in PHILOSOPHY_TABS:
             shown = [(section, [(c, l) for c, l in fields if c in self.row]) for section, fields in sections]
             shown = [(section, present) for section, present in shown if present]
             if not shown:
@@ -3209,17 +3192,6 @@ class TeamPhilosophyDialog(tk.Toplevel):
                 for i, (code, label) in enumerate(present):
                     ttk.Label(box, text=label + ":", width=36, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
                     self._add_list_field(box, i, code)
-        if self._inners and any(c in self.row for c, _ in COACH_PLAN_NUMBERS):
-            box = ttk.LabelFrame(self._inners[0], text="CPU tendencies (0-100)")
-            box.pack(fill="x", padx=8, pady=(8, 0))
-            for i, (code, label) in enumerate([(c, l) for c, l in COACH_PLAN_NUMBERS if c in self.row]):
-                ttk.Label(box, text=label + ":", width=36, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
-                var = tk.StringVar(value=(self.row.get(code, "") or "").strip())
-                spin = ttk.Spinbox(box, from_=0, to=100, width=6, textvariable=var)
-                spin.grid(row=i, column=1, sticky="w", pady=3)
-                spin.bind("<MouseWheel>", self._wheel)
-                self.vars[code] = var
-
         self.bind("<MouseWheel>", self._wheel)
         self.bind("<Escape>", lambda e: self.destroy())
         self._fit_to_screen(parent)
@@ -3257,6 +3229,8 @@ class TeamPhilosophyDialog(tk.Toplevel):
     def _fit_to_screen(self, parent):
         """Open tall enough to show a whole tab if the screen allows, otherwise at most 80% of the
         screen height (the tabs scroll), beside the main window rather than off the edge."""
+        if not self._canvases:
+            return
         self.update_idletasks()
         canvas = self._canvases[0]
         need_h = self.winfo_reqheight() - canvas.winfo_reqheight() + max(i.winfo_reqheight() for i in self._inners) + 6
@@ -3268,7 +3242,7 @@ class TeamPhilosophyDialog(tk.Toplevel):
         self.geometry(f"{w}x{h}+{x}+{y}")
 
     def _add_list_field(self, box, grid_row, code):
-        values = dict(COACH_PLAN_VALUES.get(code, {}))
+        values = dict(PHILOSOPHY_VALUES.get(code, {}))
         current = safe_int(self.row.get(code, ""))
         if current is not None and current not in values:
             values[current] = f"(value {current})"   # stored value the list doesn't name - keep it selectable
@@ -3281,19 +3255,10 @@ class TeamPhilosophyDialog(tk.Toplevel):
         self.vars[code] = var
 
     def _apply(self):
-        # Validate everything first so one bad number can't leave a half-applied plan.
         updates = {}
         for code, var in self.vars.items():
-            if code in self.names:
-                new = self.names[code].get(var.get())
-                if new is None:
-                    continue
-            else:
-                new = safe_int(var.get())
-                if new is None or not 0 <= new <= 100:
-                    messagebox.showerror("Team philosophy", f"{code}: enter a whole number from 0 to 100.", parent=self)
-                    return
-            if str(new) != (self.row.get(code, "") or "").strip():
+            new = self.names[code].get(var.get())
+            if new is not None and str(new) != (self.row.get(code, "") or "").strip():
                 updates[code] = str(new)
         self.row.update(updates)
         if updates:
@@ -5731,6 +5696,11 @@ class App(tk.Tk):
     def _on_save_success(self, backup_path):
         self._commit_pending_motivator_boosts()
         self.clear_dirty()
+        if self._playbook_data is not None:
+            # Saving moved the file's timestamp, but what the Playbooks tab holds is exactly what was
+            # just written - re-stamp it so the next Add plays isn't refused as "the save was reloaded".
+            self._playbook_data.dirty_tables.clear()
+            self._playbook_stamp = self._playbook_stamp_now()
         self.lbl_status.configure(
             text=f"Saved: {recent_file_display(self.model.db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
         )
