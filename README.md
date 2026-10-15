@@ -27,7 +27,11 @@ export/import through HC09Editor required.
   which playbooks contain a play; change a team's offensive or defensive playbook; and
   **add plays** to your team's playbook by copying a play, a whole set or a whole
   formation from another one (200-play limit per playbook, special teams not counted;
-  plays made in-game are never copied).
+  plays made in-game are never copied). A team has a head coach's playbook and a coordinator's
+  for each side and plays one of them; the tab shows which is in use and has a *Played by*
+  switch (it sets the Playbook Control team philosophy for you). Offense and Defense are
+  shown one at a time. Playbooks 1-10 (your custom playbooks) and the plays you made in the
+  game are named from your profile save, found next to your career and only read.
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
   (read-only: ranks players against the game's player types), the recent-saves list,
   and *Options* (modern UI, dark mode).
@@ -66,8 +70,10 @@ you always have the previous version to fall back to.
   `PS3_GAME/USRDIR` folder). Player Type Fit and the Playbooks tab read player types and
   play, formation and playbook names from `qkl_boot.ast`; the editor asks you to locate
   it the first time and keeps a local cache. The portrait viewer reads `qkl_fe2ig.ast`
-  (use **Locate Game Files...** in the Player Editor tab). No game data is included in
-  this repository.
+  (use **Locate Game Files...** in the Player Editor tab). The Playbooks tab also reads your
+  profile save (the `...-PROFILE-...` folder beside your career) to name custom playbooks and
+  plays; use **Profile save...** if it isn't found. Nothing is ever written to it. No game
+  data is included in this repository.
 
 ## Setup
 
