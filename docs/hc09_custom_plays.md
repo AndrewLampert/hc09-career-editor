@@ -29,9 +29,11 @@ The others are looser (heavily changed): `run` looks like Steelers Smashmouth an
 
 ## Which playbook a team plays
 
-Every coach row has an offensive (`CPID`) and a defensive (`CDID`) playbook, so a team holds one for its **head coach** and one for each **coordinator** per side. The team plays only one of them: the **Playbook Control** team philosophy (`OPPP` offense, `DPPP` defense in the `TPHS` table; 0 = Head Coach, 1 = Coordinator) says which. In the 10 careers checked, a head coach's playbook differs from the coordinator's on roughly a third of teams (92 of 320 offenses, 116 of 320 defenses), so reading only the coordinators, as the editor used to, shows the wrong playbook for any team whose head coach has control.
+Every coach row has an offensive (`CPID`) and a defensive (`CDID`) playbook, so a team holds one for its **head coach** and one for each **coordinator** per side. The editor treats the **head coach's** as the team's playbook: it is the one chosen on the game's New Career Playbook Select screen, and it is the one the player calls from. The coordinators hold their own (listed beside it for reference, and marked `(OC)` / `(DC)` in the playbook table where they differ). In the 10 careers checked, a head coach's playbook differs from the coordinator's on roughly a third of teams (92 of 320 offenses, 116 of 320 defenses), so reading only the coordinators, as the editor used to, showed the wrong playbook for the player's own team.
 
-A **custom** playbook choice (made on the game's New Career Playbook Select screen) is stored on the **head coach's row only** (`CPID` 46 to 55 offense, 52 defense in the example; the coordinators keep a game playbook, and `TEAM.TOPB` / `TDPB` stay on the game's). In all 9 careers checked where a head coach holds a custom playbook, the Playbook Control of that side was Head Coach.
+The **Playbook Control** team philosophy (`OPPP` offense, `DPPP` defense in `TPHS`; 0 = Head Coach, 1 = Coordinator) looks as if it decides which coach's playbook is played, but players report that it makes no visible difference (the coordinators call the plays in a sim either way), so the editor does not offer it as a choice on the Playbooks tab; it is still editable under Team Philosophy on the Coach tab. This is not confirmed in the game.
+
+A **custom** playbook choice is stored on the **head coach's row only** (`CPID` 46 to 55 offense, 52 defense in the example; the coordinators keep a game playbook, and `TEAM.TOPB` / `TDPB` stay on the game's). In all 9 careers checked where a head coach holds a custom playbook, the Playbook Control of that side was Head Coach, so the editor sets that too when it gives a team a custom playbook, to match the game's own state.
 
 ## Custom plays
 

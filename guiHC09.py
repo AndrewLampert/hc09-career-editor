@@ -3656,13 +3656,12 @@ def find_profile_saves(career_db_path):
 
 
 class PlaybookData:
-    def __init__(self, game, save, coaches, profile=None, control=None):
+    def __init__(self, game, save, coaches, profile=None):
         """game / save: {table name in lowercase: [row dicts]} - stock names
         from the game files and the save's own tables. coaches: COCH rows.
         profile: the same shape (plab / setl / pbpl) from the player's profile save, which
         names the playbooks, sets and plays made in-game; only ids the game does not
-        already name are taken from it. control: function (TGID, side "1"/"0") -> "hc" | "coord" | None,
-        whose playbook the team uses on that side (the Playbook Control team philosophy)."""
+        already name are taken from it."""
         self.have_game_names = bool(game.get("plab"))
         g = lambda t: game.get(t, [])
         v = lambda t: save.get(t, [])
@@ -3706,7 +3705,6 @@ class PlaybookData:
         self.dirty_tables = set()
         self._index_structure()
 
-        self.control = control
         self.set_usage(coaches)
 
     @staticmethod
@@ -3989,31 +3987,32 @@ class PlaybookData:
             raise ValueError("That change would break the playbook's structure and was not applied: " + "; ".join(f"{v[0]}" for v in sorted(new)[:3]))
         return sum(len(r) for r in plan["rows"].values())
 
-    def in_use_who(self, tid, side):
-        """Whose playbook a team uses on one side: "hc" if Playbook Control is the head coach, otherwise
-        "coord" (also when the control is not known)."""
-        return "hc" if self.control and self.control(tid, side) == "hc" else "coord"
-
-    def set_usage(self, coaches, control=None):
-        """Which real teams use each playbook: the head coach's (COPS 0) where the team's Playbook Control
-        is the head coach, otherwise the coordinator's (OC = COPS 1 offense via CPID, DC = COPS 2 defense via
-        CDID). A team has both, and only the one the control picks is played."""
-        if control is not None:
-            self.control = control
+    def set_usage(self, coaches):
+        """Which real teams have each playbook. A team's playbook is its head coach's (COPS 0: the one chosen at
+        New Career Playbook Select, CPID offense / CDID defense). The coordinators (OC = COPS 1, DC = COPS 2) hold
+        their own, listed as "49ers (OC)" / "49ers (DC)" where it differs from the head coach's."""
         real = dict(SIGN_DEST_TEAMS)
         self.offense_used_by = defaultdict(list)
         self.defense_used_by = defaultdict(list)
+        held = {}
         for c in coaches:
             tid = (c.get("TGID") or "").strip()
             pos = (c.get("COPS") or "").strip()
-            if tid not in real or pos not in ("0", "1", "2"):
-                continue
-            for side, field, coord_pos, bucket in (("1", "CPID", "1", self.offense_used_by), ("0", "CDID", "2", self.defense_used_by)):
-                if pos != ("0" if self.in_use_who(tid, side) == "hc" else coord_pos):
-                    continue
-                book = self.bgid_book.get((side, (c.get(field) or "").strip()))
-                if book and team_nickname(tid) not in bucket[book]:
-                    bucket[book].append(team_nickname(tid))
+            if tid in real and pos in ("0", "1", "2"):
+                held[(tid, pos)] = c
+        for tid in real:
+            nick = team_nickname(tid)
+            for side, field, coord_pos, bucket, tag in (("1", "CPID", "1", self.offense_used_by, "OC"),
+                                                         ("0", "CDID", "2", self.defense_used_by, "DC")):
+                books = []
+                for pos in ("0", coord_pos):
+                    c = held.get((tid, pos))
+                    books.append(self.bgid_book.get((side, (c.get(field) or "").strip())) if c else None)
+                head, coord = books
+                if head and nick not in bucket[head]:
+                    bucket[head].append(nick)
+                if coord and coord != head and f"{nick} ({tag})" not in bucket[coord]:
+                    bucket[coord].append(f"{nick} ({tag})")
 
     def side_books(self, side, include_custom=False):
         """Every selectable playbook for one side ("1" offense, "0" defense), as (BGID, name, BOKL, BORD):
@@ -4029,10 +4028,9 @@ class PlaybookData:
             rows = custom + rows
         return rows
 
-    def team_book(self, coaches, tid, side, who=None):
-        """The BGID and name of the playbook a team holds on one side for who = "hc" (head coach) or "coord"
-        (OC for offense, DC for defense); by default the one in use. (None, '') if the team has no such coach."""
-        who = who or self.in_use_who(tid, side)
+    def team_book(self, coaches, tid, side, who="hc"):
+        """The BGID and name of the playbook a team holds on one side for who = "hc" (the head coach: the team's
+        playbook) or "coord" (OC for offense, DC for defense). (None, '') if the team has no such coach."""
         pos = "0" if who == "hc" else ("1" if side == "1" else "2")
         field = "CPID" if side == "1" else "CDID"
         for c in coaches:
@@ -4042,8 +4040,8 @@ class PlaybookData:
                 return bgid, (info["name"] if info else f"Playbook #{bgid}")
         return None, ""
 
-    def team_bokl(self, coaches, tid, side, who=None):
-        """The BOKL (playbook table key) of the playbook a team holds on one side (default: the one in use), or None."""
+    def team_bokl(self, coaches, tid, side, who="hc"):
+        """The BOKL (playbook table key) of the playbook a team holds on one side (default: the head coach's), or None."""
         bgid, _name = self.team_book(coaches, tid, side, who)
         return self.bgid_book.get((side, bgid)) if bgid else None
 
@@ -5038,12 +5036,11 @@ class App(tk.Tk):
             "defense by name. Add plays copies plays, sets or formations from another playbook into your team's "
             "(or any playbook you choose in the dialog; 200 per playbook, special teams don't count). Playbooks 1-10 "
             "and the plays in them that you made in the game are named from your profile save.\n\n"
-            "A team holds a playbook for its head coach and one for each coordinator, and plays one of them: the one "
-            "marked In use. Played by switches between them (this is the Playbook Control setting of Team Philosophy, "
-            "so it is changed there too). Change... sets one of the game's playbooks on the head coach and both "
-            "coordinators, so it is used either way. A custom playbook is set on the head coach only, as the game's own "
-            "Playbook Select does, and Played by is switched to Head coach for you. Show: Offense / Defense picks which "
-            "side's playbooks, find results and Add button you are working with. Then Save to File."
+            "A team's playbook is its head coach's (the one chosen at New Career Playbook Select); the coordinators hold "
+            "their own, shown beside it, and a team marked (OC) or (DC) in the table has that playbook only as a "
+            "coordinator's. Change... sets one of the game's playbooks on the head coach and both coordinators; a custom "
+            "playbook is set on the head coach only, as the game's own Playbook Select does. Show: Offense / Defense picks "
+            "which side's playbooks, find results and Add button you are working with. Then Save to File."
         )
         help_frame = ttk.Frame(root)         # shown by the Help button
         lbl = tk.Label(help_frame, text=help_text, wraplength=1000, justify="left", fg="gray")
@@ -5063,31 +5060,15 @@ class App(tk.Tk):
         self.cmb_pb_team.pack(side="left", padx=(6, 14))
         self.cmb_pb_team.bind("<<ComboboxSelected>>", lambda e: self._on_pb_team_chosen())
         bold = ("TkDefaultFont", 9, "bold")
-        self.pb_ctl_vars = {}
         for word, side, attr in (("Offense", "1", "off"), ("Defense", "0", "def")):
             row = ttk.Frame(team)
             row.pack(fill="x", padx=6, pady=(0, 4))
             ttk.Label(row, text=word, font=bold, width=8).pack(side="left")
-            ttk.Label(row, text="In use:").pack(side="left")
+            ttk.Label(row, text="Head coach's playbook:").pack(side="left")
             lbl = ttk.Label(row, text="-", font=bold, width=26)
             lbl.pack(side="left", padx=(4, 6))
             setattr(self, f"lbl_pb_{attr}", lbl)
-            ttk.Button(row, text="Change...", command=lambda sd=side: self.on_change_team_playbook(sd)).pack(side="left", padx=(0, 12))
-            ctlf = ttk.Frame(row)
-            ctlf.pack(side="left")
-            ttk.Label(ctlf, text="Played by:").pack(side="left")
-            var = tk.StringVar(value="coord")
-            self.pb_ctl_vars[side] = var
-            coord_word = "Offensive coordinator" if side == "1" else "Defensive coordinator"
-            rbs = []
-            for text, value in (("Head coach", "hc"), (coord_word, "coord")):
-                rb = ttk.Radiobutton(ctlf, text=text, variable=var, value=value, command=lambda sd=side: self._on_pb_control_toggle(sd))
-                rb.pack(side="left", padx=(6, 0))
-                rbs.append(rb)
-            setattr(self, f"rb_pb_{attr}", rbs)
-            ctl = ttk.Label(ctlf, text="", foreground="gray")
-            ctl.pack(side="left", padx=(8, 0))
-            setattr(self, f"lbl_pb_{attr}_ctl", ctl)
+            ttk.Button(row, text="Change...", command=lambda sd=side: self.on_change_team_playbook(sd)).pack(side="left", padx=(0, 4))
             det = ttk.Label(row, text="", foreground="gray")
             det.pack(side="left", padx=(12, 0))
             setattr(self, f"lbl_pb_{attr}_detail", det)
@@ -5210,7 +5191,7 @@ class App(tk.Tk):
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
             profile_path, profile, flagged, problems = self._choose_profile(db_path, game, save, override)
-            return PlaybookData(game, save, coaches, profile, self._pb_control), stamp, profile_path, flagged, problems
+            return PlaybookData(game, save, coaches, profile), stamp, profile_path, flagged, problems
 
         def done(result):
             (self._playbook_data, self._playbook_stamp, self._playbook_profile,
@@ -5370,15 +5351,6 @@ class App(tk.Tk):
             self.pb_team_var.set(names[0])
         self._refresh_pb_team()
 
-    def _pb_control(self, tid, side):
-        """Whose playbook a team plays on one side - "hc" (head coach) or "coord" (coordinator) - from the Team
-        Philosophy's Playbook Control (OPPP offense, DPPP defense; 0 = Head Coach, 1 = Coordinator), or None."""
-        field = "OPPP" if side == "1" else "DPPP"
-        for r in self.model.tphs:
-            if (r.get("TGID") or "").strip() == tid:
-                return {"0": "hc", "1": "coord"}.get((r.get(field) or "").strip())
-        return None
-
     def _set_pb_control(self, tid, side, value):
         """Set a team's Playbook Control ("0" head coach, "1" coordinator); False if the save has no row for it."""
         field = "OPPP" if side == "1" else "DPPP"
@@ -5424,32 +5396,9 @@ class App(tk.Tk):
         tree.see(tree.selection()[0]) if tree.selection() else None
         self._update_add_buttons()
 
-    def _on_pb_control_toggle(self, side):
-        """The Played by switch: head coach or coordinator. Writes the team's Playbook Control (Team Philosophy)."""
-        data, tid = self._playbook_data, self._pb_selected_tid()
-        want = self.pb_ctl_vars[side].get()
-        if data is None or not tid or not self._set_pb_control(tid, side, "0" if want == "hc" else "1"):
-            self._refresh_pb_team()
-            return
-        self.mark_dirty()
-        self._on_philosophy_changed()
-        word = "offensive" if side == "1" else "defensive"
-        who = "the head coach" if want == "hc" else "the coordinator"
-        _b, name = data.team_book(self.model.coaches, tid, side)
-        self.lbl_playbook_status.configure(
-            text=f"{team_nickname(tid)} {word} playbook is now played by {who} ({name}) - Save to File to keep it.")
-
-    def _on_philosophy_changed(self):
-        """Playbook Control may have changed in Team Philosophy: which playbook a team plays follows it."""
-        data = self._playbook_data
-        if data is not None:
-            data.set_usage(self.model.coaches, self._pb_control)
-            self._fill_playbook_books()
-            self._refresh_pb_team()
-
     def _update_add_buttons(self):
-        """The Add buttons say which playbook they add to: the one the chosen team plays on the side picked
-        with Offense / Defense (the head coach's or the coordinator's, whichever Played by says)."""
+        """The Add buttons say which playbook they add to: the chosen team's (head coach's) playbook on the side
+        picked with Offense / Defense."""
         data, tid = self._playbook_data, self._pb_selected_tid()
         side = self.pb_side_var.get()
         bokl = data.team_bokl(self.model.coaches, tid, "1" if side == "Offense" else "0") if data is not None and tid else None
@@ -5462,29 +5411,16 @@ class App(tk.Tk):
         data = self._playbook_data
         tid = self._pb_selected_tid()
         self._update_add_buttons()
-        for side, attr in (("1", "off"), ("0", "def")):
+        for attr in ("off", "def"):
             getattr(self, f"lbl_pb_{attr}").configure(text="-")
-            getattr(self, f"lbl_pb_{attr}_ctl").configure(text="")
             getattr(self, f"lbl_pb_{attr}_detail").configure(text="")
-            self.pb_ctl_vars[side].set("coord")
-            for rb in getattr(self, f"rb_pb_{attr}"):
-                rb.configure(state="disabled")
         if data is None or not tid:
             return
         for side, attr, coord in (("1", "off", "Offensive coordinator"), ("0", "def", "Defensive coordinator")):
-            who = data.in_use_who(tid, side)
-            ctl = self._pb_control(tid, side)
-            _b, in_use = data.team_book(self.model.coaches, tid, side)
-            _b, hc = data.team_book(self.model.coaches, tid, side, "hc")
+            _b, hc = data.team_book(self.model.coaches, tid, side)
             _b, co = data.team_book(self.model.coaches, tid, side, "coord")
-            getattr(self, f"lbl_pb_{attr}").configure(text=in_use or "-")
-            self.pb_ctl_vars[side].set(ctl or "coord")
-            getattr(self, f"lbl_pb_{attr}_ctl").configure(text="" if ctl else "(not in this save - coordinator assumed)")
-            for rb in getattr(self, f"rb_pb_{attr}"):
-                rb.configure(state="normal" if ctl else "disabled")
-            mark = lambda w: "  [in use]" if who == w else ""
-            getattr(self, f"lbl_pb_{attr}_detail").configure(
-                text=f"Head coach: {hc or '-'}{mark('hc')}   |   {coord}: {co or '-'}{mark('coord')}")
+            getattr(self, f"lbl_pb_{attr}").configure(text=hc or "-")
+            getattr(self, f"lbl_pb_{attr}_detail").configure(text=f"{coord}: {co or '-'}")
 
     def on_change_team_playbook(self, side):
         data = self._playbook_data
@@ -5508,17 +5444,13 @@ class App(tk.Tk):
         if bgid == current:
             return
         if (side, bgid) in data.profile_bgids:
-            # A custom playbook: the game stores it on the head coach's row only, and it is played only when the
-            # head coach has Playbook Control.
+            # A custom playbook: the game stores it on the head coach's row only (the coordinators keep a game
+            # playbook), and in every career checked that side's Playbook Control was Head Coach, so it is set to
+            # that too (it has no visible effect that anyone has found, but it is what the game's own state looks like).
             if not hc_rows:
                 messagebox.showwarning("Playbooks", "This team has no head coach row to hold a custom playbook.")
                 return
-            switched = False
-            if self._pb_control(tid, side) != "hc":
-                if not self._set_pb_control(tid, side, "0"):
-                    messagebox.showinfo("Playbooks", "This save has no team philosophy row for that team, so the playbook can't be switched to the head coach. Nothing was changed.")
-                    return
-                switched = True
+            self._set_pb_control(tid, side, "0")
             for c in hc_rows:
                 c[field] = bgid
         else:
@@ -5530,11 +5462,10 @@ class App(tk.Tk):
                     if (t.get("TGID") or "").strip() == tid and "TOPB" in t and bord.isdigit():
                         t["TOPB"] = bord
         self.mark_dirty()
-        data.set_usage(self.model.coaches, self._pb_control)
+        data.set_usage(self.model.coaches)
         self._fill_playbook_books()
         self._refresh_pb_team()
-        extra = " (and Played by switched to Head coach)" if (side, bgid) in data.profile_bgids and switched else ""
-        self.lbl_playbook_status.configure(text=f"{team_nickname(tid)} {label} playbook set to {name}{extra} - Save to File to keep it.")
+        self.lbl_playbook_status.configure(text=f"{team_nickname(tid)} {label} playbook set to {name} - Save to File to keep it.")
 
     def _fill_playbook_books(self):
         data = self._playbook_data
@@ -5589,7 +5520,7 @@ class App(tk.Tk):
         for sd, word in (("1", "Offense"), ("0", "Defense")):
             bokl = data.team_bokl(self.model.coaches, tid, sd) if tid else None
             if bokl and bokl not in [b for _l, b in choices]:
-                choices.append((f"{nick} {word.lower()} (in use): {data.book_label(bokl)}", bokl))
+                choices.append((f"{nick} {word.lower()} (head coach's): {data.book_label(bokl)}", bokl))
         sel = self.tree_pb_books.selection()
         if sel and sel[0] not in [b for _l, b in choices]:
             choices.append((f"Table selection: {data.book_label(sel[0])}", sel[0]))
@@ -7587,7 +7518,7 @@ class App(tk.Tk):
             return
         nick = team_nickname(tid) or f"Team {tid}"
         TeamPhilosophyDialog(
-            self, self.model.tphs, idx, f"{nick} team philosophy", self._on_philosophy_changed,
+            self, self.model.tphs, idx, f"{nick} team philosophy", lambda: None,
             note="This is the data behind the game's Team Philosophy screen. Checked against the game: the playcall "
                  "settings and the QB, CB, FS, SS, kicker and punter philosophies (at least one value each). The other "
                  "names come from a community list - try changes on a copy of your save.")
