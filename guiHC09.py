@@ -860,7 +860,7 @@ PHILOSOPHY_VALUES = {
     "GDPP": {30: "Size", 31: "Run Block", 32: "Pass Block", 33: "Zone Block", 34: "Balanced"},
     "CRPP": {35: "Size", 36: "Run Block", 37: "Pass Block", 38: "Zone Block", 39: "Balanced"},
     "DEPP": {40: "Balanced", 41: "Prototype", 42: "Speed", 43: "Run Stopper", 44: "3-4"},
-    "DTPP": {45: "Balanced", 46: "Prototype", 47: "One-Gap", 48: "Run Stopper", 49: "3-4"},
+    "DTPP": {45: "Balanced", 46: "Prototype", 47: "One-Gap Penetrator", 48: "Run Stopper", 49: "Versatile/3-4"},
     "OLPP": {50: "Balanced", 51: "Cover 2", 52: "Run Stopper", 53: "3-4 Pass Rush", 54: "Prototype"},
     "MLPP": {55: "Balanced", 56: "Coverage", 57: "Power", 58: "Tackler", 59: "Prototype"},
     "CBPP": {60: "Balanced", 61: "Man Coverage/Ballhawk", 62: "Strong/Press/Run Support", 63: "Prototype", 64: "Cover 2"},
@@ -992,15 +992,16 @@ def safe_int(s):
 # The Evaluate Roster overall behaves like Sum(factor weight * factor score) / Sum(factor weight), which is what
 # estimate_philosophy_overall does: OIN is the PEIW-weighted average of the skills, OAT the PEAW-weighted average of
 # the athletic ratings, OSZ a size score from height and weight (weighted by PESW), OLN learning, ODR durability and
-# OPT / OPD potential and production. Only OIN and OAT are known from the files; learning is the Learning rating,
-# durability the Injury rating, potential / production the skill average without Learning, and the size score
-# (HTSW / WTSW weighted height and weight percentiles among that position's players, scaled with two numbers) are
-# stand-ins fitted to 25 readings off the game's Evaluate Roster screen. Against those readings (CB, SS) the estimate
-# is typically within 2-3 points (worst reading 4.8 off; a build unlike the ones measured can be further out, 8.6 when
-# one is left out of the fit); other positions use the same method unchecked (docs/hc09_position_presets.md has the
-# readings). A plain weighted average of PEAW and PEIW was tried first: within 2 under Balanced but up to 19 points
-# off under other presets. This replaces an earlier version built on PLYT, the
-# game's 37 player-generation archetypes, which are not what the game offers as presets.
+# OPT / OPD potential and production. Only OIN and OAT are known from the files. The other scores are stand-ins fitted
+# to 55 readings off the game's Evaluate Roster screen: learning is the Learning rating, durability the Injury
+# rating, potential / production the skill average under the position's own Balanced preset, and the size score is
+# built from height and weight percentiles among that position's players (the weight counts about five times as much
+# as the height, three numbers fitted). Against those readings (all five presets each of CB, SS, DT and FS, for a few
+# players at each) the estimate is within 2 points for 40 of 55 and within 3 for 50, worst 4.7 off; a build unlike
+# the ones measured can be further out (leaving one player out of the fit the worst was 7.6). Other positions use
+# the same method unchecked. docs/hc09_position_presets.md has the readings. A plain weighted average of PEAW and
+# PEIW was tried first: within 2 under Balanced but up to 19 points off under other presets. This replaces an earlier
+# version built on PLYT, the game's 37 player-generation archetypes, which are not what the game offers as presets.
 # -----------------------------
 PHILOSOPHY_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "philosophies")
 PHILOSOPHY_WEIGHT_TABLES = ("PEAW", "PEIW", "PEOW", "PESW")
@@ -1018,10 +1019,12 @@ PHILOSOPHY_SKILL_ATTR = {   # PEIW
     "PURW": "PLPU", "AWRW": "PAWR", "BKSW": "PBSG", "CATW": "PCTH", "CITW": "PLCI", "KRTW": "PKRT", "BCVW": "PBCV",
     "MCVW": "PLMC", "ZCVW": "PLZC", "CARw": "PCAR", "PRSw": "PLPE",
 }
-# The stand-in size score is PHILOSOPHY_SIZE_BASE + PHILOSOPHY_SIZE_SCALE * (the preset-weighted height and weight
-# percentile, 0-99), fitted to the in-game readings together with the stand-ins above.
-PHILOSOPHY_SIZE_BASE = 55.1
-PHILOSOPHY_SIZE_SCALE = 0.592
+# The stand-in size score is PHILOSOPHY_SIZE_BASE + PHILOSOPHY_SIZE_HEIGHT * (the height percentile, 0-99, times the
+# preset's share HTSW / (HTSW + WTSW)) + PHILOSOPHY_SIZE_WEIGHT * (the weight percentile times WTSW's share), fitted
+# to the in-game readings together with the stand-ins above.
+PHILOSOPHY_SIZE_BASE = 51.1
+PHILOSOPHY_SIZE_HEIGHT = 0.271
+PHILOSOPHY_SIZE_WEIGHT = 1.350
 # (label, the team philosophy field that holds the preset, the PPOS values of the players it applies to)
 PHILOSOPHY_GROUPS = [
     ("QB", "QBPP", {"0"}), ("HB", "HBPP", {"1"}), ("FB", "FBPP", {"2"}), ("WR", "WRPP", {"3"}), ("TE", "TEPP", {"4"}),
@@ -1139,11 +1142,21 @@ def _size_percentile(sorted_vals, v):
     return 99.0 * (bisect.bisect_left(sorted_vals, v) + bisect.bisect_right(sorted_vals, v)) / 2.0 / len(sorted_vals)
 
 
-def estimate_philosophy_overall(row, model, size_population):
+def philosophy_balanced_skill(field):
+    """The skill (PEIW) weights of the Balanced preset of one position (field = its xxPP, e.g. "CBPP"): the all-round
+    skill score estimate_philosophy_overall uses for potential. {} if there is none."""
+    for value, name in PHILOSOPHY_VALUES[field].items():
+        if name == "Balanced" and value in PHILOSOPHY_MODEL:
+            return PHILOSOPHY_MODEL[value]["skill"]
+    return {}
+
+
+def estimate_philosophy_overall(row, model, size_population, balanced_skill):
     """The overall the game's Evaluate Roster screen would show for this player under one philosophy, estimated as
     Sum(factor weight * factor score) / Sum(factor weight); see the comment above PHILOSOPHY_CACHE_DIR for what is
-    known and what is a stand-in. None if the player has neither skill nor athletic ratings. A factor whose rating
-    is missing is left out. Typically within 2-3 points of the game's number (checked for CB and SS only)."""
+    known and what is a stand-in. balanced_skill: philosophy_balanced_skill of the position. None if the player has
+    neither skill nor athletic ratings. A factor whose rating is missing is left out. Within 2-3 points of the
+    game's number for most players (checked for CB, SS, DT and FS only)."""
     factors = model["factors"]
     skills = _weighted_rating_average(row, model["skill"])
     athletic = _weighted_rating_average(row, model["athletic"])
@@ -1159,7 +1172,7 @@ def estimate_philosophy_overall(row, model, size_population):
         parts.append((factors["OLNW"], learning))
     if injury is not None:
         parts.append((factors["ODRW"], injury))
-    potential = _weighted_rating_average(row, model["skill"], skip=("PLRN",))
+    potential = _weighted_rating_average(row, balanced_skill)
     if potential is None:
         potential = skills
     if potential is not None:
@@ -1169,7 +1182,8 @@ def estimate_philosophy_overall(row, model, size_population):
     h_pct = _size_percentile(heights, safe_int(row.get("PHGT", "")))
     w_pct = _size_percentile(weights, safe_int(row.get("PWGT", "")))
     if hsw + wsw > 0 and h_pct is not None and w_pct is not None:
-        parts.append((factors["OSZW"], PHILOSOPHY_SIZE_BASE + PHILOSOPHY_SIZE_SCALE * (hsw * h_pct + wsw * w_pct) / (hsw + wsw)))
+        size = PHILOSOPHY_SIZE_BASE + (PHILOSOPHY_SIZE_HEIGHT * hsw * h_pct + PHILOSOPHY_SIZE_WEIGHT * wsw * w_pct) / (hsw + wsw)
+        parts.append((factors["OSZW"], size))
     total = sum(w for w, _ in parts)
     if total <= 0:
         return None
@@ -3118,9 +3132,9 @@ class PlayerTypeFitDialog(tk.Toplevel):
             self, foreground="gray", wraplength=780, justify="left",
             text="Est. OVR estimates the overall the game's Evaluate Roster screen shows for a player under this preset, rebuilt "
                  "from the game's own weights for it (athletic and skill ratings, learning, durability, height and weight). It is an "
-                 "estimate, not the game's number: against 25 readings taken from the game (cornerbacks and a strong safety) it was "
-                 "typically within 2 to 3 points, and the worst was 5 off; an unusual build may be further out. Other positions use "
-                 "the same method but haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that player's team has "
+                 "estimate, not the game's number: against 55 readings taken from the game (cornerbacks, safeties and defensive "
+                 "tackles) it was within 2 points for most and within 3 for nearly all, and the worst was 5 off; an unusual build may "
+                 "be further out. Other positions use the same method but haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that player's team has "
                  "now. Nothing is changed.",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
@@ -3215,6 +3229,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
         if label not in self._size_pops:
             self._size_pops[label] = philosophy_size_population(self.model.players, group_ppos)
         size_pop = self._size_pops[label]
+        balanced = philosophy_balanced_skill(field)
 
         names = PHILOSOPHY_VALUES[field]
         everyone = self.other_var.get()
@@ -3222,7 +3237,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
         for r in self._pool_rows():
             if not everyone and (r.get(PLAYER_POS_CODE, "") or "").strip() not in group_ppos:
                 continue
-            est = estimate_philosophy_overall(r, model, size_pop)
+            est = estimate_philosophy_overall(r, model, size_pop, balanced)
             if est is None:
                 continue
             team_id = self.model.player_team_id(r)

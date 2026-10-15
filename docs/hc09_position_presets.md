@@ -14,14 +14,15 @@ The presets on the game's Team Philosophy screen (five each for CB, FS and SS, t
 | WR | 15 to 19 | Strong, Tall, Speed, Route-Runner, Balanced |
 | TE | 20 to 24 | Playmaker, H-Back, Balanced, Soft Hands, Blocking |
 | OT / OG / C | 25 to 29 / 30 to 34 / 35 to 39 | Size, Run Block, Pass Block, Zone Block, Balanced |
-| DE / DT | 40 to 44 / 45 to 49 | Balanced, Prototype, Speed or One-Gap, Run Stopper, 3-4 |
+| DE | 40 to 44 | Balanced, Prototype, Speed, Run Stopper, 3-4 |
+| DT | 45 to 49 | Balanced, Prototype, One-Gap Penetrator, Run Stopper, Versatile/3-4 |
 | OLB / MLB | 50 to 54 / 55 to 59 | OLB: Balanced, Cover 2, Run Stopper, 3-4 Pass Rush, Prototype; MLB: Balanced, Coverage, Power, Tackler, Prototype |
 | CB | 60 to 64 | Balanced, Man Coverage/Ballhawk, Strong/Press/Run Support, Prototype, Cover 2 |
 | FS | 65 to 69 | Balanced, Man Coverage, Centerfielder, Prototype, Run Support/Blitzer |
 | SS | 70 to 74 | Balanced, Coverage, Prototype, Run Support/Big Hitter, Smart/Productive |
 | K / P | 75 to 77 / 78 to 80 | Big Foot/Distance, Accuracy, Balanced / Power, Pinpoint Accuracy, Balanced |
 
-Names for CB, FS and SS come from the game (a user's list and screenshots); the K, P and QB names were seen on the game's screens; the rest are the community config's and unchecked.
+Names for CB, FS, SS and DT come from the game (a user's list, screenshots and wording); the K, P and QB names were seen on the game's screens; the rest are the community config's and unchecked.
 
 ## What is *not* a preset
 
@@ -43,7 +44,7 @@ The weights read like the in-game names. For the five CB presets: Man Coverage/B
 
 ## What the editor does with it
 
-**Player Type Fit** lists a position's presets (with the team's current preset beside each player, from `TPHS`) and shows an **Est. OVR** for each player: an estimate of the overall the game's Evaluate Roster screen shows under that preset. The tab says so, with the margin: against the readings below it is typically within 2 to 3 points (worst reading 5 off, and an unusual build may be further out), for cornerbacks and a strong safety only; other positions use the same method unchecked. (*Saved OVR* is the overall stored in the save, which can be stale or from another preset.)
+**Player Type Fit** lists a position's presets (with the team's current preset beside each player, from `TPHS`) and shows an **Est. OVR** for each player: an estimate of the overall the game's Evaluate Roster screen shows under that preset. The tab says so, with the margin: against the 55 readings below the estimate is within 2 points for most and within 3 for nearly all (worst reading 5 off, and an unusual build may be further out), for cornerbacks, safeties and defensive tackles only; other positions use the same method unchecked. (*Saved OVR* is the overall stored in the save, which can be stale or from another preset.)
 
 The estimate is `Sum(factor weight * factor score) / Sum(factor weight)` over the `PEOW` factors:
 
@@ -53,32 +54,50 @@ The estimate is `Sum(factor weight * factor score) / Sum(factor weight)` over th
 | OAT | `OATW` | the athletic ratings weighted by `PEAW` | from the files |
 | OLN | `OLNW` | the Learning rating | stand-in |
 | ODR | `ODRW` | the Injury rating | stand-in |
-| OPT + OPD | `OPTW + OPDW` | the `PEIW`-weighted skills without Learning | stand-in |
-| OSZ | `OSZW` | `55.1 + 0.592 * p`, p = the `HTSW` / `WTSW` weighted height and weight percentile (0 to 99) among that position's players in the save | stand-in, two numbers fitted |
+| OPT + OPD | `OPTW + OPDW` | the skills averaged with the `PEIW` weights of the position's Balanced preset | stand-in |
+| OSZ | `OSZW` | `51.1 + (0.271 * HTSW * h + 1.350 * WTSW * w) / (HTSW + WTSW)`, h and w = the player's height and weight percentile (0 to 99) among that position's players in the save | stand-in, three numbers fitted |
 
 A plain weighted average of the `PEAW` and `PEIW` ratings was tried first (what an earlier version of this tab showed). It matched the game under Balanced (within 2) but was up to 19 points off under other presets (Graham under Cover 2: 74 against the game's 55), because it ignored the factor weights: Man Coverage/Ballhawk gives athleticism 15 of 71 where Balanced gives 31 of 102, and Prototype gives size 15 of 73.
 
 ## In-game readings
 
-Taken from the Evaluate Roster screen of a test career (Bears), one preset at a time, with the estimate the editor gives for the same player. The players: Tillman 6'1" 196 lb (`PHGT` 73, `PWGT` 36), R. Manning 5'8" (68, 25), Vasher 5'10" (70, 17), Graham 6'0" (72, 35), McBride 5'9" (69, 25), Archuleta 6'0" 215 lb (72, 55). The weight is stored as pounds minus 160.
+Taken from the Evaluate Roster screen of a test career (Bears), one preset at a time, each shown as *game / the editor's estimate* (rounded). The bodies (`PHGT` inches, `PWGT` pounds minus 160): Tillman 73 / 36, R. Manning 68 / 25, Vasher 70 / 17, Graham 72 / 35, McBride 69 / 25, Archuleta 72 / 55, Harris 75 / 132, Dvoracek 75 / 145, Adams 72 / 139, Garay 76 / 150, M. Brown 70 / 47, D. Manning 71 / 42.
 
-| Preset | Tillman | Manning | Vasher | Graham | McBride | Archuleta |
+| Preset | Tillman | R. Manning | Vasher | Graham | McBride | Archuleta |
 |---|---|---|---|---|---|---|
-| CB Balanced (60) | | 82 / 82 | 89 / 91 | 69 / 69 | 76 / 76 | |
-| CB Man Coverage/Ballhawk (61) | | 78 / 79 | 88 / 90 | 64 / 65 | 72 / 73 | |
-| CB Strong/Press/Run Support (62) | | 79 / 80 | 85 / 88 | 70 / 71 | 73 / 75 | |
-| CB Prototype (63) | 87 / 92 | 78 / 77 | 85 / 86 | 74 / 72 | | |
-| CB Cover 2 (64) | 84 / 88 | 77 / 80 | 88 / 91 | 55 / 59 | | |
-| SS Balanced (70) | | | | | | 67 / 66 |
-| SS Coverage (71) | | | | | | 62 / 62 |
-| SS Prototype (72) | | | | | | 78 / 74 |
-| SS Run Support/Big Hitter (73) | | | | | | 73 / 71 |
-| SS Smart/Productive (74) | | | | | | 62 / 62 |
+| CB Balanced (60) |  | 82 / 83 | 89 / 91 | 69 / 68 | 76 / 76 |  |
+| CB Man Coverage/Ballhawk (61) |  | 78 / 80 | 88 / 90 | 64 / 65 | 72 / 73 |  |
+| CB Strong/Press/Run Support (62) |  | 79 / 81 | 85 / 88 | 70 / 72 | 73 / 75 |  |
+| CB Prototype (63) | 87 / 92 | 78 / 78 | 85 / 84 | 74 / 72 |  |  |
+| CB Cover 2 (64) | 84 / 89 | 77 / 80 | 88 / 91 | 55 / 58 |  |  |
+| SS Balanced (70) |  |  |  |  |  | 67 / 66 |
+| SS Coverage (71) |  |  |  |  |  | 62 / 62 |
+| SS Prototype (72) |  |  |  |  |  | 78 / 78 |
+| SS Run Support/Big Hitter (73) |  |  |  |  |  | 73 / 74 |
+| SS Smart/Productive (74) |  |  |  |  |  | 62 / 62 |
 
-(game / editor estimate, rounded). Over these 25 readings the estimate is within 2 for 16, within 3 for 20, worst 4.8 (Tillman under Prototype); the root-mean-square error is 2.3. The two size numbers and the stand-ins were fitted to these same readings, so the figures are in-sample. Leaving one player out at a time, the root-mean-square error was 3.0 and the worst 8.6 (Tillman under Prototype, a body the rest of the fit hadn't seen), then 6.0 (Archuleta under Prototype). More players and positions would tighten it.
+| Preset | Harris | Dvoracek | Adams | Garay |
+|---|---|---|---|---|
+| DT Balanced (45) | 89 / 89 | 69 / 67 | 66 / 69 | 66 / 64 |
+| DT Prototype (46) | 84 / 84 | 73 / 71 | 72 / 71 | 76 / 73 |
+| DT One-Gap Penetrator (47) | 90 / 91 | 68 / 67 | 65 / 67 | 54 / 55 |
+| DT Run Stopper (48) | 86 / 86 | 70 / 70 | 71 / 71 | 71 / 72 |
+| DT Versatile/3-4 (49) | 87 / 87 | 69 / 68 | 70 / 69 | 70 / 68 |
+
+| Preset | M. Brown | D. Manning |
+|---|---|---|
+| FS Balanced (65) | 82 / 83 | 77 / 76 |
+| FS Man Coverage (66) | 82 / 82 | 75 / 75 |
+| FS Centerfielder (67) | 82 / 83 | 75 / 74 |
+| FS Prototype (68) | 82 / 84 | 82 / 78 |
+| FS Run Support/Blitzer (69) | 80 / 82 | 74 / 74 |
+
+Over these 55 readings the estimate is within 1 for 26, within 2 for 40, within 3 for 50; the worst is 4.7 (Tillman under Cover 2) and the root-mean-square error is 1.8 (CB 2.3, DT 1.5, FS 1.7, SS 0.4). Cover 2 corners are all over-estimated by about 3, and Danieal Manning's FS Prototype reading (82) is 4 above the estimate. The stand-ins were fitted to these same readings, so the figures are in-sample. Leaving one player out at a time, the root-mean-square error was 2.1 and the worst 7.6 (Tillman under Prototype, a body the rest of the fit hadn't seen), then 4.7 (Tillman under Cover 2) and 4.6 (D. Manning under FS Prototype).
+
+The readings came in batches, and each new batch was scored with the model as it stood before refitting. The first model (25 CB and SS readings, size as one percentile) was within 2.9 on the Balanced DT and FS readings, but 5 to 7 low for the big defensive tackles under Prototype, which led to the current size score (weight counts about five times as much as height) and to the Balanced-weights potential stand-in. Scored on the DT Run Stopper and FS Prototype readings before they were used, the refit was within 4.3 (RMS 2.2); on DT Versatile/3-4 and FS Run Support/Blitzer, within 2.1 (RMS 1.2).
 
 ## Not known
 
-- **The game's exact overall formula.** The structure above fits, but only the `OIN` and `OAT` scores are known from the files. How learning, durability, potential, production and size are scored is guessed from the readings. In particular the size score has only been seen for six bodies, all cornerbacks and one safety.
-- Free safeties and every non-defensive-back position: no readings yet, so the estimate there is unchecked.
+- **The game's exact overall formula.** The structure above fits, but only the `OIN` and `OAT` scores are known from the files. How learning, durability, potential, production and size are scored is guessed from the readings. In particular the height part of the size score is poorly pinned down (one weight-heavy fit explains the data almost as well), which may matter for positions where height is weighted heavily, such as WR Tall (`HTSW` 15).
+- Every position other than CB, FS, SS and DT has no readings, so the estimate there is unchecked. Readings for MLB, WR and HB would be the next most useful.
 - Whether potential and production (`OPTW`, `OPDW`) use the same ratings as skills; the displayed potential (POT) also changes with the preset, so it is computed the same way from projected ratings.

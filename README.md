@@ -35,8 +35,9 @@ export/import through HC09Editor required.
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
   (read-only: estimates each player's overall under one of the game's team position presets,
   such as Cover 2 or Man Coverage CB, from the game's own weights and ranks them. It is an
-  estimate: typically within 2 to 3 points of the Evaluate Roster screen where it was checked,
-  for cornerbacks and a strong safety; other positions are unchecked), the recent-saves list,
+  estimate: within 2 points of the Evaluate Roster screen for most players and 3 for nearly all
+  where it was checked (cornerbacks, safeties, defensive tackles); other positions are unchecked),
+  the recent-saves list,
   and *Options* (modern UI, dark mode).
 
 **What has been checked in the game:** switching a team's playbook, adding a single play
