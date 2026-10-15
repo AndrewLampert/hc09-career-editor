@@ -3634,7 +3634,8 @@ class PlaybookPickerDialog(tk.Toplevel):
 
 # Playbooks 1-10 are the custom playbooks made in-game, and the custom plays and sets in them; their
 # names live in the HC09 profile save (BLUS30128-PROFILE-*), not in the career. Read-only.
-PLAYBOOK_PROFILE_TABLES = ("PLAB", "SETL", "PBPL")
+PLAYBOOK_PROFILE_TABLES = ("PLAB", "SETL", "PBPL", "PGPL")   # PGPL only to check the names belong to the career
+PLAYBOOK_NAME_MATCH = 0.8   # a custom playbook is named only if this share of its profile plays is in the career's
 
 
 def find_profile_saves(career_db_path):
@@ -4992,6 +4993,7 @@ class App(tk.Tk):
         self._playbook_data = None
         self._playbook_stamp = None
         self._playbook_profile = ""     # the profile save the custom names came from, if one was found
+        self._playbook_skipped = []     # custom playbooks left unnamed because the profile's version differs
         self._pb_team_manual = False   # True once the tab's Team box was changed by hand
         self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
 
@@ -5146,11 +5148,11 @@ class App(tk.Tk):
                 save = {t.lower(): read_csv_dicts(os.path.join(tmp, t.lower() + ".csv")) for t in PLAYBOOK_SAVE_TABLES}
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-            profile_path, profile = self._choose_profile(db_path, game, save, override)
-            return PlaybookData(game, save, coaches, profile), stamp, profile_path
+            profile_path, profile, skipped = self._choose_profile(db_path, game, save, override)
+            return PlaybookData(game, save, coaches, profile), stamp, profile_path, skipped
 
         def done(result):
-            self._playbook_data, self._playbook_stamp, self._playbook_profile = result
+            self._playbook_data, self._playbook_stamp, self._playbook_profile, self._playbook_skipped = result
             self.model.pb_pending = {}   # the reload replaced whatever was edited
             if boot_ast:
                 self.ui_prefs["boot_ast_path"] = boot_ast
@@ -5161,7 +5163,7 @@ class App(tk.Tk):
 
     def _read_profile_names(self, profile_path):
         """PLAB / SETL / PBPL rows (names of custom playbooks, sets and plays) from a profile save,
-        or None if the file has none of those tables. Worker thread; read-only."""
+        or None if the file has none of those tables (plus its PGPL, to verify them). Worker thread; read-only."""
         tmp = tempfile.mkdtemp(prefix="hc09_profile_")
         try:
             self.model.run_bridge(["export", "--db", profile_path, "--out", tmp, "--tables", ",".join(PLAYBOOK_PROFILE_TABLES)])
@@ -5175,7 +5177,7 @@ class App(tk.Tk):
     def _choose_profile(self, db_path, game, save, override):
         """The profile save whose custom plays this career uses: the one picked by hand (remembered
         per save) if it still reads, otherwise the neighbouring profile whose custom plays match the
-        career's playbook links best (the newest on a tie). Returns (path, names) or ("", None)."""
+        career's playbook links best (the newest on a tie). Returns (path, names, unnamed playbooks) or ("", None, [])."""
         key = lambda r, f: (r.get(f) or "").strip()
         stock = {(key(r, "SETL"), key(r, "PLYL")) for r in game.get("pbpl", [])}
         used = {(key(r, "SETL"), key(r, "PLYL")) for r in save.get("pgpl", [])} - stock
@@ -5185,7 +5187,7 @@ class App(tk.Tk):
             except Exception:
                 names = None
             if names:
-                return override, names
+                return (override,) + self._verified_names(names, save)
         best_path, best_names, best_score = "", None, -1
         for path in find_profile_saves(db_path):
             try:
@@ -5198,7 +5200,29 @@ class App(tk.Tk):
             newer = best_path and os.path.getmtime(path) > os.path.getmtime(best_path)
             if score > best_score or (score == best_score and newer):
                 best_path, best_names, best_score = path, names, score
-        return best_path, best_names
+        if best_names is None:
+            return "", None, []
+        return (best_path,) + self._verified_names(best_names, save)
+
+    @staticmethod
+    def _verified_names(names, save):
+        """Drop the profile's name for any custom playbook whose plays in the profile are not (by
+        PLAYBOOK_NAME_MATCH) the plays of the same-numbered playbook in the career - e.g. one rebuilt in
+        the game after this career was started - so a name can never sit on the wrong playbook.
+        Returns (names without those, [their names])."""
+        key = lambda r, f: (r.get(f) or "").strip()
+        prof, car = defaultdict(set), defaultdict(set)
+        for r in names.get("pgpl", []):
+            prof[key(r, "BOKL")].add((key(r, "SETL"), key(r, "PLYL")))
+        for r in save.get("pgpl", []):
+            car[key(r, "BOKL")].add((key(r, "SETL"), key(r, "PLYL")))
+        keep, dropped = [], []
+        for r in names.get("plab", []):
+            b = key(r, "PBGI")
+            a, c = prof.get(b, set()), car.get(b, set())
+            ok = (len(a & c) / len(a) >= PLAYBOOK_NAME_MATCH) if a else not c
+            (keep if ok else dropped).append(r)
+        return dict(names, plab=keep), [key(r, "BNAM") or f"Playbook {key(r, 'PBGI')}" for r in dropped]
 
     def on_pick_profile(self):
         """Point the Playbooks tab at a profile save by hand (remembered for this career)."""
@@ -5316,6 +5340,8 @@ class App(tk.Tk):
         unnamed = sum(1 for row in data.books() if not data.book_names.get(row[0]))
         if self._playbook_profile:
             notes.append("custom names from " + recent_file_display(self._playbook_profile))
+            if self._playbook_skipped:
+                notes.append("not named because their plays differ from the profile's: " + ", ".join(self._playbook_skipped))
         elif unnamed:
             notes.append(f"{unnamed} playbooks have no name (custom ones are named in your profile save - use Profile save...)")
         self.lbl_playbook_status.configure(

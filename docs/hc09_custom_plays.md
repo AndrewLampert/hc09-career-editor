@@ -12,6 +12,21 @@ What was found by opening a career save and the profile save beside it, and what
 
 The game allows up to 10 custom playbooks. In the profile's `PLAB` they have `PBGI` 1 to 10 (the playbook id, `BOKL` in the career) and `BGID` 46 to 55. In the example, offensive: Collage, Run and shoot, run, West Cost, Run, Spred Option, ZONE BLOCK, Modern and Army Run; defensive: Created Playbook. The 98 playbooks of a career are these 10 plus the game's own.
 
+**Each custom playbook starts as a copy of one of the game's playbooks**, and other plays and formations, stock or custom, are added to it. Custom plays and custom playbooks are separate things: a custom playbook doesn't need any custom plays, and the custom plays don't have to be together. In the example only 3 of the 10 (Playbooks 1, 8 and 9) hold custom plays, and no game playbook holds any. By play overlap, the base of several of them is clear:
+
+| Custom playbook | Closest game playbook | Overlap |
+|---|---|---|
+| Modern | Payton Spread Attack | 99% of each |
+| ZONE BLOCK | Shanahan Zone Block | 82% of the custom book, 99% of the stock one |
+| West Cost | Martz Air Attack | 83% / 99% |
+| Army Run | Sanders Army Run | 85% / 95% |
+| Run and shoot | Run and Shoot | 77% / 78% |
+| Created Playbook (defense) | Cardinals Blitz | 93% / 100% |
+
+The others are looser (heavily changed): `run` looks like Steelers Smashmouth and `Run` like Texans Power Run, and `Collage` and `Spred Option` have only about a third to two thirds in common with College Attack.
+
+**The profile's names belong to the career's slots.** Before any playbook edit, Playbooks 1 to 10 held exactly the same plays in the career as in the profile (no play on only one side). The game's own playbooks differ by about one play each between the two files; that is separate from the custom ones. The editor checks this on every load: a custom playbook is only named when at least 80% of its plays in the profile are in the same-numbered playbook of the career. A playbook that fails (say it was rebuilt in the game after the career was started) keeps its generic name and the status line lists it, so a name never sits on the wrong playbook.
+
 ## Custom plays
 
 The 14 custom plays in the example are each in a set named `Created`, which sits under the special formation **8190** ("Created Plays"), in Playbooks 1, 8 and 9 (29 links in all). `PLTP` (play type) varies from play to play. The profile and the career agreed on all of this.
@@ -21,6 +36,16 @@ The 14 custom plays in the example are each in a set named `Created`, which sits
 The Playbooks tab finds the profile next to the career (`<TITLE>-PROFILE-*`, choosing the one whose custom plays match the career's links), reads `PLAB`, `SETL` and `PBPL` from it, **read-only**, and uses those names only for ids the game does not already name. **Profile save...** points it at a profile by hand. Nothing is written to the profile.
 
 Add plays still refuses to copy custom sets, plays and formations: a reporter found that copying them broke flipping and put punts in the Gun.
+
+## Idea: making custom plays outside the game
+
+The set called `Created` and the special formation 8190 ("Created Plays") are where the game files its custom plays, so they are the natural slot for plays made outside the game and written back into the profile and career. The catch is that a play has to be **legal**, meaning the game accepts it and it can work, so the rules and limits have to be learned first.
+
+What a custom play is made of, from the example: in the profile, one `PBPL` row (name, play type) and one `SETL` row (the set), 11 `SETP` rows, 11 `PLYS` rows and `SETG` rows for the positions, plus rows in the smaller tables for some play types (`PLCM`, `PLPD`, `PLRD`); in the career, three link rows (`PGPL`, `PGSS`, `PGSL`) per playbook it is in.
+
+The game archive (`qkl_boot.ast`) has these same tables but **empty**, so there are no stock plays to learn the rules from. The only definitions available are the player's own custom plays (14 in the example). Everything else has to come from in-game tests: make a play in the game, save, and compare the profile before and after (the profile is a second file to compare), then change one thing at a time.
+
+A sensible order: work out what each column means from the existing plays and from small in-game experiments; write a checker for the rules, like the playbook one that was verified on all 98 playbooks; start by **cloning and slightly editing an existing custom play** rather than building one from nothing; and always back up and run `verify-db` after writing. Writing the profile is a new kind of risk, since so far the editor only reads it.
 
 ## Not known
 
