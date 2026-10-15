@@ -27,9 +27,11 @@ export/import through HC09Editor required.
   which playbooks contain a play; change a team's offensive or defensive playbook; and
   **add plays** to your team's playbook by copying a play, a whole set or a whole
   formation from another one (200-play limit per playbook, special teams not counted;
-  plays made in-game are never copied). Playbooks 1-10 (your custom playbooks) and the plays
-  you made in the game are named from your profile save, found next to your career and
-  only read.
+  plays made in-game are never copied). A team has a head coach's playbook and a coordinator's
+  for each side and plays one of them; the tab shows which is in use and has a *Played by*
+  switch (it sets the Playbook Control team philosophy for you). Offense and Defense are
+  shown one at a time. Playbooks 1-10 (your custom playbooks) and the plays you made in the
+  game are named from your profile save, found next to your career and only read.
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
   (read-only: ranks players against the game's player types), the recent-saves list,
   and *Options* (modern UI, dark mode).

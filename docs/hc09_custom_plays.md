@@ -27,6 +27,12 @@ The others are looser (heavily changed): `run` looks like Steelers Smashmouth an
 
 **The profile's names belong to the career's slots.** Before any playbook edit, Playbooks 1 to 10 held exactly the same plays in the career as in the profile (no play on only one side). The game's own playbooks differ by about one play each between the two files; that is separate from the custom ones. The editor checks this on every load: a custom playbook is only named when at least 80% of its plays in the profile are in the same-numbered playbook of the career. A playbook that fails (say it was rebuilt in the game after the career was started) keeps its generic name and the status line lists it, so a name never sits on the wrong playbook.
 
+## Which playbook a team plays
+
+Every coach row has an offensive (`CPID`) and a defensive (`CDID`) playbook, so a team holds one for its **head coach** and one for each **coordinator** per side. The team plays only one of them: the **Playbook Control** team philosophy (`OPPP` offense, `DPPP` defense in the `TPHS` table; 0 = Head Coach, 1 = Coordinator) says which. In the 10 careers checked, a head coach's playbook differs from the coordinator's on roughly a third of teams (92 of 320 offenses, 116 of 320 defenses), so reading only the coordinators, as the editor used to, shows the wrong playbook for any team whose head coach has control.
+
+A **custom** playbook choice (made on the game's New Career Playbook Select screen) is stored on the **head coach's row only** (`CPID` 46 to 55 offense, 52 defense in the example; the coordinators keep a game playbook, and `TEAM.TOPB` / `TDPB` stay on the game's). In all 9 careers checked where a head coach holds a custom playbook, the Playbook Control of that side was Head Coach.
+
 ## Custom plays
 
 The 14 custom plays in the example are each in a set named `Created`, which sits under the special formation **8190** ("Created Plays"), in Playbooks 1, 8 and 9 (29 links in all). `PLTP` (play type) varies from play to play. The profile and the career agreed on all of this.
