@@ -33,7 +33,8 @@ export/import through HC09Editor required.
   shown one at a time. Playbooks 1-10 (your custom playbooks) and the plays you made in the
   game are named from your profile save, found next to your career and only read.
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
-  (read-only: ranks players against the game's player types), the recent-saves list,
+  (read-only: ranks players by how well their ratings suit one of the game's team position
+  presets, such as Cover 2 or Man Coverage CB, using the game's own weights), the recent-saves list,
   and *Options* (modern UI, dark mode).
 
 **What has been checked in the game:** switching a team's playbook, adding a single play
@@ -67,7 +68,7 @@ you always have the previous version to fall back to.
 - [Node.js](https://nodejs.org/) 18+, available on your `PATH` (used only to run the
   bridge script; the GUI itself doesn't need it to start).
 - *Optional, for names and portraits:* your own copy of the game's files (the
-  `PS3_GAME/USRDIR` folder). Player Type Fit and the Playbooks tab read player types and
+  `PS3_GAME/USRDIR` folder). Player Type Fit and the Playbooks tab read the presets' weights and
   play, formation and playbook names from `qkl_boot.ast`; the editor asks you to locate
   it the first time and keeps a local cache. The portrait viewer reads `qkl_fe2ig.ast`
   (use **Locate Game Files...** in the Player Editor tab). The Playbooks tab also reads your

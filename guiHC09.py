@@ -862,11 +862,11 @@ PHILOSOPHY_VALUES = {
     "DTPP": {45: "Balanced", 46: "Prototype", 47: "One-Gap", 48: "Run Stopper", 49: "3-4"},
     "OLPP": {50: "Balanced", 51: "Cover 2", 52: "Run Stopper", 53: "3-4 Pass Rush", 54: "Prototype"},
     "MLPP": {55: "Balanced", 56: "Coverage", 57: "Power", 58: "Tackler", 59: "Prototype"},
-    "CBPP": {60: "Balanced", 61: "Man", 62: "Strong", 63: "Prototype", 64: "Cover 2"},
-    "FSPP": {65: "Balanced", 66: "Man Coverage", 67: "Centerfielder", 68: "Prototype", 69: "Run Support"},
-    "SsPP": {70: "Balanced", 71: "Coverage", 72: "Prototype", 73: "Run Support", 74: "Smart"},
-    "KKPP": {75: "Power", 76: "Accuracy", 77: "Balanced"},
-    "KPPP": {78: "Power", 79: "Accuracy", 80: "Balanced"},
+    "CBPP": {60: "Balanced", 61: "Man Coverage/Ballhawk", 62: "Strong/Press/Run Support", 63: "Prototype", 64: "Cover 2"},
+    "FSPP": {65: "Balanced", 66: "Man Coverage", 67: "Centerfielder", 68: "Prototype", 69: "Run Support/Blitzer"},
+    "SsPP": {70: "Balanced", 71: "Coverage", 72: "Prototype", 73: "Run Support/Big Hitter", 74: "Smart/Productive"},
+    "KKPP": {75: "Big Foot/Distance", 76: "Accuracy", 77: "Balanced"},
+    "KPPP": {78: "Power", 79: "Pinpoint Accuracy", 80: "Balanced"},
 }
 
 PHILOSOPHY_TABS = [
@@ -978,98 +978,89 @@ def safe_int(s):
         return None
 
 # -----------------------------
-# Player Type Fit ("positional philosophy" fit).
+# Player Type Fit: how well a player's ratings suit one of the game's team position philosophies.
 #
-# PLYT is a real table pulled directly from the game's own shipped database
-# (qkl_boot.ast top-level entry 46, an EA `DB` file with 716 tables - a
-# superset of the save's 217) - NOT a forum guess. It defines the game's 37
-# named player archetypes (Balanced QB, Scrambling QB, Power Back, ...),
-# each with a full 0-99 "ideal" profile using the SAME field codes as
-# STAT_META above. That means a player's fit to an archetype is a plain
-# field-by-field distance against real extracted game data - no invented
-# formula, no assumed weighting.
+# The presets on the game's Team Philosophy screen (five each for CB, FS and SS, three for K and P, ...) are the
+# team position philosophies: the TPHS xxPP values 0-80 (PHILOSOPHY_VALUES). The game's own files carry what each
+# one values: PEAW (athletic ratings) and PEIW (skill ratings) have one row per philosophy, keyed by GMPP = the
+# philosophy's value, with a weight for each rating. Checked on the five CB presets: Man Coverage weights man
+# coverage 31 and zone coverage 0, Cover 2 the reverse, Strong/Press weights tackling, pursuit and press, and
+# Prototype is high everywhere. Their siblings PEOW, PEDW and PESW (scouting-factor, durability and height/weight
+# weights) are not used here, and RNSW is zero for every philosophy.
 #
-# The save-file field that records which archetype/philosophy is CURRENTLY
-# assigned to a roster position was NOT found (two candidate tables, TPHS/
-# TPHL, didn't pattern-match cleanly) - so this only computes a hypothetical
-# fit score for browsing/comparison, it doesn't read or write an existing
-# assignment.
+# The fit score is the weighted average of a player's ratings with those weights. It ranks who suits a preset;
+# it is NOT the game's overall, whose exact formula has not been reproduced. This replaces an earlier version
+# built on PLYT, the game's 37 player-generation archetypes, which are not what the game offers as presets.
 # -----------------------------
-PLYT_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "gamedata", "PLYT_player_types.csv")
-# Where the app writes PLYT when it extracts it from the user's own game files
-# (qkl_boot.ast); checked after PLYT_DATA_PATH so a hand-placed file still wins.
-PLYT_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "PLYT_player_types.csv")
+PHILOSOPHY_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "philosophies")
+PHILOSOPHY_WEIGHT_TABLES = ("PEAW", "PEIW")
 BOOT_AST_FILENAME = "qkl_boot.ast"
-BOOT_DB_TOP_INDEX = 46
-
-# PTId // 10 groups the 37 archetypes into 9 position groups; verified
-# against the archetype names themselves (e.g. ids 10-14 are all "... Back").
-PLAYER_TYPE_GROUP_LABELS = {
-    0: "QB", 1: "HB/FB", 2: "WR", 3: "TE", 4: "OL", 5: "DL", 6: "LB", 7: "DB", 8: "K/P",
+# weight column -> the player rating it weighs. Matched by name and checked against which position groups use
+# each weight (e.g. HPWW, hit power, is heavy for MLB / SS / OLB; RORW, route running, for WR / TE).
+PHILOSOPHY_WEIGHT_ATTR = {
+    # PEAW
+    "ACCW": "PACC", "SPDW": "PSPD", "AGLW": "PAGI", "FIMW": "PFMS", "SPMW": "PLSM", "THPW": "PTHP", "JMPW": "PJMP",
+    "STRW": "PSTR", "RBSW": "PRBS", "ELUW": "PELU", "JMVW": "PLJM", "HPWW": "PLHT", "KPWW": "PKPR", "PBSw": "PPBS",
+    # PEIW
+    "THAW": "PTHA", "STAW": "PSTA", "IMBW": "PLIB", "RNBW": "PRBK", "KACW": "PKAC", "TACW": "PTAK", "SPCW": "PLSC",
+    "PBFW": "PPBF", "RBFW": "PRBF", "PRGW": "PLPR", "TGHW": "PTGH", "INJW": "PINJ", "PBKW": "PPBK", "TRKW": "PLTR",
+    "RELW": "PLRL", "STMW": "PLSA", "PWMW": "PLPm", "LRNW": "PLRN", "IMPW": "PIMP", "MORW": "PMOR", "RORW": "PLRR",
+    "PURW": "PLPU", "AWRW": "PAWR", "BKSW": "PBSG", "CATW": "PCTH", "CITW": "PLCI", "KRTW": "PKRT", "BCVW": "PBCV",
+    "MCVW": "PLMC", "ZCVW": "PLZC", "CARw": "PCAR", "PRSw": "PLPE",
 }
-PLAYER_TYPE_GROUP_TO_PPOS = {
-    0: {"0"},
-    1: {"1", "2"},
-    2: {"3"},
-    3: {"4"},
-    4: {"5", "6", "7", "8", "9"},
-    5: {"10", "11", "12"},
-    6: {"13", "14", "15"},
-    7: {"16", "17", "18"},
-    8: {"19", "20"},
-}
+# (label, the team philosophy field that holds the preset, the PPOS values of the players it applies to)
+PHILOSOPHY_GROUPS = [
+    ("QB", "QBPP", {"0"}), ("HB", "HBPP", {"1"}), ("FB", "FBPP", {"2"}), ("WR", "WRPP", {"3"}), ("TE", "TEPP", {"4"}),
+    ("OT (LT / RT)", "TKPP", {"5", "9"}), ("OG (LG / RG)", "GDPP", {"6", "8"}), ("C", "CRPP", {"7"}),
+    ("DE (LE / RE)", "DEPP", {"10", "11"}), ("DT", "DTPP", {"12"}), ("OLB (LOLB / ROLB)", "OLPP", {"13", "15"}),
+    ("MLB", "MLPP", {"14"}), ("CB", "CBPP", {"16"}), ("FS", "FSPP", {"17"}), ("SS", "SsPP", {"18"}),
+    ("K", "KKPP", {"19"}), ("P", "KPPP", {"20"}),
+]
 
-def load_player_types():
-    rows = []
-    for path in (PLYT_DATA_PATH, PLYT_CACHE_PATH):
+
+def load_philosophy_weights():
+    """{philosophy value: {player rating column: weight}} from the cached PEAW and PEIW tables, or {} if they
+    have not been extracted from the game files yet."""
+    out = {}
+    for table in PHILOSOPHY_WEIGHT_TABLES:
         try:
-            with open(path, newline="", encoding="utf-8") as f:
-                rows = list(csv.DictReader(f))
-        except Exception:
-            continue
-        if rows:
-            break
-    if not rows:
-        return [], []
+            with open(os.path.join(PHILOSOPHY_CACHE_DIR, table.lower() + ".csv"), newline="", encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    gid = safe_int(r.get("GMPP", ""))
+                    if gid is None:
+                        continue
+                    weights = out.setdefault(gid, {})
+                    for col, attr in PHILOSOPHY_WEIGHT_ATTR.items():
+                        try:
+                            w = float(r.get(col) or 0)
+                        except ValueError:
+                            continue
+                        if w > 0 and col in r:
+                            weights[attr] = w
+        except OSError:
+            return {}
+    return out
 
-    # Only fields this project already tracks (STAT_META) AND that actually
-    # vary across archetypes - a field that's 0 for every single archetype
-    # carries no fit information, so it's dropped automatically rather than
-    # hand-picked (avoids injecting any guesswork about which stats "should"
-    # matter for a given position).
-    candidate_fields = [k for k in STAT_META.keys() if k in rows[0]]
-    fields = [k for k in candidate_fields if any(safe_int(r.get(k, "0")) for r in rows)]
 
-    types = []
-    for r in rows:
-        ptid = safe_int(r.get("PTId", ""))
-        if ptid is None:
-            continue
-        types.append({
-            "ptid": ptid,
-            "name": (r.get("PTTN", "") or f"Type {ptid}").strip(),
-            "group": ptid // 10,
-            "ideal": {k: (safe_int(r.get(k, "0")) or 0) for k in fields},
-        })
-    types.sort(key=lambda t: (t["group"], t["ptid"]))
-    return types, fields
+PHILOSOPHY_WEIGHTS = load_philosophy_weights()
 
-PLAYER_TYPES, PLAYER_TYPE_FIT_FIELDS = load_player_types()
 
-def compute_player_type_fit(row, ideal_profile):
-    """Average absolute per-attribute difference, expressed as a 0-100
-    'match' score (100 = identical to the archetype's ideal profile).
-    Only real, already-tracked STAT_META fields are compared - see
-    load_player_types()."""
-    diffs = []
-    for field, ideal_val in ideal_profile.items():
-        actual = safe_int(row.get(field, ""))
-        if actual is None:
-            continue
-        diffs.append(abs(actual - ideal_val))
-    if not diffs:
-        return None
-    return max(0.0, 100.0 - (sum(diffs) / len(diffs)))
+def compute_philosophy_fit(row, weights):
+    """Weighted average of the player's ratings (0-99) with the philosophy's weights; None if none apply."""
+    num = den = 0.0
+    for attr, w in weights.items():
+        v = safe_int(row.get(attr, ""))
+        if v is not None:
+            num += w * v
+            den += w
+    return num / den if den else None
+
+
+def philosophy_key_ratings(weights, n=8):
+    """The ratings a philosophy weights most, as 'Man Coverage 31, Speed 31, ...'."""
+    top = sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
+    return ", ".join(f"{STAT_META.get(a, (a,))[0]} {w:g}" for a, w in top)
+
 
 def detect_team_col_case_sensitive(headers):
     hs = set(headers or [])
@@ -2936,12 +2927,10 @@ class AssignPortraitDialog(tk.Toplevel):
 
 
 class PlayerTypeFitDialog(tk.Toplevel):
-    """Browse any pool of players (a team, all teams, Free Agents, Draft
-    Class, Game Changer Players) and rank them by fit against a chosen
-    player-type archetype (see load_player_types()/PLAYER_TYPES - real data
-    pulled from the game's own shipped database, not a guess). Read-only:
-    doesn't read or write any 'currently assigned philosophy' field, since
-    that field wasn't identified in the save."""
+    """Rank a pool of players (a team, all teams, Free Agents, Draft Class, Game Changer Players) by how well their
+    ratings suit one of the game's team position philosophies - the presets on the Team Philosophy screen - using
+    the weights the game itself gives each rating (see load_philosophy_weights). Read-only. 'Team's pick' shows
+    the preset each player's team has now (TPHS)."""
 
     POOL_OPTIONS = [
         ("this_team", "This Team"),
@@ -2958,37 +2947,37 @@ class PlayerTypeFitDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Player Type Fit")
         self.transient(parent)
-        self.geometry("720x560")
-        self.minsize(560, 380)
+        self.geometry("820x600")
+        self.minsize(640, 420)
         self.resizable(True, True)
 
         self.parent = parent
         self.model = model
 
-        if not PLAYER_TYPES:
+        if not PHILOSOPHY_WEIGHTS:
             ttk.Label(
                 self, foreground="gray", wraplength=420, justify="left",
-                text="Player-type data isn't available. This feature needs the archetype data "
-                     "from your own game files (qkl_boot.ast) - reopen Player Type Fit to locate it.",
+                text="The philosophy data isn't available. This feature needs it from your own game files "
+                     "(qkl_boot.ast) - reopen Player Type Fit to locate it.",
             ).pack(anchor="w", padx=12, pady=12)
             ttk.Button(self, text="Close", command=self.destroy).pack(anchor="e", padx=12, pady=(0, 12))
             return
 
+        self._groups = {label: (field, ppos) for label, field, ppos in PHILOSOPHY_GROUPS}
+        self._preset_ids = {}
+
         top = ttk.Frame(self)
-        top.pack(fill="x", padx=12, pady=(12, 6))
-
-        ttk.Label(top, text="Player Type:").pack(side="left")
-        self._type_display_to_type = {}
-        display_names = []
-        for t in PLAYER_TYPES:
-            label = f"{t['name']} ({PLAYER_TYPE_GROUP_LABELS.get(t['group'], '?')})"
-            self._type_display_to_type[label] = t
-            display_names.append(label)
-        self.type_var = tk.StringVar(value=display_names[0] if display_names else "")
-        cmb_type = ttk.Combobox(top, state="readonly", width=28, textvariable=self.type_var, values=display_names)
-        cmb_type.pack(side="left", padx=(6, 16))
-        cmb_type.bind("<<ComboboxSelected>>", lambda e: self._refresh())
-
+        top.pack(fill="x", padx=12, pady=(12, 4))
+        ttk.Label(top, text="Position:").pack(side="left")
+        self.group_var = tk.StringVar()
+        cmb_group = ttk.Combobox(top, state="readonly", width=18, textvariable=self.group_var, values=[g[0] for g in PHILOSOPHY_GROUPS])
+        cmb_group.pack(side="left", padx=(6, 14))
+        cmb_group.bind("<<ComboboxSelected>>", lambda e: self._on_group())
+        ttk.Label(top, text="Preset:").pack(side="left")
+        self.preset_var = tk.StringVar()
+        self.cmb_preset = ttk.Combobox(top, state="readonly", width=28, textvariable=self.preset_var)
+        self.cmb_preset.pack(side="left", padx=(6, 14))
+        self.cmb_preset.bind("<<ComboboxSelected>>", lambda e: self._refresh())
         ttk.Label(top, text="Pool:").pack(side="left")
         pool_labels = [label for _key, label in self.POOL_OPTIONS]
         self.pool_var = tk.StringVar(value=pool_labels[0])
@@ -2996,23 +2985,31 @@ class PlayerTypeFitDialog(tk.Toplevel):
         cmb_pool.pack(side="left", padx=(6, 0))
         cmb_pool.bind("<<ComboboxSelected>>", lambda e: self._refresh())
 
+        opts = ttk.Frame(self)
+        opts.pack(fill="x", padx=12, pady=(0, 2))
+        self.other_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(opts, text="Include players of other positions (e.g. corners for a safety preset)",
+                        variable=self.other_var, command=self._refresh).pack(side="left")
+
+        self.lbl_key = ttk.Label(self, wraplength=780, justify="left")
+        self.lbl_key.pack(anchor="w", padx=12, pady=(4, 2))
         ttk.Label(
-            self, foreground="gray", wraplength=680, justify="left",
-            text="Fit = 100 minus the average difference between each player's real attributes and this "
-                 "archetype's ideal profile (both use the same real stat fields) - a plain distance score, "
-                 "not the game's actual in-game formula. This doesn't read or change any 'assigned "
-                 "philosophy' - that save field wasn't identified.",
+            self, foreground="gray", wraplength=780, justify="left",
+            text="Fit is the average of a player's ratings weighted the way the game weights them for this preset (the athletic "
+                 "and skill weights from the game's files; height, weight and scouting factors are not included). It ranks who suits the "
+                 "preset - it is not the game's overall, which may weigh things differently. Team's pick is the preset that player's team "
+                 "has now. Nothing is changed.",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
         table_frm = ttk.Frame(self)
         table_frm.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        cols = ("name", "team", "pos", "ovr", "fit")
-        headers = {"name": ("Player", 200), "team": ("Team", 160), "pos": ("Pos", 60), "ovr": ("OVR", 60), "fit": ("Fit %", 70)}
+        cols = ("name", "team", "pos", "ovr", "fit", "pick")
+        headers = {"name": ("Player", 190), "team": ("Team", 140), "pos": ("Pos", 55), "ovr": ("OVR", 55), "fit": ("Fit", 60), "pick": ("Team's pick", 190)}
         self.tree = ttk.Treeview(table_frm, columns=cols, show="headings")
         for c in cols:
             text, width = headers[c]
             self.tree.heading(c, text=text, command=lambda c=c: self._sort_by(c))
-            self.tree.column(c, width=width, anchor="w" if c in ("name", "team") else "center", stretch=(c in ("name", "team")))
+            self.tree.column(c, width=width, anchor="w" if c in ("name", "team", "pick") else "center", stretch=(c in ("name", "team", "pick")))
         yscroll = ttk.Scrollbar(table_frm, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=yscroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -3023,8 +3020,39 @@ class PlayerTypeFitDialog(tk.Toplevel):
         ttk.Button(btn_frm, text="Close", command=self.destroy).pack(side="right")
 
         self._sort_state = {}
+        # start on the selected player's position, and on the preset his team has for it
+        start_label, start_value = PHILOSOPHY_GROUPS[0][0], None
+        idx = getattr(parent, "selected_player_index", None)
+        if idx is not None and 0 <= idx < len(self.model.players):
+            row = self.model.players[idx]
+            ppos = (row.get(PLAYER_POS_CODE, "") or "").strip()
+            for label, field, group_ppos in PHILOSOPHY_GROUPS:
+                if ppos in group_ppos:
+                    start_label = label
+                    start_value = self._team_pick_value(self.model.player_team_id(row), field)
+                    break
+        self.group_var.set(start_label)
+        self._on_group(select_value=start_value)
+
+    # ---- presets
+    def _on_group(self, select_value=None):
+        field, _ppos = self._groups[self.group_var.get()]
+        names = PHILOSOPHY_VALUES[field]
+        self._preset_ids = {name: value for value, name in sorted(names.items())}
+        self.cmb_preset.configure(values=list(self._preset_ids))
+        chosen = next((n for n, v in self._preset_ids.items() if v == select_value), next(iter(self._preset_ids)))
+        self.preset_var.set(chosen)
         self._refresh()
 
+    def _team_pick_value(self, tid, field):
+        if tid not in dict(SIGN_DEST_TEAMS):      # Free Agents / draft class / Game Changers have default rows but no team
+            return None
+        for r in self.model.tphs:
+            if (r.get("TGID") or "").strip() == tid:
+                return safe_int(r.get(field, ""))
+        return None
+
+    # ---- players
     def _pool_key(self):
         label = self.pool_var.get()
         for key, plabel in self.POOL_OPTIONS:
@@ -3053,28 +3081,29 @@ class PlayerTypeFitDialog(tk.Toplevel):
     def _refresh(self):
         for iid in self.tree.get_children():
             self.tree.delete(iid)
-
-        ptype = self._type_display_to_type.get(self.type_var.get())
-        if not ptype:
+        field, group_ppos = self._groups[self.group_var.get()]
+        value = self._preset_ids.get(self.preset_var.get())
+        weights = PHILOSOPHY_WEIGHTS.get(value)
+        if weights is None:
+            self.lbl_key.configure(text="No weights for this preset in the game data.")
             return
-        eligible_ppos = PLAYER_TYPE_GROUP_TO_PPOS.get(ptype["group"], set())
+        self.lbl_key.configure(text="Key ratings for this preset: " + philosophy_key_ratings(weights))
 
-        rows = self._pool_rows()
+        names = PHILOSOPHY_VALUES[field]
+        everyone = self.other_var.get()
         count = 0
-        for r in rows:
-            if (r.get(PLAYER_POS_CODE, "") or "").strip() not in eligible_ppos:
+        for r in self._pool_rows():
+            if not everyone and (r.get(PLAYER_POS_CODE, "") or "").strip() not in group_ppos:
                 continue
-            fit = compute_player_type_fit(r, ptype["ideal"])
+            fit = compute_philosophy_fit(r, weights)
             if fit is None:
                 continue
-            name = self.model.player_name(r)
             team_id = self.model.player_team_id(r)
-            team_name = TEAM_NAMES.get(team_id, team_id)
-            pos_name = self.model.player_pos(r)
-            ovr = (r.get("POVR", "") or "").strip()
-            iid = str(count)
+            pick_value = self._team_pick_value(team_id, field)
+            self.tree.insert("", tk.END, iid=str(count), values=(
+                self.model.player_name(r), TEAM_NAMES.get(team_id, team_id), self.model.player_pos(r),
+                (r.get("POVR", "") or "").strip(), f"{fit:.1f}", names.get(pick_value, "")))
             count += 1
-            self.tree.insert("", tk.END, iid=iid, values=(name, team_name, pos_name, ovr, f"{fit:.1f}"))
 
         self._sort_state = {}
         self._sort_by("fit", default_reverse=True)
@@ -6958,11 +6987,11 @@ class App(tk.Tk):
         if not self.model.players:
             messagebox.showinfo("No data", "Load a save first.")
             return
-        if not PLAYER_TYPES and not self._extract_player_types_from_game():
+        if not PHILOSOPHY_WEIGHTS and not self._extract_philosophy_weights_from_game():
             return
         PlayerTypeFitDialog(self, self.model)
 
-    def _find_boot_ast(self, feature="Player Type Fit", what="player archetypes"):
+    def _find_boot_ast(self, feature="Player Type Fit", what="team philosophies and their weights"):
         saved = self.ui_prefs.get("boot_ast_path") or ""
         if saved and os.path.isfile(saved):
             return saved
@@ -6983,31 +7012,28 @@ class App(tk.Tk):
         )
         return path or ""
 
-    def _extract_player_types_from_game(self):
-        """Pull the PLYT table out of the user's own qkl_boot.ast into a local
-        cache and load it. Returns True if player types are now available."""
-        global PLAYER_TYPES, PLAYER_TYPE_FIT_FIELDS
+    def _extract_philosophy_weights_from_game(self):
+        """Pull the PEAW / PEIW tables out of the user's own qkl_boot.ast into a local cache and load them.
+        Returns True if the philosophy weights are now available."""
+        global PHILOSOPHY_WEIGHTS
         boot_ast = self._find_boot_ast()
         if not boot_ast:
             return False
         self.config(cursor="watch")
         self.update_idletasks()
         try:
-            self.model.run_bridge([
-                "shipped-table-export", "--ast", boot_ast,
-                "--top-index", str(BOOT_DB_TOP_INDEX), "--table", "PLYT",
-                "--out", PLYT_CACHE_PATH,
-            ])
+            self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", ",".join(PHILOSOPHY_WEIGHT_TABLES),
+                                   "--out-dir", PHILOSOPHY_CACHE_DIR])
         except Exception as e:
             messagebox.showerror("Couldn't read game data", str(e))
             return False
         finally:
             self.config(cursor="")
-        PLAYER_TYPES, PLAYER_TYPE_FIT_FIELDS = load_player_types()
-        if not PLAYER_TYPES:
+        PHILOSOPHY_WEIGHTS = load_philosophy_weights()
+        if not PHILOSOPHY_WEIGHTS:
             messagebox.showerror(
                 "Couldn't read game data",
-                f"Extracted the table from {os.path.basename(boot_ast)} but it contained no usable player types. "
+                f"Extracted the tables from {os.path.basename(boot_ast)} but they held no usable philosophy weights. "
                 "Make sure this is the NFL Head Coach 09 qkl_boot.ast.",
             )
             return False
