@@ -11,18 +11,18 @@ The presets on the game's Team Philosophy screen (five each for CB, FS and SS, t
 | QB | 0 to 4 | Mobile/Speed, Strong Arm/Tools, Pure Passer, Field General, Balanced |
 | HB | 5 to 10 | Speed, Moves, Power, Receiving, Workhorse, Balanced |
 | FB | 11 to 14 | Ball Carrier, Blocking, Receiving, Balanced |
-| WR | 15 to 19 | Strong, Tall, Speed, Route-Runner, Balanced |
-| TE | 20 to 24 | Playmaker, H-Back, Balanced, Soft Hands, Blocking |
-| OT / OG / C | 25 to 29 / 30 to 34 / 35 to 39 | Size, Run Block, Pass Block, Zone Block, Balanced |
-| DE | 40 to 44 | Balanced, Prototype, Speed, Run Stopper, 3-4 |
-| DT | 45 to 49 | Balanced, Prototype, One-Gap Penetrator, Run Stopper, Versatile/3-4 |
-| OLB / MLB | 50 to 54 / 55 to 59 | OLB: Balanced, Cover 2, Run Stopper, 3-4 Pass Rush, Prototype; MLB: Balanced, Coverage, Power, Tackler, Prototype |
+| WR | 15 to 19 | Strong/Blocking, Tall/Redzone Threat, Speed, Quick/Route Runner, Balanced |
+| TE | 20 to 24 | Soft Hands/Routes, Blocking, Playmaker, H-back, Balanced |
+| OT / OG / C | 25 to 29 / 30 to 34 / 35 to 39 | Size/Strength/Engulfer (Mauler for OG and C), Run Block Specialist, Pass Block Specialist, Zone Blocking, Balanced |
+| DE | 40 to 44 | Balanced, Prototype, Undersized Speed Rusher, Run Stopper, Versatile/3-4 |
+| DT | 45 to 49 | Balanced, Prototype, One Gap Penetrator, Run Stopper, Versatile/3-4 |
+| OLB / MLB | 50 to 54 / 55 to 59 | OLB: Balanced, Coverage/Cover 2, Run Stopper, PassRusher/3-4 Blitzer, Prototype; MLB: Balanced, Coverage/Speed, Power/Blitzer, 3-4/Tackler, Prototype |
 | CB | 60 to 64 | Balanced, Man Coverage/Ballhawk, Strong/Press/Run Support, Prototype, Cover 2 |
 | FS | 65 to 69 | Balanced, Man Coverage, Centerfielder, Prototype, Run Support/Blitzer |
 | SS | 70 to 74 | Balanced, Coverage, Prototype, Run Support/Big Hitter, Smart/Productive |
-| K / P | 75 to 77 / 78 to 80 | Big Foot/Distance, Accuracy, Balanced / Power, Pinpoint Accuracy, Balanced |
+| K / P | 75 to 77 / 78 to 80 | Big Foot/Distance, Pinpoint Accuracy, Balanced / Big Foot/Distance, Pinpoint Accuracy, Balanced |
 
-Names for CB, FS, SS and DT come from the game (a user's list, screenshots and wording); the K, P and QB names were seen on the game's screens; the rest are the community config's and unchecked.
+All the names are the game's own: table `EGPP` in `qkl_boot.ast` names every preset (value 0 to 80), and the CB, FS, SS, DT, K, P and QB names also match what users saw on the Team Philosophy screen. The game writes them with the position ("Prototype CB"); the editor leaves the position off. The community config's tight end list was in a different order from the game's (the weight tables agree with the game), which an earlier version of this editor repeated.
 
 ## What is *not* a preset
 
@@ -46,16 +46,16 @@ The weights read like the in-game names. For the five CB presets: Man Coverage/B
 
 **Player Type Fit** lists a position's presets (with the team's current preset beside each player, from `TPHS`) and shows an **Est. OVR** for each player: an estimate of the overall the game's Evaluate Roster screen shows under that preset. The tab says so, with the margin: against the 55 readings below the estimate is within 2 points for most and within 3 for nearly all (worst reading 5 off, and an unusual build may be further out), for cornerbacks, safeties and defensive tackles only; other positions use the same method unchecked. (*Saved OVR* is the overall stored in the save, which can be stale or from another preset.)
 
-The estimate is `Sum(factor weight * factor score) / Sum(factor weight)` over the `PEOW` factors:
+The estimate is `Sum(factor weight * factor score) / Sum(factor weight)` over the `PEOW` factors. The game names the grade categories (table `EGRD`: Overall, Potential, Athletic, Intangibles, Production, Size, Learning, Durability), so the seven `PEOW` weights are OAT Athletic, OIN Intangibles, OPD Production, OPT Potential, OSZ Size, OLN Learning and ODR Durability; "Intangibles" is the one built from the skill ratings:
 
 | Factor | Weight | Score used | Known or stand-in |
 |---|---|---|---|
-| OIN | `OINW` | the player's skill ratings weighted by `PEIW` | from the files |
-| OAT | `OATW` | the athletic ratings weighted by `PEAW` | from the files |
-| OLN | `OLNW` | the Learning rating | stand-in |
-| ODR | `ODRW` | the Injury rating | stand-in |
-| OPT + OPD | `OPTW + OPDW` | the skills averaged with the `PEIW` weights of the position's Balanced preset | stand-in |
-| OSZ | `OSZW` | `51.1 + (0.271 * HTSW * h + 1.350 * WTSW * w) / (HTSW + WTSW)`, h and w = the player's height and weight percentile (0 to 99) among that position's players in the save | stand-in, three numbers fitted |
+| OIN Intangibles | `OINW` | the player's skill ratings weighted by `PEIW` | from the files |
+| OAT Athletic | `OATW` | the athletic ratings weighted by `PEAW` | from the files |
+| OLN Learning | `OLNW` | the Learning rating | stand-in |
+| ODR Durability | `ODRW` | the Injury rating | stand-in |
+| OPT Potential + OPD Production | `OPTW + OPDW` | the skills averaged with the `PEIW` weights of the position's Balanced preset | stand-in |
+| OSZ Size | `OSZW` | `51.1 + (0.271 * HTSW * h + 1.350 * WTSW * w) / (HTSW + WTSW)`, h and w = the player's height and weight percentile (0 to 99) among that position's players in the save | stand-in, three numbers fitted |
 
 A plain weighted average of the `PEAW` and `PEIW` ratings was tried first (what an earlier version of this tab showed). It matched the game under Balanced (within 2) but was up to 19 points off under other presets (Graham under Cover 2: 74 against the game's 55), because it ignored the factor weights: Man Coverage/Ballhawk gives athleticism 15 of 71 where Balanced gives 31 of 102, and Prototype gives size 15 of 73.
 
@@ -80,7 +80,7 @@ Taken from the Evaluate Roster screen of a test career (Bears), one preset at a 
 |---|---|---|---|---|
 | DT Balanced (45) | 89 / 89 | 69 / 67 | 66 / 69 | 66 / 64 |
 | DT Prototype (46) | 84 / 84 | 73 / 71 | 72 / 71 | 76 / 73 |
-| DT One-Gap Penetrator (47) | 90 / 91 | 68 / 67 | 65 / 67 | 54 / 55 |
+| DT One Gap Penetrator (47) | 90 / 91 | 68 / 67 | 65 / 67 | 54 / 55 |
 | DT Run Stopper (48) | 86 / 86 | 70 / 70 | 71 / 71 | 71 / 72 |
 | DT Versatile/3-4 (49) | 87 / 87 | 69 / 68 | 70 / 69 | 70 / 68 |
 

@@ -34,7 +34,7 @@ import threading
 import time
 import subprocess
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import font as tkfont, ttk, filedialog, messagebox
 
 try:
     from PIL import Image, ImageTk
@@ -829,24 +829,25 @@ COACH_POSITION_LABELS = {
     "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
 }
 
-# Team philosophy: the schemes and philosophies the game's Team Philosophy screen
-# shows, stored per team in the TPHS table (the same field codes also appear on each
-# coach row, COCH, but that screen does not read those). Value names come from the
-# community HC09 config (docs/hc09_field_reference.md); the number is what is stored
-# in the save. CHECKED IN THE GAME'S Team Philosophy screen, both ways (changed in
-# game and read back from the save; written by the editor and read off the screen):
-# NHPP 0 Heavily / 1 Balanced / 2 Rarely; OPPP 0 Head Coach / 1 Offensive Coordinator;
-# OSPP 0 West Coast Normal / 2 Vertical Passing / 3 Spread / 4 Power Running (the
-# config says "Speed" for 3); DSPP 0 3-4; DPPP 1 Defensive Coordinator; BZPP 0 Heavy;
-# CVPP 2 Zone; DMPP 0 Aggressive; QBPP 0 Mobile/Speed; CBPP 61 Man; KKPP 75 Power (the
-# game words the position ones in full, e.g. "Man Coverage/Ballhawk CB", "Big Foot/
-# Distance K"); FS 67, SS 74 and punter 79 match what the screen shows. The other names
-# in each list are the config's and have not been checked.
+# Team philosophy: every setting on the game's Team Philosophy screen, stored per team in the
+# TPHS table (110 fields; the same field codes also appear on each coach row, COCH, but that
+# screen does not read those). The names and value lists are the game's own, read from its data
+# (qkl_boot.ast): table EGPP names every position preset (value 0-80), PCAT lists the 110
+# categories, and a small table per category names its values (see docs/hc09_gamedata_findings.md).
+# The community HC09 config's lists differ in places (its tight end list is in a different order).
+# CHECKED IN THE GAME'S Team Philosophy screen, both ways (changed in game and read back from the
+# save; written by the editor and read off the screen): NHPP 0 Heavily / 1 Balanced / 2 Rarely;
+# OPPP 0 Head Coach / 1 Offensive Coordinator; OSPP 0 West Coast Normal / 2 Vertical Passing /
+# 3 Spread / 4 Power Running; DSPP 0 3-4; DPPP 1 Defensive Coordinator; BZPP 0 Heavy; CVPP 2 Zone;
+# DMPP 0 Aggressive; QBPP 0 Mobile/Speed; CBPP 61 Man; KKPP 75 Power; FS 67, SS 74 and punter 79,
+# and (from a user's screenshots) the DT, FS and SS lists. The GM, staff, roster-minimum, health and
+# fatigue settings (tabs after "Position philosophies") are decoded from the game's data only: the
+# values are the game's, which field is which was matched from the data and not yet checked in game.
 PHILOSOPHY_VALUES = {
     "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Spread", 4: "Power Running"},
     "OPPP": {0: "Head Coach", 1: "Offensive Coordinator"},
     "NHPP": {0: "Heavily", 1: "Balanced", 2: "Rarely"},
-    "DSPP": {0: "3-4", 1: "4-3", 2: "4-6"},
+    "DSPP": {0: "3-4", 1: "4-3", 2: "46/Multiple Front"},
     "DPPP": {0: "Head Coach", 1: "Defensive Coordinator"},
     "BZPP": {0: "Heavy", 1: "Normal", 2: "Light"},
     "CVPP": {0: "Man", 1: "Cover 2", 2: "Zone"},
@@ -854,34 +855,110 @@ PHILOSOPHY_VALUES = {
     "QBPP": {0: "Mobile/Speed", 1: "Strong Arm/Tools", 2: "Pure Passer", 3: "Field General", 4: "Balanced"},
     "HBPP": {5: "Speed", 6: "Moves", 7: "Power", 8: "Receiving", 9: "Workhorse", 10: "Balanced"},
     "FBPP": {11: "Ball Carrier", 12: "Blocking", 13: "Receiving", 14: "Balanced"},
-    "WRPP": {15: "Strong", 16: "Tall", 17: "Speed", 18: "Route-Runner", 19: "Balanced"},
-    "TEPP": {20: "Playmaker", 21: "H-Back", 22: "Balanced", 23: "Soft Hands", 24: "Blocking"},
-    "TKPP": {25: "Size", 26: "Run Block", 27: "Pass Block", 28: "Zone Block", 29: "Balanced"},
-    "GDPP": {30: "Size", 31: "Run Block", 32: "Pass Block", 33: "Zone Block", 34: "Balanced"},
-    "CRPP": {35: "Size", 36: "Run Block", 37: "Pass Block", 38: "Zone Block", 39: "Balanced"},
-    "DEPP": {40: "Balanced", 41: "Prototype", 42: "Speed", 43: "Run Stopper", 44: "3-4"},
-    "DTPP": {45: "Balanced", 46: "Prototype", 47: "One-Gap Penetrator", 48: "Run Stopper", 49: "Versatile/3-4"},
-    "OLPP": {50: "Balanced", 51: "Cover 2", 52: "Run Stopper", 53: "3-4 Pass Rush", 54: "Prototype"},
-    "MLPP": {55: "Balanced", 56: "Coverage", 57: "Power", 58: "Tackler", 59: "Prototype"},
+    "WRPP": {15: "Strong/Blocking", 16: "Tall/Redzone Threat", 17: "Speed", 18: "Quick/Route Runner", 19: "Balanced"},
+    "TEPP": {20: "Soft Hands/Routes", 21: "Blocking", 22: "Playmaker", 23: "H-back", 24: "Balanced"},
+    "TKPP": {25: "Size/Strength/Engulfer", 26: "Run Block Specialist", 27: "Pass Block Specialist", 28: "Zone Blocking", 29: "Balanced"},
+    "GDPP": {30: "Size/Strength/Mauler", 31: "Run Block Specialist", 32: "Pass Block Specialist", 33: "Zone Blocking", 34: "Balanced"},
+    "CRPP": {35: "Size/Strength/Mauler", 36: "Run Block Specialist", 37: "Pass Block Specialist", 38: "Zone Blocking", 39: "Balanced"},
+    "DEPP": {40: "Balanced", 41: "Prototype", 42: "Undersized Speed Rusher", 43: "Run Stopper", 44: "Versatile/3-4"},
+    "DTPP": {45: "Balanced", 46: "Prototype", 47: "One Gap Penetrator", 48: "Run Stopper", 49: "Versatile/3-4"},
+    "OLPP": {50: "Balanced", 51: "Coverage/Cover 2", 52: "Run Stopper", 53: "PassRusher/3-4 Blitzer", 54: "Prototype"},
+    "MLPP": {55: "Balanced", 56: "Coverage/Speed", 57: "Power/Blitzer", 58: "3-4/Tackler", 59: "Prototype"},
     "CBPP": {60: "Balanced", 61: "Man Coverage/Ballhawk", 62: "Strong/Press/Run Support", 63: "Prototype", 64: "Cover 2"},
     "FSPP": {65: "Balanced", 66: "Man Coverage", 67: "Centerfielder", 68: "Prototype", 69: "Run Support/Blitzer"},
     "SsPP": {70: "Balanced", 71: "Coverage", 72: "Prototype", 73: "Run Support/Big Hitter", 74: "Smart/Productive"},
-    "KKPP": {75: "Big Foot/Distance", 76: "Accuracy", 77: "Balanced"},
-    "KPPP": {78: "Power", 79: "Pinpoint Accuracy", 80: "Balanced"},
+    "KKPP": {75: "Big Foot/Distance", 76: "Pinpoint Accuracy", 77: "Balanced"},
+    "KPPP": {78: "Big Foot/Distance", 79: "Pinpoint Accuracy", 80: "Balanced"},
+    # game management (coach decisions)
+    "BPSP": {0: "Prefers to bench", 1: "Prefers to start", 2: "Balanced"},
+    "BMCP": {0: "Prefers to bench", 1: "Prefers to start", 2: "Balanced"},
+    "BNPP": {0: "Prefers to bench", 1: "Prefers to start", 2: "Balanced"},
+    "SRQP": {0: "Prefers to start", 1: "Doesn't prefer to start", 2: "Balanced"},
+    "SRHP": {0: "Prefers to start", 1: "Doesn't prefer to start", 2: "Balanced"},
+    "IPSP": {0: "Aggressive", 1: "Moderate", 2: "Conservative"},
+    # GM and staff
+    "GmCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "OCCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "DCCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "PCCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "TRCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "TDFP": {0: "Heavy Trader", 1: "Light Trader", 2: "Neutral"},
+    "TMSP": {0: "Passive", 1: "Normal", 2: "Aggressive"},
+    "GFTP": {0: "Overvalue future draft picks", 1: "Undervalue future draft picks", 2: "Neutral"},
+    "GTDP": {0: "Trade up", 1: "Trade down", 2: "Neutral"},
+    "DFTP": {0: "Draft best available players", 1: "Draft biggest team needs"},
+    "IWKP": {0: "Scout best available players", 1: "Scout biggest team needs"},
+    "RSSP": {0: "Big school focus", 1: "Medium school focus", 2: "Small school focus", 3: "Balanced focus", 4: "Team needs focus"},
+    "BTTP": {0: "Build through the NFL draft", 1: "Build through free agency"},
+    "PRDP": {0: "Favors overall grade", 1: "Favors role", 2: "Favors upside", 3: "Favors contract", 4: "Favors play knowledge"},
+    "CDVP": {0: "Physical development", 1: "Intangibles development", 2: "Learning development"},
+    "NGTP": {0: "Low ball", 1: "Give in to demands", 2: "Haggle", 3: "Overpay"},
+    "CINP": {0: "Cheap", 1: "Normal", 2: "Generous"},
+    "ESCP": {0: "Prefers 5M in cap room", 1: "Prefers 3M in cap room", 2: "Prefers 1M in cap room"},
+    "GSMP": {0: "Distribute money evenly", 1: "Spend on the biggest need", 2: "Spend on the 2 biggest needs", 3: "Spend on the 3 biggest needs"},
+    "FTGP": {0: "Heavily use", 1: "Sometimes use", 2: "Rarely use"},
+    "RFAP": {0: "Normal", 1: "Tender with higher compensation", 2: "Tender with lower compensation"},
+    "RSPP": {0: "Re-sign based on high approval", 1: "Re-sign all players", 2: "Based on quality"},
+    # roster minimums: the value is an index; the minimum number of players kept at the position is shown
+    "QBMP": {0: "2", 1: "3", 2: "4"}, "HBMP": {0: "2", 1: "3", 2: "4"}, "FBMP": {0: "0", 1: "1", 2: "2"},
+    "WRMP": {0: "4", 1: "5", 2: "6"}, "TEMP": {0: "2", 1: "3", 2: "4"},
+    "TKMP": {0: "3", 1: "4", 2: "5"}, "GDMP": {0: "3", 1: "4", 2: "5"}, "CRMP": {0: "1", 1: "2", 2: "3"},
+    "DEMP": {0: "3", 1: "4", 2: "5"}, "DTMP": {0: "2", 1: "3", 2: "4"},
+    "OLMP": {0: "3", 1: "4", 2: "5"}, "MLMP": {0: "2", 1: "3", 2: "4"},
+    "CBMP": {0: "4", 1: "5", 2: "6"}, "FSMP": {0: "1", 1: "2", 2: "3"}, "SSMP": {0: "1", 1: "2", 2: "3"},
+    "KKMP": {0: "1", 1: "2"}, "KPMP": {0: "0", 1: "1", 2: "2"},
 }
+# practice and game health / fatigue, one field per position group (QB HB FB WR TE OL DL LB DB K/P)
+for _suffix, _values in (
+    ("PH", {0: "Practice at moderate health", 1: "Practice at low health"}),
+    ("HS", {0: "Sub player at moderate health", 1: "Sub player at low health"}),
+    ("FP", {0: "Practice at moderate fatigue", 1: "Practice at heavy fatigue"}),
+    ("FS", {0: "Sub player at moderate fatigue", 1: "Sub player at heavy fatigue"}),
+):
+    for _group in ("QB", "HB", "FB", "WR", "TE", "OL", "DL", "LB", "DB", "KP"):
+        PHILOSOPHY_VALUES[_group + _suffix] = dict(_values)
+
+_PHILOSOPHY_HEALTH_GROUPS = [("QB", "QB"), ("HB", "HB"), ("FB", "FB"), ("WR", "WR"), ("TE", "TE"), ("OL", "OL"),
+                             ("DL", "DL"), ("LB", "LB"), ("DB", "DB"), ("KP", "K/P")]
 
 PHILOSOPHY_TABS = [
     ("Game plan", [
         ("Offense", [("OSPP", "Offensive scheme"), ("OPPP", "Offensive playbook control"), ("NHPP", "No-huddle philosophy")]),
         ("Defense", [("DSPP", "Defensive scheme"), ("DPPP", "Defensive playbook control"),
                      ("BZPP", "Blitzing"), ("CVPP", "Coverage")]),
-        ("Game management", [("DMPP", "Defining moments")]),
+        ("Game management", [("DMPP", "Defining moments"), ("BPSP", "Bench a struggling player"),
+                             ("BMCP", "Bench a player who complains to the media"), ("BNPP", "Bench a player who skips practice"),
+                             ("SRQP", "Start a rookie QB"), ("SRHP", "Start a young HB"), ("IPSP", "Playing through injuries")]),
     ]),
     ("Position philosophies", [
         ("Offense", [("QBPP", "QB"), ("HBPP", "HB"), ("FBPP", "FB"), ("WRPP", "WR"), ("TEPP", "TE"),
                      ("TKPP", "Tackle"), ("GDPP", "Guard"), ("CRPP", "Center")]),
         ("Defense", [("DEPP", "DE"), ("DTPP", "DT"), ("OLPP", "OLB"), ("MLPP", "MLB"), ("CBPP", "CB"), ("FSPP", "FS"), ("SsPP", "SS")]),
         ("Kicking", [("KKPP", "Kicker"), ("KPPP", "Punter")]),
+    ]),
+    ("GM and staff", [
+        ("Staff control", [("GmCP", "GM hire control"), ("OCCP", "Offensive coordinator hire control"),
+                           ("DCCP", "Defensive coordinator hire control"), ("PCCP", "Position coach hire control"),
+                           ("TRCP", "Trainer hire control")]),
+        ("Trading", [("TDFP", "Trading frequency"), ("TMSP", "Trading philosophy"), ("GFTP", "Future draft picks"),
+                     ("GTDP", "Draft pick trades")]),
+        ("Draft and scouting", [("DFTP", "Draft philosophy"), ("IWKP", "Workout scouting"), ("RSSP", "Regular-season scouting"),
+                                ("BTTP", "Team building"), ("PRDP", "Player roadmap evaluation"), ("CDVP", "Career development")]),
+        ("Contracts and spending", [("NGTP", "Negotiation"), ("CINP", "Counter offers"), ("ESCP", "Salary cap room"),
+                                    ("GSMP", "Spending"), ("FTGP", "Franchise tag"), ("RFAP", "Restricted free agents"),
+                                    ("RSPP", "Re-signing")]),
+    ]),
+    ("Roster minimums", [
+        ("Offense", [("QBMP", "QB"), ("HBMP", "HB"), ("FBMP", "FB"), ("WRMP", "WR"), ("TEMP", "TE"),
+                     ("TKMP", "Tackle"), ("GDMP", "Guard"), ("CRMP", "Center")]),
+        ("Defense", [("DEMP", "DE"), ("DTMP", "DT"), ("OLMP", "OLB"), ("MLMP", "MLB"), ("CBMP", "CB"), ("FSMP", "FS"), ("SSMP", "SS")]),
+        ("Kicking", [("KKMP", "Kicker"), ("KPMP", "Punter")]),
+    ]),
+    ("Health and fatigue", [
+        ("Practice health", [(g + "PH", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
+        ("Game health (substitute at)", [(g + "HS", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
+        ("Practice fatigue", [(g + "FP", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
+        ("Game fatigue (substitute at)", [(g + "FS", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
     ]),
 ]
 
@@ -990,9 +1067,10 @@ def safe_int(s):
 # Strong/Press weights tackling, pursuit and press, and Prototype is high everywhere.
 #
 # The Evaluate Roster overall behaves like Sum(factor weight * factor score) / Sum(factor weight), which is what
-# estimate_philosophy_overall does: OIN is the PEIW-weighted average of the skills, OAT the PEAW-weighted average of
-# the athletic ratings, OSZ a size score from height and weight (weighted by PESW), OLN learning, ODR durability and
-# OPT / OPD potential and production. Only OIN and OAT are known from the files. The other scores are stand-ins fitted
+# estimate_philosophy_overall does. The game names the grades (table EGRD: Athletic, Intangibles, Production,
+# Potential, Size, Learning, Durability): OIN Intangibles is the PEIW-weighted average of the skills, OAT Athletic the
+# PEAW-weighted average of the athletic ratings, OSZ Size a score from height and weight (weighted by PESW), OLN
+# Learning, ODR Durability, OPT Potential and OPD Production. Only OIN and OAT are known from the files. The other scores are stand-ins fitted
 # to 55 readings off the game's Evaluate Roster screen: learning is the Learning rating, durability the Injury
 # rating, potential / production the skill average under the position's own Balanced preset, and the size score is
 # built from height and weight percentiles among that position's players (the weight counts about five times as much
@@ -3407,6 +3485,10 @@ class TeamPhilosophyDialog(tk.Toplevel):
         canvas = self._canvases[0]
         need_h = self.winfo_reqheight() - canvas.winfo_reqheight() + max(i.winfo_reqheight() for i in self._inners) + 6
         need_w = max(600, max(i.winfo_reqwidth() for i in self._inners) + 90)
+        # wide enough for the whole tab strip too (bold, as the selected tab is), or tab names get cut off
+        tab_font = tkfont.Font(font="TkDefaultFont")
+        tab_font.configure(weight="bold")
+        need_w = max(need_w, sum(tab_font.measure(self._nb.tab(i, "text")) + 34 for i in range(self._nb.index("end"))) + 60)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         w, h = min(need_w, sw - 40), max(320, min(need_h, int(sh * 0.8)))
         x = max(0, min(parent.winfo_rootx() + 40, sw - w - 20))
@@ -7687,8 +7769,9 @@ class App(tk.Tk):
         TeamPhilosophyDialog(
             self, self.model.tphs, idx, f"{nick} team philosophy", lambda: None,
             note="This is the data behind the game's Team Philosophy screen. Checked against the game: the playcall "
-                 "settings and the QB, CB, FS, SS, kicker and punter philosophies (at least one value each). The other "
-                 "names come from a community list - try changes on a copy of your save.")
+                 "settings and the QB, CB, FS, SS, DT, kicker and punter philosophies. The names are the game's own, read from "
+                 "its data; the GM and staff, roster minimum, health and fatigue tabs are matched from that data and not "
+                 "yet checked in the game - try changes on a copy of your save.")
 
     def _apply_coach_skpt(self):
         sel = self.tree_coach.selection()

@@ -21,8 +21,11 @@ export/import through HC09Editor required.
   person's stats. The default vertical layout shows one column per person: click a
   name at the top to select them, click a stat to sort by it. The Coach tab also edits
   a coach's position and personality, and a team's **Team Philosophy** - the data behind
-  the game's Team Philosophy screen (offensive and defensive scheme, no-huddle, playbook
-  control, position philosophies), by name rather than number.
+  the game's Team Philosophy screen, by name rather than number, in five tabs: the game plan
+  (schemes, no-huddle, playbook control, blitzing, coverage, who to bench or start), the
+  position philosophies, the GM and staff settings (trading, drafting, scouting, contracts,
+  hire control), roster minimums, and the health and fatigue substitution settings. The names
+  are the game's own, read from its data.
 - **Playbooks** - browse every playbook with real play, set and formation names; find
   which playbooks contain a play; change a team's offensive or defensive playbook; and
   **add plays** to your team's playbook by copying a play, a whole set or a whole
@@ -41,12 +44,14 @@ export/import through HC09Editor required.
 
 **What has been checked in the game:** switching a team's playbook, adding a single play
 or a whole formation to a playbook, and Team Philosophy (the playcall settings and the QB,
-CB, FS, SS, kicker and punter philosophies were written with the editor and read off the
+CB, FS, SS, DT, kicker and punter philosophies were written with the editor and read off the
 game's screen, and changed in game and read back). **Not yet:** whether the AI calls added
-plays in a game, flipping and special teams after adds, and the running back, receiver,
-tight end, line and linebacker philosophies. The names for what isn't checked come from a
-community field list ([docs/hc09_field_reference.md](docs/hc09_field_reference.md)) whose
-labels are sometimes wrong, so try changes on a copy of your save.
+plays in a game, flipping and special teams after adds, the other position philosophies, and
+the GM and staff, roster minimum, health and fatigue settings: their names and values are the
+game's own (read from its data, see
+[docs/hc09_field_reference.md](docs/hc09_field_reference.md)), but which field is which was
+matched from that data and has not been confirmed on the game's screen. Try changes on a copy
+of your save.
 
 ## How it works
 
