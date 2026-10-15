@@ -3632,19 +3632,45 @@ class PlaybookPickerDialog(tk.Toplevel):
             self.destroy()
 
 
+# Playbooks 1-10 are the custom playbooks made in-game, and the custom plays and sets in them; their
+# names live in the HC09 profile save (BLUS30128-PROFILE-*), not in the career. Read-only.
+PLAYBOOK_PROFILE_TABLES = ("PLAB", "SETL", "PBPL")
+
+
+def find_profile_saves(career_db_path):
+    """Profile saves of the same game sitting next to a career save (savedata/<TITLE>-PROFILE-*/USR-DATA)."""
+    folder = os.path.dirname(os.path.abspath(career_db_path))
+    root = os.path.dirname(folder)
+    title = os.path.basename(folder).split("-")[0]
+    found = []
+    try:
+        for name in sorted(os.listdir(root)):
+            path = os.path.join(root, name, os.path.basename(career_db_path))
+            if name.startswith(title + "-PROFILE-") and os.path.isfile(path):
+                found.append(path)
+    except OSError:
+        pass
+    return found
+
+
 class PlaybookData:
-    def __init__(self, game, save, coaches):
+    def __init__(self, game, save, coaches, profile=None):
         """game / save: {table name in lowercase: [row dicts]} - stock names
-        from the game files and the save's own tables. coaches: COCH rows."""
+        from the game files and the save's own tables. coaches: COCH rows.
+        profile: the same shape (plab / setl / pbpl) from the player's profile save, which
+        names the playbooks, sets and plays made in-game; only ids the game does not
+        already name are taken from it."""
         self.have_game_names = bool(game.get("plab"))
         g = lambda t: game.get(t, [])
         v = lambda t: save.get(t, [])
+        prof = self._custom_names_only(game, profile or {})
+        self.profile_bgids = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()) for r in prof["plab"]}
 
         self.book_names = defaultdict(list)
         self.book_side = {}
         self.bgid_book = {}                         # (BOFF "1"/"0", BGID) -> BOKL; save rows win over stock
         self.bgid_info = {}                         # (BOFF, BGID) -> {"name", "bokl", "bord"}
-        for r in g("plab") + v("plab"):
+        for r in g("plab") + prof["plab"] + v("plab"):
             bokl = (r.get("PBGI") or "").strip()
             name = (r.get("BNAM") or "").strip()
             side = (r.get("BOFF") or "").strip()
@@ -3664,10 +3690,10 @@ class PlaybookData:
         self.stock_sets = {(r.get("SETL") or "").strip() for r in g("setl")}
         self.stock_plays = {((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip()) for r in g("pbpl")}
         self.set_name = {}
-        for r in g("setl") + v("setl"):
+        for r in g("setl") + prof["setl"] + v("setl"):
             self.set_name[(r.get("SETL") or "").strip()] = (r.get("name") or "").strip()
         self.play_info = {}
-        for r in g("pbpl") + v("pbpl"):
+        for r in g("pbpl") + prof["pbpl"] + v("pbpl"):
             self.play_info[((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip())] = (
                 (r.get("name") or "").strip(), (r.get("PLYT") or "").strip())
 
@@ -3678,6 +3704,21 @@ class PlaybookData:
         self._index_structure()
 
         self.set_usage(coaches)
+
+    @staticmethod
+    def _custom_names_only(game, profile):
+        """The profile's rows for playbooks, sets and plays the game itself does not name."""
+        key = lambda r, f: (r.get(f) or "").strip()
+        stock_bokl = {key(r, "PBGI") for r in game.get("plab", [])}
+        stock_bgid = {(key(r, "BOFF"), key(r, "BGID")) for r in game.get("plab", [])}
+        stock_sets = {key(r, "SETL") for r in game.get("setl", [])}
+        stock_plays = {(key(r, "SETL"), key(r, "PLYL")) for r in game.get("pbpl", [])}
+        return {
+            "plab": [r for r in profile.get("plab", []) if key(r, "PBGI") not in stock_bokl
+                     and (key(r, "BOFF"), key(r, "BGID")) not in stock_bgid],
+            "setl": [r for r in profile.get("setl", []) if key(r, "SETL") not in stock_sets],
+            "pbpl": [r for r in profile.get("pbpl", []) if (key(r, "SETL"), key(r, "PLYL")) not in stock_plays],
+        }
 
     def _index_structure(self):
         t = self.tables
@@ -3962,8 +4003,10 @@ class PlaybookData:
 
     def side_books(self, side):
         """Every selectable playbook for one side ("1" offense, "0" defense),
-        as (BGID, name, BOKL, BORD), stock order."""
-        rows = [(bgid, i["name"], i["bokl"], i["bord"]) for (sd, bgid), i in self.bgid_info.items() if sd == side]
+        as (BGID, name, BOKL, BORD), stock order. Custom playbooks (named from the profile) are
+        not offered here: what the game stores when a team is given one has not been checked."""
+        rows = [(bgid, i["name"], i["bokl"], i["bord"]) for (sd, bgid), i in self.bgid_info.items()
+                if sd == side and (sd, bgid) not in self.profile_bgids]
         return sorted(rows, key=lambda r: (int(r[3]) if r[3].isdigit() else 999, int(r[0]) if r[0].isdigit() else 0))
 
     def team_book(self, coaches, tid, side):
@@ -4948,6 +4991,7 @@ class App(tk.Tk):
         self.notebook.add(root, text="Playbooks")
         self._playbook_data = None
         self._playbook_stamp = None
+        self._playbook_profile = ""     # the profile save the custom names came from, if one was found
         self._pb_team_manual = False   # True once the tab's Team box was changed by hand
         self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
 
@@ -4955,6 +4999,7 @@ class App(tk.Tk):
         top.pack(fill="x", padx=10, pady=(10, 4))
         ttk.Label(top, text="Playbooks").pack(side="left")
         ttk.Button(top, text="Load / Refresh", command=lambda: self.refresh_playbooks(force=True)).pack(side="left", padx=8)
+        ttk.Button(top, text="Profile save...", command=self.on_pick_profile).pack(side="left")
         self.lbl_playbook_status = ttk.Label(top, text="Open this tab after loading a save.", foreground="gray")
         self.lbl_playbook_status.pack(side="left", padx=(8, 0))
 
@@ -4962,7 +5007,8 @@ class App(tk.Tk):
             "Browse playbooks with real play, set and formation names (read from your own game files, then cached). "
             "Find play shows a play's codes and every playbook that has it. Team playbooks changes a team's offense or "
             "defense by name. Add plays copies plays, sets or formations from another playbook into your team's "
-            "(or any playbook you choose in the dialog; 200 per playbook, special teams don't count)."
+            "(or any playbook you choose in the dialog; 200 per playbook, special teams don't count). Playbooks 1-10 "
+            "and the plays in them that you made in the game are named from your profile save."
         )
         help_frame = ttk.Frame(root)
         help_frame.pack(fill="x", padx=10)
@@ -5088,6 +5134,7 @@ class App(tk.Tk):
             # prompt as Player Type Fit); cancelling just means IDs without names.
             boot_ast = self._find_boot_ast("Playbooks", "playbook, formation, set and play names")
         db_path, coaches = self.model.db_path, list(self.model.coaches)
+        override = (self.ui_prefs.get("per_save", {}).get(self.get_current_save_key()) or {}).get("profile_path", "")
 
         def work():
             if boot_ast:
@@ -5099,10 +5146,11 @@ class App(tk.Tk):
                 save = {t.lower(): read_csv_dicts(os.path.join(tmp, t.lower() + ".csv")) for t in PLAYBOOK_SAVE_TABLES}
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
-            return PlaybookData(game, save, coaches), stamp
+            profile_path, profile = self._choose_profile(db_path, game, save, override)
+            return PlaybookData(game, save, coaches, profile), stamp, profile_path
 
         def done(result):
-            self._playbook_data, self._playbook_stamp = result
+            self._playbook_data, self._playbook_stamp, self._playbook_profile = result
             self.model.pb_pending = {}   # the reload replaced whatever was edited
             if boot_ast:
                 self.ui_prefs["boot_ast_path"] = boot_ast
@@ -5110,6 +5158,68 @@ class App(tk.Tk):
             self._fill_playbook_books()
 
         self.run_in_thread_with_busy("Loading playbooks...", work, done, error_title="Playbooks")
+
+    def _read_profile_names(self, profile_path):
+        """PLAB / SETL / PBPL rows (names of custom playbooks, sets and plays) from a profile save,
+        or None if the file has none of those tables. Worker thread; read-only."""
+        tmp = tempfile.mkdtemp(prefix="hc09_profile_")
+        try:
+            self.model.run_bridge(["export", "--db", profile_path, "--out", tmp, "--tables", ",".join(PLAYBOOK_PROFILE_TABLES)])
+            paths = {t: os.path.join(tmp, t.lower() + ".csv") for t in PLAYBOOK_PROFILE_TABLES}
+            if not any(os.path.isfile(p) for p in paths.values()):
+                return None
+            return {t.lower(): (read_csv_dicts(p) if os.path.isfile(p) else []) for t, p in paths.items()}
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _choose_profile(self, db_path, game, save, override):
+        """The profile save whose custom plays this career uses: the one picked by hand (remembered
+        per save) if it still reads, otherwise the neighbouring profile whose custom plays match the
+        career's playbook links best (the newest on a tie). Returns (path, names) or ("", None)."""
+        key = lambda r, f: (r.get(f) or "").strip()
+        stock = {(key(r, "SETL"), key(r, "PLYL")) for r in game.get("pbpl", [])}
+        used = {(key(r, "SETL"), key(r, "PLYL")) for r in save.get("pgpl", [])} - stock
+        if override and os.path.isfile(override):
+            try:
+                names = self._read_profile_names(override)
+            except Exception:
+                names = None
+            if names:
+                return override, names
+        best_path, best_names, best_score = "", None, -1
+        for path in find_profile_saves(db_path):
+            try:
+                names = self._read_profile_names(path)
+            except Exception:
+                continue
+            if not names:
+                continue
+            score = len(used & {(key(r, "SETL"), key(r, "PLYL")) for r in names["pbpl"]})
+            newer = best_path and os.path.getmtime(path) > os.path.getmtime(best_path)
+            if score > best_score or (score == best_score and newer):
+                best_path, best_names, best_score = path, names, score
+        return best_path, best_names
+
+    def on_pick_profile(self):
+        """Point the Playbooks tab at a profile save by hand (remembered for this career)."""
+        if not self.model.db_path:
+            messagebox.showinfo("Playbooks", "Load a save first.")
+            return
+        path = filedialog.askopenfilename(
+            title="Locate your profile save (USR-DATA inside the ...-PROFILE-... folder)",
+            initialdir=os.path.dirname(os.path.dirname(self.model.db_path)))
+        if not path:
+            return
+
+        def done(names):
+            if names is None:
+                messagebox.showinfo("Playbooks", "That file has no playbook names, so it isn't a profile save. Nothing was changed.")
+                return
+            self.ui_prefs.setdefault("per_save", {}).setdefault(self.get_current_save_key(), {})["profile_path"] = path
+            save_ui_prefs(self.ui_prefs)
+            self.refresh_playbooks(force=True)
+
+        self.run_in_thread_with_busy("Reading profile...", lambda: self._read_profile_names(path), done, error_title="Playbooks")
 
     def _extract_playbook_names(self, boot_ast):
         """Pull the playbook / formation / set / play name tables out of the
@@ -5203,8 +5313,13 @@ class App(tk.Tk):
         for bokl, name, side, ident, plays, off, dfn in data.books():
             tree.insert("", tk.END, iid=bokl, values=(name, side, ident, plays, off, dfn))
         notes = [] if data.have_game_names else ["no game names - showing IDs only"]
+        unnamed = sum(1 for row in data.books() if not data.book_names.get(row[0]))
+        if self._playbook_profile:
+            notes.append("custom names from " + recent_file_display(self._playbook_profile))
+        elif unnamed:
+            notes.append(f"{unnamed} playbooks have no name (custom ones are named in your profile save - use Profile save...)")
         self.lbl_playbook_status.configure(
-            text=f"{len(tree.get_children())} playbooks, {len(data.play_info)} named plays" + (" - " + notes[0] if notes else ""))
+            text=f"{len(tree.get_children())} playbooks, {len(data.play_info)} named plays" + "".join(" - " + n for n in notes))
         self._finish_tree_refresh(tree, keep)
         if not tree.selection() and tree.get_children():
             tree.selection_set(tree.get_children()[0])
