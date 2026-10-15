@@ -33,8 +33,10 @@ export/import through HC09Editor required.
   shown one at a time. Playbooks 1-10 (your custom playbooks) and the plays you made in the
   game are named from your profile save, found next to your career and only read.
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
-  (read-only: ranks players by how well their ratings suit one of the game's team position
-  presets, such as Cover 2 or Man Coverage CB, using the game's own weights), the recent-saves list,
+  (read-only: estimates each player's overall under one of the game's team position presets,
+  such as Cover 2 or Man Coverage CB, from the game's own weights and ranks them. It is an
+  estimate: typically within 2 to 3 points of the Evaluate Roster screen where it was checked,
+  for cornerbacks and a strong safety; other positions are unchecked), the recent-saves list,
   and *Options* (modern UI, dark mode).
 
 **What has been checked in the game:** switching a team's playbook, adding a single play

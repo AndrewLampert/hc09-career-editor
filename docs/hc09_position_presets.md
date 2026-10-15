@@ -33,8 +33,9 @@ The game's own files (`qkl_boot.ast`, the same database `PLYT` and `PORC` come f
 
 - **`PEAW`** (athletic): `ACCW SPDW AGLW FIMW SPMW THPW JMPW STRW RBSW ELUW JMVW HPWW KPWW PBSw`
 - **`PEIW`** (skills, 34 columns): `THAW STAW IMBW RNBW KACW TACW SPCW PBFW RBFW PRGW TGHW INJW PBKW TRKW RELW STMW PWMW LRNW IMPW MORW RORW PURW AWRW BKSW RNSW CATW CITW KRTW BCVW MCVW ZCVW CARw PRSw`
-- `PEOW` (seven group weights `OPDW OINW OLNW ODRW OATW OPTW OSZW`), `PEDW` (`CUHW CHLW CFTW`), `PESW` (`HTSW WTSW`, height and weight): these look like the scouting factors of the Evaluate Roster screen (athleticism, learning, durability, potential, size). Not used by the editor.
-- `PORC` (21 rows, one per position, weights stored as IEEE floats) is the per-position side. Not used by the editor.
+- **`PEOW`** (seven factor weights `OPDW OINW OLNW ODRW OATW OPTW OSZW`) and **`PESW`** (`HTSW WTSW`, how much height and weight count inside the size factor): these are the factors of the Evaluate Roster screen ("Each player is graded on several key factors. Those factors make up their overall."). The names read as production, individual skills, learning, durability, athleticism, potential and size. Used by the estimate below.
+- `PEDW` (`CUHW CHLW CFTW`) is the same for every preset (5, 10, 1). Not used.
+- `PORC` (21 rows, one per position, weights stored as IEEE floats with a `PRDH` / `PRDL` range) is the per-position side, presumably how the standard overall is built. Not used by the editor.
 
 Each weight column names a player rating (`ACCW` acceleration, `MCVW` man coverage, `HPWW` hit power, ...); the editor's pairing is by name, and each was checked against which position groups use it (hit power is heavy for MLB, SS and OLB; route running for WR and TE; power move for DT and DE). `RNSW` is zero for every preset.
 
@@ -42,10 +43,42 @@ The weights read like the in-game names. For the five CB presets: Man Coverage/B
 
 ## What the editor does with it
 
-**Player Type Fit** lists a position's presets (with the team's current preset beside each player, from `TPHS`) and ranks players by the **weighted average of their ratings** under the preset's `PEAW` and `PEIW` weights. This is a fit score, **not the game's overall**.
+**Player Type Fit** lists a position's presets (with the team's current preset beside each player, from `TPHS`) and shows an **Est. OVR** for each player: an estimate of the overall the game's Evaluate Roster screen shows under that preset. The tab says so, with the margin: against the readings below it is typically within 2 to 3 points (worst reading 5 off, and an unusual build may be further out), for cornerbacks and a strong safety only; other positions use the same method unchecked. (*Saved OVR* is the overall stored in the save, which can be stale or from another preset.)
+
+The estimate is `Sum(factor weight * factor score) / Sum(factor weight)` over the `PEOW` factors:
+
+| Factor | Weight | Score used | Known or stand-in |
+|---|---|---|---|
+| OIN | `OINW` | the player's skill ratings weighted by `PEIW` | from the files |
+| OAT | `OATW` | the athletic ratings weighted by `PEAW` | from the files |
+| OLN | `OLNW` | the Learning rating | stand-in |
+| ODR | `ODRW` | the Injury rating | stand-in |
+| OPT + OPD | `OPTW + OPDW` | the `PEIW`-weighted skills without Learning | stand-in |
+| OSZ | `OSZW` | `55.1 + 0.592 * p`, p = the `HTSW` / `WTSW` weighted height and weight percentile (0 to 99) among that position's players in the save | stand-in, two numbers fitted |
+
+A plain weighted average of the `PEAW` and `PEIW` ratings was tried first (what an earlier version of this tab showed). It matched the game under Balanced (within 2) but was up to 19 points off under other presets (Graham under Cover 2: 74 against the game's 55), because it ignored the factor weights: Man Coverage/Ballhawk gives athleticism 15 of 71 where Balanced gives 31 of 102, and Prototype gives size 15 of 73.
+
+## In-game readings
+
+Taken from the Evaluate Roster screen of a test career (Bears), one preset at a time, with the estimate the editor gives for the same player. The players: Tillman 6'1" 196 lb (`PHGT` 73, `PWGT` 36), R. Manning 5'8" (68, 25), Vasher 5'10" (70, 17), Graham 6'0" (72, 35), McBride 5'9" (69, 25), Archuleta 6'0" 215 lb (72, 55). The weight is stored as pounds minus 160.
+
+| Preset | Tillman | Manning | Vasher | Graham | McBride | Archuleta |
+|---|---|---|---|---|---|---|
+| CB Balanced (60) | | 82 / 82 | 89 / 91 | 69 / 69 | 76 / 76 | |
+| CB Man Coverage/Ballhawk (61) | | 78 / 79 | 88 / 90 | 64 / 65 | 72 / 73 | |
+| CB Strong/Press/Run Support (62) | | 79 / 80 | 85 / 88 | 70 / 71 | 73 / 75 | |
+| CB Prototype (63) | 87 / 92 | 78 / 77 | 85 / 86 | 74 / 72 | | |
+| CB Cover 2 (64) | 84 / 88 | 77 / 80 | 88 / 91 | 55 / 59 | | |
+| SS Balanced (70) | | | | | | 67 / 66 |
+| SS Coverage (71) | | | | | | 62 / 62 |
+| SS Prototype (72) | | | | | | 78 / 74 |
+| SS Run Support/Big Hitter (73) | | | | | | 73 / 71 |
+| SS Smart/Productive (74) | | | | | | 62 / 62 |
+
+(game / editor estimate, rounded). Over these 25 readings the estimate is within 2 for 16, within 3 for 20, worst 4.8 (Tillman under Prototype); the root-mean-square error is 2.3. The two size numbers and the stand-ins were fitted to these same readings, so the figures are in-sample. Leaving one player out at a time, the root-mean-square error was 3.0 and the worst 8.6 (Tillman under Prototype, a body the rest of the fit hadn't seen), then 6.0 (Archuleta under Prototype). More players and positions would tighten it.
 
 ## Not known
 
-- **The game's overall formula.** On the test career's Bears the fit is close to the stored overall for some players (Vasher 90.9 against 90, Tillman 88.8 against 88) and far for others (Graham 74.7 against 84, Archuleta 63 to 69 against 80), and over all teams the correlation was weak (about 0.1 to 0.6 by position). It may be that stored overalls were computed under a different preset than the current one, or that the formula also uses `PEOW`, `PEDW`, `PESW` and `PORC`. Exact in-game readings (one player's overall under each preset) are needed to settle it.
-- Whether the in-game overall is the same for every team or depends on the team's own preset.
-- Whether height and weight (`PESW`) should be part of a fit.
+- **The game's exact overall formula.** The structure above fits, but only the `OIN` and `OAT` scores are known from the files. How learning, durability, potential, production and size are scored is guessed from the readings. In particular the size score has only been seen for six bodies, all cornerbacks and one safety.
+- Free safeties and every non-defensive-back position: no readings yet, so the estimate there is unchecked.
+- Whether potential and production (`OPTW`, `OPDW`) use the same ratings as skills; the displayed potential (POT) also changes with the preset, so it is computed the same way from projected ratings.
