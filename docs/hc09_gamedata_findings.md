@@ -31,7 +31,7 @@ A mistake this found: the community config's **tight end** preset list is in a d
 
 A save stores the game's own grades for the draft class in table **`RPGR`** (11,550 rows: 350 prospects for each of 33 "teams"). The pseudo-team 1015 has every grade revealed (`PATG` athletic, `PInG` intangibles, `PLNG` learning, `PDRG` durability, `PPTG` potential, `PSZG` size, `PPDG` production, `POVG` overall); the 32 real teams have only what they scouted (flags `AFLG DFLG IFLG LFLG PFLG SFLG pFLG`). Comparing it with the player rows gave the grade formulas (all in `hc09_position_presets.md`, checked on 350 players across 21 positions): athletic, intangibles, learning and potential are exact; durability is the body parts weighted by table `LPHC` (310 of 350 exact); size is a stepped lookup that is not in any data table; production is unknown. Draft prospects' overall uses the position-group weights of `PEdW` (position to group via `PLPS`), a team's Evaluate Roster overall uses `PEOW` for its preset.
 
-Other tables in this area: `PLRM` (save, 1,589 rows: per-player roadmap evaluation `OAGE PBKE OVRE UPSE CNTE MOVE ROlE`, matching the Player Roadmap Evaluation philosophy), `POSC` (per-position-group ranges, probably the production scale), `PORC` (21 rows, one per position: weights over the ratings with a `PRDH` / `PRDL` range; presumably how the stored overall `POVR` is built, not decoded).
+Other tables in this area: `PLRM` (save, 1,589 rows: per-player roadmap evaluation `OAGE PBKE OVRE UPSE CNTE MOVE ROlE`, matching the Player Roadmap Evaluation philosophy), `POSC` (per-position-group ranges, probably the production scale), `PORC` (21 rows, one per position: weights over the ratings with a `PRDH` / `PRDL` range; presumably how the stored overall `POVR` is built). Tried and not reproduced: mapping its columns to ratings by name, the weighted rating relates to the stored `POVR` of the test save's veterans with an RMS of about 5 and a slope near 1 (a `PRDH`-to-`PRDL` range scale would give about 1.8), so either some column pairings are off or the stored overalls are stale in that save; the overall the Evaluate Roster screen shows does not use `PORC` (see the grade formulas).
 
 ## Staff
 
@@ -47,6 +47,10 @@ Other tables in this area: `PLRM` (save, 1,589 rows: per-player roadmap evaluati
 - Injuries: `EINJ` names 116 injuries (Broken Jaw ... Torn ACL, MCL and PCL ... Stinger); injury simulation tables are `LINC` (10,206 rows), `LHPA` / `LHPD` / `LHPI`, `LISF` / `LISP`, `LETV` (not decoded); `LPHC` weights the body parts.
 - Development: `LPCL` (21,250 rows with age, position and ranges) may be the progression curves; not decoded. `PEPW` (1,073 rows keyed by preset) and `LPRR` (5,304 rows) were not explained.
 - News and events: `FRNE` names 248 event types (staff suggestions, defining moments, milestones, awards).
+
+## Plays
+
+The shipped boot tables name playbooks, sets, formations and plays (`PLAB`, `SETL`, `PBFM`, `PBPL`, used by the Playbooks tab) and hold per-team play usage (`PKxx`, one table per team, about 5,000 rows each of `PGID PLYL PKNO`), but **no play definitions** (routes, assignments): a custom play's definition is in the profile save and the stock ones are in another archive. Making plays outside the game needs those, so it is not possible from `qkl_boot.ast` alone.
 
 ## Other tables in a save that the editor never touches
 
