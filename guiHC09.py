@@ -154,6 +154,7 @@ DB_TABLE_FILES = {
     "TEAM": "team.csv",
     "cINF": "cinf.csv",
     "TPHS": "tphs.csv",
+    "PSSK": "pssk.csv",
 }
 # (table code, CSVModel rows attr, headers attr, path attr) - drives
 # load_all_from_db/save_to_db/_finish_load's per-table wiring below, so
@@ -172,6 +173,7 @@ DB_TABLE_ATTRS = [
     ("TEAM", "team", "team_headers", "team_path"),
     ("cINF", "cinf", "cinf_headers", "cinf_path"),
     ("TPHS", "tphs", "tphs_headers", "tphs_path"),
+    ("PSSK", "pssk", "pssk_headers", "pssk_path"),
 ]
 
 # cINF (1 row, global/save-level state) has a SEYR field ("Season Year" per
@@ -824,6 +826,40 @@ del _cat, _cur, _mx, _catname, _b
 # in the Coach tab (see is_cops_column in _on_tree_double_click), not the
 # generic numeric entry box, since it's a fixed set of labeled codes rather
 # than an arbitrary integer.
+# Staff special skills (the game's table ESPS, 62 of them). A person's skills are one bit each in the
+# 64-bit SPSB mask of the save's PSSK table (hex text; bit n is skill n; PNid is the person, the same
+# PNid as on their COCH / TRVW / GMVW row). People with no special skill have no row. The order was
+# checked from the data: every skill sits only on the staff it belongs to (Accommodation and the
+# "...School Insider" skills only on GMs, Off Season Rehab and Cardio Training only on trainers, the
+# blocking skills on offensive line coaches, kick skills on special teams coaches, and so on). Not yet
+# checked on the game's screen.
+STAFF_SPECIAL_SKILLS = {
+    0: "Accommodation", 1: "Off Season Rehab", 2: "First Round Intuition", 3: "Draft Intuition", 4: "Charisma",
+    5: "Specialized Rehabilitation", 6: "Practice Film Evaluation", 7: "Off Season Seminar", 8: "Innovator",
+    9: "Ambition", 10: "Cardio Training Program", 11: "Improved Blocking", 12: "Improved Tackling",
+    13: "Improved QB Reads", 14: "Improved Catching", 15: "Improved Break Tackle", 16: "Improved Block Shedding",
+    17: "Improved Defending", 18: "Improved Press", 19: "Improved Release", 20: "Improved Forced Fumble",
+    21: "Improved Carrying", 22: "Charm", 23: "Play Stealing", 24: "Long Term Rehabilitation",
+    25: "Small School Insider", 26: "Mid Major School Insider", 27: "Major School Insider",
+    28: "Advanced Playbook Training", 29: "Regular Season Seminar", 30: "Playbook Training", 31: "Blitz Discipline",
+    32: "Coverage Analysis", 33: "Defensive Back Discipline", 34: "Disciplined Routine", 35: "Educator",
+    36: "Improved Ball Carrier Moves", 37: "Game Film Analysis", 38: "Gameplan Analysis", 39: "Hard Hit Training",
+    40: "Interception Training", 41: "Kick Accuracy Training", 42: "Kick Power Training",
+    43: "Kick Return Discipline", 44: "Kicking Discipline", 45: "Leadership", 46: "Linebacker Discipline",
+    47: "Mentor", 48: "Motivator", 49: "Offensive Line Discipline", 50: "Pass Blocking Discipline",
+    51: "Passing Game Discipline", 52: "QB Passing Discipline", 53: "Quarterback Readiness",
+    54: "Receiver Discipline", 55: "Run Blocking Discipline", 56: "Running Back Discipline",
+    57: "Running Game Discipline", 58: "Speed Training", 59: "Strength Training", 60: "Superb Strategist",
+    61: "Potential Intuition",
+}
+STAFF_SKILL_BITS = (1 << len(STAFF_SPECIAL_SKILLS)) - 1
+
+
+def staff_skills_from_mask(mask):
+    """The skill numbers whose bit is set in a PSSK mask."""
+    return [n for n in STAFF_SPECIAL_SKILLS if mask >> n & 1]
+
+
 COACH_POSITION_LABELS = {
     "0": "HC", "1": "OC", "2": "DC", "3": "STC", "4": "QBC", "5": "RBC",
     "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
@@ -1359,6 +1395,10 @@ class CSVModel:
         self.tphs = []               # list[dict] - one row per team: the Team Philosophy screen (keyed by TGID)
         self.tphs_headers = []       # list[str]
         self.tphs_path = ""
+        self.pssk = []               # list[dict] - staff special skills: SPSB (64-bit mask, hex text) per person PNid
+        self.pssk_headers = []       # list[str]; empty if the save has no such table
+        self.pssk_path = ""
+        self.pssk_stored = 0         # how many PSSK rows the save file has (rows added since need the append import)
 
         self.team_col = None
         self.max_map = {}
@@ -1422,6 +1462,9 @@ class CSVModel:
 
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_save_")
         pending = {t: rows for t, rows in self.pb_pending.items() if t in PLAYBOOK_TABLE_HEADERS}
+        # Playbook edits and a first special skill for someone add rows, which an ordinary import never does, so
+        # growing is enabled for exactly the tables that grew.
+        grown = list(pending) + (["PSSK"] if len(self.pssk) > self.pssk_stored else [])
         try:
             for code, rows_attr, headers_attr, _path_attr in DB_TABLE_ATTRS:
                 rows = getattr(self, rows_attr)
@@ -1436,21 +1479,20 @@ class CSVModel:
             # No --out: save in place. (Passing --out equal to --db would hit a
             # clone-to-self race in HC09Helper.save() and corrupt the file.)
             args = ["import", "--db", self.db_path, "--in", tmp_dir]
-            if pending:
-                # Playbook edits add rows, which an ordinary import never does, so
-                # growing is enabled for exactly the edited tables.
+            if grown:
                 args += ["--tables", ",".join([c for c, *_ in DB_TABLE_ATTRS] + list(pending)),
-                         "--allow-append", ",".join(pending)]
-            if pending:
+                         "--allow-append", ",".join(grown)]
+            if grown:
                 try:
                     result = self.run_bridge(args)
                 except Exception as e:
                     # The import may have died partway through writing the file.
                     shutil.copy2(backup_path, self.db_path)
                     raise RuntimeError(
-                        "The playbook edits could not be saved, so your save was restored from its backup. "
-                        f"Details: {e}") from e
-                self._check_playbook_save(result, pending, backup_path)
+                        "The edits that add rows (playbooks, special skills) could not be saved, so your save was "
+                        f"restored from its backup. Details: {e}") from e
+                self._check_playbook_save(result, grown, backup_path)
+                self.pssk_stored = len(self.pssk)
             else:
                 self.run_bridge(args)
         finally:
@@ -1460,7 +1502,7 @@ class CSVModel:
         return backup_path
 
     def _check_playbook_save(self, import_result, pending, backup_path):
-        """After a save that grew playbook tables: every pending table must have
+        """After a save that grew tables (playbooks, special skills): every grown table must have
         been written, and the file must pass the bridge's structure check
         (every table header checksum, the checksum chain, row counts). If not,
         put the backup back rather than leave a save the game might reject."""
@@ -1478,7 +1520,7 @@ class CSVModel:
         if problems:
             shutil.copy2(backup_path, self.db_path)
             raise RuntimeError(
-                "The playbook edits could not be saved safely, so your save was restored from its backup. "
+                "The edits that add rows could not be saved safely, so your save was restored from its backup. "
                 "Details: " + "; ".join(str(p) for p in problems[:4]))
 
     def _write_csv(self, path, rows, headers):
@@ -1547,6 +1589,7 @@ class CSVModel:
             rows, headers = self.load_csv(path) if path else ([], [])
             setattr(self, rows_attr, rows)
             setattr(self, headers_attr, headers)
+        self.pssk_stored = len(self.pssk)
 
         if not self.players:
             raise ValueError("play.csv loaded 0 players/rows.")
@@ -1569,6 +1612,26 @@ class CSVModel:
 
         self.team_col = detect_team_col_case_sensitive(self.player_headers)
         self.max_map = build_player_max_map(self.player_headers)
+
+    def staff_skills_mask(self, pnid):
+        """The special-skill mask of a person (PNid), 0 if they have none."""
+        for r in self.pssk:
+            if (r.get("PNid", "") or "").strip() == str(pnid):
+                try:
+                    return int((r.get("SPSB", "") or "0").strip(), 16)
+                except ValueError:
+                    return 0
+        return 0
+
+    def set_staff_skills_mask(self, pnid, mask):
+        """Set a person's special-skill mask: changes their PSSK row, or adds one if they had none (the save then
+        needs the append import, which save_to_db does)."""
+        text = "0x%016x" % mask
+        for r in self.pssk:
+            if (r.get("PNid", "") or "").strip() == str(pnid):
+                r["SPSB"] = text
+                return
+        self.pssk.append({"SPSB": text, "PNid": str(pnid)})
 
     def player_name(self, row):
         fn = (row.get(PLAYER_FIRST_NAME_CODE, "") or "").strip()
@@ -2986,6 +3049,60 @@ class PersonalityDialog(tk.Toplevel):
             self.refresh_callback()
 
         messagebox.showinfo("Personality updated", f"Set to {name} (PTId={ptid}).")
+        self.destroy()
+
+
+class StaffSkillsDialog(tk.Toplevel):
+    """The special skills of one staff member (coach, trainer or GM), by the game's names. A skill is one bit of the
+    person's mask in the save's PSSK table (see STAFF_SPECIAL_SKILLS). Apply writes just that mask."""
+
+    ROWS = 21     # skills per column
+
+    def __init__(self, parent, model, pnid, subject_label):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Special skills")
+        self.transient(parent)
+        self.parent, self.model, self.pnid = parent, model, str(pnid)
+        self._mask = model.staff_skills_mask(pnid)
+
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        self.lbl_count = ttk.Label(btn, foreground="gray")
+        self.lbl_count.pack(side="left")
+
+        ttk.Label(self, text=subject_label, font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
+        ttk.Label(self, foreground="gray", wraplength=640, justify="left", padding=(12, 2, 12, 6),
+                  text="Tick the special skills this person has. The names are the game's own, matched to the save from "
+                       "the game's data (each skill turned up only on the staff it belongs to); not yet checked on the "
+                       "game's screen - try changes on a copy of your save.").pack(anchor="w")
+
+        grid = ttk.Frame(self)
+        grid.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.vars = {}
+        for n, name in STAFF_SPECIAL_SKILLS.items():
+            var = tk.BooleanVar(value=bool(self._mask >> n & 1))
+            var.trace_add("write", lambda *_: self._count())
+            self.vars[n] = var
+            ttk.Checkbutton(grid, text=name, variable=var).grid(row=n % self.ROWS, column=n // self.ROWS, sticky="w", padx=(0, 14), pady=1)
+        self._count()
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+
+    def _count(self):
+        n = sum(1 for v in self.vars.values() if v.get())
+        self.lbl_count.configure(text=f"{n} selected")
+
+    def _apply(self):
+        chosen = sum(1 << n for n, v in self.vars.items() if v.get())
+        new_mask = (self._mask & ~STAFF_SKILL_BITS) | chosen      # bits the game's list doesn't name stay as they are
+        if new_mask != self._mask:
+            self.model.set_staff_skills_mask(self.pnid, new_mask)
+            self.parent.mark_dirty()
         self.destroy()
 
 
@@ -5954,6 +6071,7 @@ class App(tk.Tk):
         ttk.Label(top, text="Trainer (trvw.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_trainer).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Trainer's Stats", command=self.on_max_selected_trainer).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Special skills...", command=self.on_open_trainer_skills).pack(side="left", padx=(8, 0))
         self._build_staff_team_filter(top)
 
         help_text = (
@@ -5999,6 +6117,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_coach).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Coach's Stats", command=self.on_max_selected_coach).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Personality...", command=self.on_open_coach_personality_editor).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Special skills...", command=self.on_open_coach_skills).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Team Philosophy...", command=self.on_open_team_philosophy).pack(side="left", padx=(8, 0))
 
         # Search controls for coach first/last name
@@ -6058,6 +6177,7 @@ class App(tk.Tk):
         ttk.Label(top, text="GM (gmvw.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_gm).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected GM's Stats", command=self.on_max_selected_gm).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Special skills...", command=self.on_open_gm_skills).pack(side="left", padx=(8, 0))
         self._build_staff_team_filter(top)
 
         help_text = (
@@ -7749,6 +7869,41 @@ class App(tk.Tk):
             f"Coach: {name}", refresh_callback=self.refresh_coach,
             subject_kind="coach",
         )
+
+    def _open_staff_skills(self, tree, rows, label_of, who):
+        """Open the special skills dialog for the person selected in one of the staff tabs."""
+        if not self.model.pssk_headers:
+            messagebox.showinfo("Special skills", "This save has no special skills table.")
+            return
+        sel = tree.selection()
+        if not sel:
+            messagebox.showinfo(f"No {who}", f"Select a {who} first.")
+            return
+        try:
+            row = rows[int(sel[0])]
+        except (ValueError, IndexError):
+            return
+        pnid = (row.get("PNid", "") or "").strip()
+        if not pnid:
+            messagebox.showinfo("Special skills", f"This {who} has no person ID in the save.")
+            return
+        StaffSkillsDialog(self, self.model, pnid, label_of(row))
+
+    def on_open_coach_skills(self):
+        def label(r):
+            name = f"{(r.get('CFNM', '') or '').strip()} {(r.get('CLNM', '') or '').strip()}".strip()
+            pos = COACH_POSITION_LABELS.get((r.get("COPS", "") or "").strip(), "")
+            tid = (r.get("TGID", "") or "").strip()
+            return f"Coach: {name} ({pos}, {team_nickname(tid) or tid})".replace("(, ", "(")
+        self._open_staff_skills(self.tree_coach, self.model.coaches, label, "coach")
+
+    def on_open_trainer_skills(self):
+        self._open_staff_skills(self.tree_trainer, self.model.trainers,
+                                lambda r: f"Trainer: {team_nickname((r.get('TGID', '') or '').strip()) or (r.get('TGID', '') or '').strip()}", "trainer")
+
+    def on_open_gm_skills(self):
+        self._open_staff_skills(self.tree_gm, self.model.gms,
+                                lambda r: f"GM: {team_nickname((r.get('TGID', '') or '').strip()) or (r.get('TGID', '') or '').strip()}", "GM")
 
     def on_open_team_philosophy(self):
         """The team philosophy the game's Team Philosophy screen shows (TPHS table), for the

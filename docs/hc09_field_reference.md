@@ -337,6 +337,9 @@ Unnamed: `SKSC`, `SKRE`, `SKRM`, `SKSX`
 ### TPHS - Team Philosophy (the config calls it "Team Health")
 111 fields (29 named in the config); all 110 philosophy fields are decoded above, in "Team Philosophy: all 110 fields".
 
+### PSSK - Staff special skills
+`SPSB` (a 64-bit mask, written as hex text such as `0x0000000020051080`) and `PNid` (the person: the same `PNid` as on the `COCH`, `TRVW` and `GMVW` rows). One row per person who has at least one special skill (185 in the test career); people with none have no row. Bit *n* of the mask is skill *n* of the game's table `ESPS` (62 skills, 0 Accommodation to 61 Potential Intuition; the bits above 61 are not used). The match was checked statistically: each skill is held only by the staff it belongs to (Accommodation and the School Insider skills only by GMs, Off Season Rehab and Cardio Training only by trainers, Improved Blocking and the blocking disciplines by offensive line coaches, Kick Accuracy / Power / Return by special teams coaches, Coverage Analysis by defensive staff, and so on); the Bears head coach (Lovie Smith) has Coverage Analysis and the GM Small School Insider. Not yet checked on the game's screen. The editor's **Special skills...** button (Coach, Trainer and GM tabs) reads and writes the mask; giving a first skill to someone with no row adds a row, which is saved with the bridge's append import (`--allow-append PSSK`) and checked with `verify-db`. How many skills the game lets one person hold, and what each does, is not known.
+
 ### DCHT - Depth Chart
 `TGID` Team ID, `PPOS` Position [26], `ddep` Depth, `PGID` Player ID.
 

@@ -25,7 +25,9 @@ export/import through HC09Editor required.
   (schemes, no-huddle, playbook control, blitzing, coverage, who to bench or start), the
   position philosophies, the GM and staff settings (trading, drafting, scouting, contracts,
   hire control), roster minimums, and the health and fatigue substitution settings. The names
-  are the game's own, read from its data.
+  are the game's own, read from its data. Each of the Trainer, Coach and GM tabs also has
+  **Special skills...**: the staff member's special skills (Improved Tackling, Draft Intuition,
+  Off Season Rehab, ...) as tick boxes, with the game's names.
 - **Playbooks** - browse every playbook with real play, set and formation names; find
   which playbooks contain a play; change a team's offensive or defensive playbook; and
   **add plays** to your team's playbook by copying a play, a whole set or a whole
