@@ -53,6 +53,16 @@ The game archive (`qkl_boot.ast`) has these same tables but **empty**, so there 
 
 A sensible order: work out what each column means from the existing plays and from small in-game experiments; write a checker for the rules, like the playbook one that was verified on all 98 playbooks; start by **cloning and slightly editing an existing custom play** rather than building one from nothing; and always back up and run `verify-db` after writing. Writing the profile is a new kind of risk, since so far the editor only reads it.
 
+## Idea for later: sharing and swapping custom playbooks
+
+Not started. Three levels, easiest first:
+
+1. **A playbook made only of the game's own plays and formations** (most custom playbooks start as a copy of a game playbook and add more game plays). Every copy of the game has those plays, so such a playbook could be shared as a small recipe: its name, its side, and the list of formation / set / play links. Importing it would write the link rows (`PGPL`, `PGSS`, `PGSL`, `PGFM`) into one of the receiver's custom slots (Playbooks 1 to 10) and its name into their profile. Two things are missing: the editor can only add rows today, so replacing a slot's contents needs row removal (or reuse of the table's spare slots) with the row counts and checksums kept right; and it would be the first time the editor writes the profile.
+2. **A playbook that includes custom plays** also needs the play definitions moved (`PBPL`, `SETL`, `PLYS`, `SETP`, `SETG` and the small tables, 11 rows per play), with the set and play ids renumbered so they don't collide with the receiver's own custom plays. That needs the meaning of those columns worked out first.
+3. **Swapping whole profiles** is the same as 2 for everything at once.
+
+Still to find out: when a career is started, how the game copies the profile's playbooks into it and which side wins when they disagree; and what the game does with a custom playbook whose links are in the career but whose definitions are not in the profile. Both can be tested in the game on a copy of a save. Every write needs a backup first and `verify-db` afterwards.
+
 ## Not known
 
 - Whether copying a custom play's links into another playbook works in the game, and why it broke for the reporter. The definitions are not in the career, so the links alone should be enough, but the formation they sit under may matter. Needs an in-game test on a copy of a save.
