@@ -35,7 +35,7 @@ Other tables in this area: `PLRM` (save, 1,589 rows: per-player roadmap evaluati
 
 ## Staff
 
-- **Special skills** (`ESPS`, 62 names: Accommodation, Off Season Rehab, First Round Intuition, Draft Intuition, Charisma, ..., Superb Strategist, Potential Intuition) are stored in the save's table **`PSSK`** as one 64-bit mask per person (`SPSB`, hex text, one bit per skill, bit *n* = `ESPS` value *n*; `PNid` is the person). Decoded for the test career, the Bears head coach (Lovie Smith) has Coverage Analysis and the GM has Small School Insider. The editor does not show or edit them yet. Matched from data, not checked on the game's screen.
+- **Special skills** (`ESPS`, 62 names: Accommodation, Off Season Rehab, First Round Intuition, Draft Intuition, Charisma, ..., Superb Strategist, Potential Intuition) are stored in the save's table **`PSSK`** as one 64-bit mask per person (`SPSB`, hex text, one bit per skill, bit *n* = `ESPS` value *n*; `PNid` is the person). The bit order was checked statistically: across the 185 people with skills each skill is held only by the staff it belongs to (Accommodation and the School Insider skills only by GMs; Off Season Rehab and Cardio Training only by trainers; the blocking skills by offensive line coaches; the kick skills by special teams coaches). In the test career the Bears head coach (Lovie Smith) has Coverage Analysis and the GM has Small School Insider. The editor's **Special skills...** button (Coach, Trainer and GM tabs) reads and writes the mask. Matched from data, not checked on the game's screen.
 - `OWNR` holds the owner's control levels (`GmCP OCCP DCCP PCCP TRCP`), `GMVW` the GM's philosophy fields, `TRVW` the trainer's; `TPHS` looks like the per-team result of these and the head coach's settings.
 - Shipped pools: `GMPL` (51 GM profiles, with the same philosophy fields), `COPL` (289 coaches, 179 fields); `CCOD` (28 rows, 68 fields) and the small tables `COPW` / `COCW` / `AcoW` were not examined.
 
@@ -54,7 +54,7 @@ Season stat history (`PSOF` 2,791 rows, `PSDE`, `PSNG`, `PSKP`, `PSKI`, `PCDE`, 
 
 ## Ideas, roughly by value
 
-1. **Staff special skills**: show and edit them with the game's names (the 64-bit mask in `PSSK`). Needs a row appended for staff who have none.
+1. **Staff special skills**: done in the editor (the 64-bit mask in `PSSK`, with a row appended for staff who had none). To check in the game: give a coach one skill and look at his card.
 2. **Recompute the stored overall** (`POVR`) after rating edits, if the game does not: needs the `PORC` formula decoded (a regression against saves where the stored overall is current would settle it).
 3. **Exact Size grade**: the stepped height / weight lookup (probably in the executable); more stored grades would let a per-position table be fitted (per-position fits reached an error of about 4.7 against 6.5 for one global fit).
 4. **Production grade**: what it is for veterans (counted as 0 and that fits) and where the prospects' values come from.
