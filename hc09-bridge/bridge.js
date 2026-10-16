@@ -8,7 +8,7 @@ const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 const ASTParser = require('madden-file-tools/streams/ASTParser');
 const { Readable } = require('stream');
 
-const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM', 'cINF', 'TPHS'];
+const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM', 'cINF', 'TPHS', 'PSSK'];
 
 function csvEscape(value) {
     if (value === null || value === undefined) return '';
@@ -293,6 +293,9 @@ async function cmdImport(args) {
             }
             appendedRows = dataRows.length - records.length;
             for (let i = records.length; i < dataRows.length; i++) {
+                // The spare slots hold leftover memory, not zeros (including the bits no field covers). The game's own
+                // new rows are all zero, so start from that and let the fields below fill the row.
+                table._records[i].recordBuffer.fill(0);
                 table._records[i].isPopulated = true;
             }
             table.header.currentRecords = dataRows.length;
