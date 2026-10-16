@@ -44,60 +44,62 @@ The weights read like the in-game names. For the five CB presets: Man Coverage/B
 
 ## What the editor does with it
 
-**Player Type Fit** lists a position's presets (with the team's current preset beside each player, from `TPHS`) and shows an **Est. OVR** for each player: an estimate of the overall the game's Evaluate Roster screen shows under that preset. The tab says so, with the margin: against the 55 readings below the estimate is within 2 points for most and within 3 for nearly all (worst reading 5 off, and an unusual build may be further out), for cornerbacks, safeties and defensive tackles only; other positions use the same method unchecked. (*Saved OVR* is the overall stored in the save, which can be stale or from another preset.)
+**Player Type Fit** lists a position's presets (with the team's current preset beside each player, from `TPHS`) and shows an **Est. OVR** for each player: the overall the game's Evaluate Roster screen shows under that preset, rebuilt with the game's own formulas. Selecting a player shows his seven grades, as the game's Roster Breakdown does. The tab says what is exact and what is approximate, with the margin: against the 55 readings below the estimate is within 1 point for 51 and never more than 3 off, for cornerbacks, safeties and defensive tackles; other positions use the same formulas, which were checked against the game's stored grades for all 21 positions but not against the Evaluate Roster screen. (*Saved OVR* is the overall stored in the save, which can be stale or from another preset.)
 
-The estimate is `Sum(factor weight * factor score) / Sum(factor weight)` over the `PEOW` factors. The game names the grade categories (table `EGRD`: Overall, Potential, Athletic, Intangibles, Production, Size, Learning, Durability), so the seven `PEOW` weights are OAT Athletic, OIN Intangibles, OPD Production, OPT Potential, OSZ Size, OLN Learning and ODR Durability; "Intangibles" is the one built from the skill ratings:
+The overall is `floor(Sum(PEOW weight * grade) / Sum(PEOW weight))` over the game's seven grades (table `EGRD`), each a 0 to 99 score. The grade formulas were settled from table **`RPGR`** in a save, which holds the game's own grades for the draft class: every grade revealed for all 350 prospects (the pseudo-team 1015), plus what each team has scouted. Against those stored grades:
 
-| Factor | Weight | Score used | Known or stand-in |
-|---|---|---|---|
-| OIN Intangibles | `OINW` | the player's skill ratings weighted by `PEIW` | from the files |
-| OAT Athletic | `OATW` | the athletic ratings weighted by `PEAW` | from the files |
-| OLN Learning | `OLNW` | the Learning rating | stand-in |
-| ODR Durability | `ODRW` | the Injury rating | stand-in |
-| OPT Potential + OPD Production | `OPTW + OPDW` | the skills averaged with the `PEIW` weights of the position's Balanced preset | stand-in |
-| OSZ Size | `OSZW` | `51.1 + (0.271 * HTSW * h + 1.350 * WTSW * w) / (HTSW + WTSW)`, h and w = the player's height and weight percentile (0 to 99) among that position's players in the save | stand-in, three numbers fitted |
+| Grade | Formula | Against the game |
+|---|---|---|
+| Athletic | `floor(PEAW-weighted average of the athletic ratings)` | exact, 350 of 350 |
+| Intangibles | `floor(PEIW-weighted average of all the skill ratings, Learning included)` | exact, 350 of 350 |
+| Learning | the Learning rating | exact, 350 of 350 |
+| Durability | `floor(body-part healths weighted by LPHC for the position and the player's hand / 10)`; the six parts are head, torso, both arms, both legs (maximum health, 0 to 1000); `LPHC` weights add to 100, a quarterback's throwing arm counts 25 and the other 5 | 310 of 350 exact, 347 within 2 |
+| Potential | `floor(Sum(PEOW * grade) / Sum(PEOW))` over Intangibles, Learning, Athletic, Durability and Size, with Intangibles, Learning and Athletic computed from the **maximum** ratings (the `...X` columns) | exact, 350 of 350, given the stored Size |
+| Size | a stepped lookup of height and weight, weighted by `PESW` (`HTSW`, `WTSW`); it is not in the game's data tables. Approximated as `71.8 + 0.316 * h * HTSW share + 0.39 * w * WTSW share`, h and w the player's height and weight percentile (0 to 99) among that position's players, at most 99 | approximate, RMS 6.5 |
+| Production | counted as 0 (its `OPDW` weight stays in the divisor); the draft class's stored Production grades run 1 to 99 (median 20) and come from something that is not in the player rows | fits the readings best |
 
-A plain weighted average of the `PEAW` and `PEIW` ratings was tried first (what an earlier version of this tab showed). It matched the game under Balanced (within 2) but was up to 19 points off under other presets (Graham under Cover 2: 74 against the game's 55), because it ignored the factor weights: Man Coverage/Ballhawk gives athleticism 15 of 71 where Balanced gives 31 of 102, and Prototype gives size 15 of 73.
+The stored overall of a draft prospect uses a different set of weights, table `PEdW` (17 rows, one per position group, mapped from the position by table `PLPS`), not the preset's `PEOW`: `floor(Sum(PEdW * grade) / Sum(PEdW))` matches the stored overall for all 350 prospects. The `PEIW` weight columns for stiff arm and stamina are `STAW` (stiff arm, `PLSA`) and `STMW` (stamina, `PSTA`): an earlier version of this editor had them the other way round.
+
+How it got here: a plain weighted average of the `PEAW` and `PEIW` ratings was tried first (what the first version of this tab showed). It matched the game under Balanced (within 2) but was up to 19 points off under other presets (Graham under Cover 2: 74 against the game's 55). A second version used the factor weights with stand-ins for the unknown grades (learning rating, injury rating for durability, skills under the Balanced preset for potential, size from percentiles), fitted to the readings: within 3 for 50 of 55, worst 4.7. The stored draft-class grades then showed what the grades really are (durability is the body parts, not the injury rating; potential is the same overall computed from the maximum ratings; intangibles includes learning).
 
 ## In-game readings
 
-Taken from the Evaluate Roster screen of a test career (Bears), one preset at a time, each shown as *game / the editor's estimate* (rounded). The bodies (`PHGT` inches, `PWGT` pounds minus 160): Tillman 73 / 36, R. Manning 68 / 25, Vasher 70 / 17, Graham 72 / 35, McBride 69 / 25, Archuleta 72 / 55, Harris 75 / 132, Dvoracek 75 / 145, Adams 72 / 139, Garay 76 / 150, M. Brown 70 / 47, D. Manning 71 / 42.
+Taken from the Evaluate Roster screen of a test career (Bears), one preset at a time, each shown as *game / the editor's estimate*. The bodies (`PHGT` inches, `PWGT` pounds minus 160): Tillman 73 / 36, R. Manning 68 / 25, Vasher 70 / 17, Graham 72 / 35, McBride 69 / 25, Archuleta 72 / 55, Harris 75 / 132, Dvoracek 75 / 145, Adams 72 / 139, Garay 76 / 150, M. Brown 70 / 47, D. Manning 71 / 42.
 
 | Preset | Tillman | R. Manning | Vasher | Graham | McBride | Archuleta |
 |---|---|---|---|---|---|---|
-| CB Balanced (60) |  | 82 / 83 | 89 / 91 | 69 / 68 | 76 / 76 |  |
-| CB Man Coverage/Ballhawk (61) |  | 78 / 80 | 88 / 90 | 64 / 65 | 72 / 73 |  |
-| CB Strong/Press/Run Support (62) |  | 79 / 81 | 85 / 88 | 70 / 72 | 73 / 75 |  |
-| CB Prototype (63) | 87 / 92 | 78 / 78 | 85 / 84 | 74 / 72 |  |  |
-| CB Cover 2 (64) | 84 / 89 | 77 / 80 | 88 / 91 | 55 / 58 |  |  |
+| CB Balanced (60) |  | 82 / 82 | 89 / 89 | 69 / 69 | 76 / 76 |  |
+| CB Man Coverage/Ballhawk (61) |  | 78 / 78 | 88 / 87 | 64 / 65 | 72 / 72 |  |
+| CB Strong/Press/Run Support (62) |  | 79 / 79 | 85 / 84 | 70 / 71 | 73 / 74 |  |
+| CB Prototype (63) | 87 / 87 | 78 / 78 | 85 / 84 | 74 / 74 |  |  |
+| CB Cover 2 (64) | 84 / 82 | 77 / 77 | 88 / 87 | 55 / 56 |  |  |
 | SS Balanced (70) |  |  |  |  |  | 67 / 66 |
 | SS Coverage (71) |  |  |  |  |  | 62 / 62 |
-| SS Prototype (72) |  |  |  |  |  | 78 / 78 |
-| SS Run Support/Big Hitter (73) |  |  |  |  |  | 73 / 74 |
+| SS Prototype (72) |  |  |  |  |  | 78 / 77 |
+| SS Run Support/Big Hitter (73) |  |  |  |  |  | 73 / 72 |
 | SS Smart/Productive (74) |  |  |  |  |  | 62 / 62 |
 
 | Preset | Harris | Dvoracek | Adams | Garay |
 |---|---|---|---|---|
-| DT Balanced (45) | 89 / 89 | 69 / 67 | 66 / 69 | 66 / 64 |
-| DT Prototype (46) | 84 / 84 | 73 / 71 | 72 / 71 | 76 / 73 |
-| DT One Gap Penetrator (47) | 90 / 91 | 68 / 67 | 65 / 67 | 54 / 55 |
-| DT Run Stopper (48) | 86 / 86 | 70 / 70 | 71 / 71 | 71 / 72 |
-| DT Versatile/3-4 (49) | 87 / 87 | 69 / 68 | 70 / 69 | 70 / 68 |
+| DT Balanced (45) | 89 / 89 | 69 / 69 | 66 / 69 | 66 / 67 |
+| DT Prototype (46) | 84 / 85 | 73 / 74 | 72 / 72 | 76 / 77 |
+| DT One Gap Penetrator (47) | 90 / 89 | 68 / 68 | 65 / 65 | 54 / 54 |
+| DT Run Stopper (48) | 86 / 85 | 70 / 70 | 71 / 71 | 71 / 72 |
+| DT Versatile/3-4 (49) | 87 / 87 | 69 / 70 | 70 / 69 | 70 / 70 |
 
 | Preset | M. Brown | D. Manning |
 |---|---|---|
-| FS Balanced (65) | 82 / 83 | 77 / 76 |
-| FS Man Coverage (66) | 82 / 82 | 75 / 75 |
-| FS Centerfielder (67) | 82 / 83 | 75 / 74 |
-| FS Prototype (68) | 82 / 84 | 82 / 78 |
-| FS Run Support/Blitzer (69) | 80 / 82 | 74 / 74 |
+| FS Balanced (65) | 82 / 81 | 77 / 76 |
+| FS Man Coverage (66) | 82 / 81 | 75 / 75 |
+| FS Centerfielder (67) | 82 / 81 | 75 / 74 |
+| FS Prototype (68) | 82 / 80 | 82 / 80 |
+| FS Run Support/Blitzer (69) | 80 / 79 | 74 / 73 |
 
-Over these 55 readings the estimate is within 1 for 26, within 2 for 40, within 3 for 50; the worst is 4.7 (Tillman under Cover 2) and the root-mean-square error is 1.8 (CB 2.3, DT 1.5, FS 1.7, SS 0.4). Cover 2 corners are all over-estimated by about 3, and Danieal Manning's FS Prototype reading (82) is 4 above the estimate. The stand-ins were fitted to these same readings, so the figures are in-sample. Leaving one player out at a time, the root-mean-square error was 2.1 and the worst 7.6 (Tillman under Prototype, a body the rest of the fit hadn't seen), then 4.7 (Tillman under Cover 2) and 4.6 (D. Manning under FS Prototype).
-
-The readings came in batches, and each new batch was scored with the model as it stood before refitting. The first model (25 CB and SS readings, size as one percentile) was within 2.9 on the Balanced DT and FS readings, but 5 to 7 low for the big defensive tackles under Prototype, which led to the current size score (weight counts about five times as much as height) and to the Balanced-weights potential stand-in. Scored on the DT Run Stopper and FS Prototype readings before they were used, the refit was within 4.3 (RMS 2.2); on DT Versatile/3-4 and FS Run Support/Blitzer, within 2.1 (RMS 1.2).
+Over these 55 readings the estimate is exact for 24, within 1 for 51, within 2 for 54; the worst is 3, and the root-mean-square error is 0.9 (CB 0.8, DT 0.9, FS 1.2, SS 0.8). The only fitted part is the Size approximation, which was fitted to the draft class's stored Size grades, not to these readings, so the figures are close to out-of-sample. The remaining error is mostly Size (the real one is stepped) and the few durability grades that are off by 1 or 2.
 
 ## Not known
 
-- **The game's exact overall formula.** The structure above fits, but only the `OIN` and `OAT` scores are known from the files. How learning, durability, potential, production and size are scored is guessed from the readings. In particular the height part of the size score is poorly pinned down (one weight-heavy fit explains the data almost as well), which may matter for positions where height is weighted heavily, such as WR Tall (`HTSW` 15).
-- Every position other than CB, FS, SS and DT has no readings, so the estimate there is unchecked. Readings for MLB, WR and HB would be the next most useful.
-- Whether potential and production (`OPTW`, `OPDW`) use the same ratings as skills; the displayed potential (POT) also changes with the preset, so it is computed the same way from projected ratings.
+- **The exact Size grade.** It is a stepped lookup of height and weight, with a plateau every two inches of height for cornerbacks and a weight below which the score doesn't fall, and it can fall again above an ideal body. The tables are not in the game's data files (no shipped table has height or weight tiers), so they are probably in the executable. Fitting a table per position needs more stored grades than the 350 prospects give (per-position fits reached an out-of-sample error of about 4.7 against 6.5 for the global one). The game's stored Size grade of any prospect is in `RPGR` (`PSZG`).
+- **What Production is** for veterans (counted as 0 here, which fits) and for prospects (their stored grades run 1 to 99 with a median of 20 and correlate with Learning and Awareness; a table `POSC` with a range per position group may be its scale).
+- **The last bit of Durability**: about one prospect in nine differs from the body-part average by 1 or 2.
+- Positions other than CB, FS, SS and DT have not been compared with the Evaluate Roster screen. Readings for MLB, WR and HB would be the next most useful.

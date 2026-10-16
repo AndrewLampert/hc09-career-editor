@@ -23,6 +23,7 @@ Run:
 
 import bisect
 import csv
+import math
 import os
 import re
 from collections import Counter, defaultdict
@@ -1186,23 +1187,28 @@ def safe_int(s):
 # Checked on the five CB presets: Man Coverage weights man coverage 31 and zone coverage 0, Cover 2 the reverse,
 # Strong/Press weights tackling, pursuit and press, and Prototype is high everywhere.
 #
-# The Evaluate Roster overall behaves like Sum(factor weight * factor score) / Sum(factor weight), which is what
-# estimate_philosophy_overall does. The game names the grades (table EGRD: Athletic, Intangibles, Production,
-# Potential, Size, Learning, Durability): OIN Intangibles is the PEIW-weighted average of the skills, OAT Athletic the
-# PEAW-weighted average of the athletic ratings, OSZ Size a score from height and weight (weighted by PESW), OLN
-# Learning, ODR Durability, OPT Potential and OPD Production. Only OIN and OAT are known from the files. The other scores are stand-ins fitted
-# to 55 readings off the game's Evaluate Roster screen: learning is the Learning rating, durability the Injury
-# rating, potential / production the skill average under the position's own Balanced preset, and the size score is
-# built from height and weight percentiles among that position's players (the weight counts about five times as much
-# as the height, three numbers fitted). Against those readings (all five presets each of CB, SS, DT and FS, for a few
-# players at each) the estimate is within 2 points for 40 of 55 and within 3 for 50, worst 4.7 off; a build unlike
-# the ones measured can be further out (leaving one player out of the fit the worst was 7.6). Other positions use
-# the same method unchecked. docs/hc09_position_presets.md has the readings. A plain weighted average of PEAW and
-# PEIW was tried first: within 2 under Balanced but up to 19 points off under other presets. This replaces an earlier
-# version built on PLYT, the game's 37 player-generation archetypes, which are not what the game offers as presets.
+# The Evaluate Roster overall is floor(Sum(factor weight * grade) / Sum(factor weight)) over the game's seven grades
+# (table EGRD: Athletic, Intangibles, Production, Potential, Size, Learning, Durability), with the preset's PEOW
+# weights. Each grade is a 0-99 score. The game's own stored grades for the draft class (table RPGR in a save, 350
+# prospects with every grade revealed) and 55 readings off the Evaluate Roster screen settled the formulas:
+#   Athletic     floor(PEAW-weighted average of the athletic ratings)                              exact (350 of 350)
+#   Intangibles  floor(PEIW-weighted average of all the skill ratings, Learning included)          exact (350 of 350)
+#   Learning     the Learning rating                                                                exact (350 of 350)
+#   Durability   floor(the body-part healths, weighted by LPHC for the position and the player's hand, / 10)
+#                                                                                                  310 of 350, rest within 2
+#   Potential    floor(Sum(PEOW * grade) / Sum(PEOW)) over Intangibles, Learning, Athletic, Durability and Size, with
+#                Intangibles, Learning and Athletic computed from the MAXIMUM ratings (the ...X columns)   exact (350 of 350)
+#   Size         a stepped lookup of height and weight (weighted by PESW) that is not in the game's data tables;
+#                approximated here from height and weight percentiles among the position's players
+#   Production   counted as 0 (its weight stays in the divisor); it fits the readings best
+# A plain weighted average of PEAW and PEIW (the first version of this tab) was up to 19 points off under presets other
+# than Balanced; these formulas get 51 of the 55 readings within 1 point and none more than 3 off (RMS 0.9).
+# Other positions use the same formulas unchecked in the game. docs/hc09_position_presets.md has the readings. This
+# replaces an earlier version built on PLYT, the game's 37 player-generation archetypes, which are not the presets.
 # -----------------------------
 PHILOSOPHY_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "philosophies")
 PHILOSOPHY_WEIGHT_TABLES = ("PEAW", "PEIW", "PEOW", "PESW")
+BODY_WEIGHT_TABLE = "LPHC"     # body-part weights per position and hand, for the Durability grade
 BOOT_AST_FILENAME = "qkl_boot.ast"
 # weight column -> the player rating it weighs. Matched by name and checked against which position groups use
 # each weight (e.g. HPWW, hit power, is heavy for MLB / SS / OLB; RORW, route running, for WR / TE).
@@ -1211,18 +1217,20 @@ PHILOSOPHY_ATHLETIC_ATTR = {   # PEAW
     "STRW": "PSTR", "RBSW": "PRBS", "ELUW": "PELU", "JMVW": "PLJM", "HPWW": "PLHT", "KPWW": "PKPR", "PBSw": "PPBS",
 }
 PHILOSOPHY_SKILL_ATTR = {   # PEIW
-    "THAW": "PTHA", "STAW": "PSTA", "IMBW": "PLIB", "RNBW": "PRBK", "KACW": "PKAC", "TACW": "PTAK", "SPCW": "PLSC",
+    "THAW": "PTHA", "STAW": "PLSA", "IMBW": "PLIB", "RNBW": "PRBK", "KACW": "PKAC", "TACW": "PTAK", "SPCW": "PLSC",
     "PBFW": "PPBF", "RBFW": "PRBF", "PRGW": "PLPR", "TGHW": "PTGH", "INJW": "PINJ", "PBKW": "PPBK", "TRKW": "PLTR",
-    "RELW": "PLRL", "STMW": "PLSA", "PWMW": "PLPm", "LRNW": "PLRN", "IMPW": "PIMP", "MORW": "PMOR", "RORW": "PLRR",
+    "RELW": "PLRL", "STMW": "PSTA", "PWMW": "PLPm", "LRNW": "PLRN", "IMPW": "PIMP", "MORW": "PMOR", "RORW": "PLRR",
     "PURW": "PLPU", "AWRW": "PAWR", "BKSW": "PBSG", "CATW": "PCTH", "CITW": "PLCI", "KRTW": "PKRT", "BCVW": "PBCV",
     "MCVW": "PLMC", "ZCVW": "PLZC", "CARw": "PCAR", "PRSw": "PLPE",
 }
-# The stand-in size score is PHILOSOPHY_SIZE_BASE + PHILOSOPHY_SIZE_HEIGHT * (the height percentile, 0-99, times the
-# preset's share HTSW / (HTSW + WTSW)) + PHILOSOPHY_SIZE_WEIGHT * (the weight percentile times WTSW's share), fitted
-# to the in-game readings together with the stand-ins above.
-PHILOSOPHY_SIZE_BASE = 51.1
-PHILOSOPHY_SIZE_HEIGHT = 0.271
-PHILOSOPHY_SIZE_WEIGHT = 1.350
+# The approximate Size grade is PHILOSOPHY_SIZE_BASE + PHILOSOPHY_SIZE_HEIGHT * (the height percentile, 0-99, times the
+# preset's share HTSW / (HTSW + WTSW)) + PHILOSOPHY_SIZE_WEIGHT * (the weight percentile times WTSW's share), at most
+# 99, fitted to the game's stored Size grades of the 350 draft prospects (RMS 6.5 against the real stepped lookup).
+PHILOSOPHY_SIZE_BASE = 71.8
+PHILOSOPHY_SIZE_HEIGHT = 0.316
+PHILOSOPHY_SIZE_WEIGHT = 0.39
+# LPHC column -> the player's body-part health (maximum) it weighs
+PHILOSOPHY_BODY_COLS = {"HDWC": "PHDX", "LAWC": "PLAX", "RAWC": "PRAX", "TOWC": "PTRX", "LLWC": "PLLX", "RLWC": "PRLx"}
 # (label, the team philosophy field that holds the preset, the PPOS values of the players it applies to)
 PHILOSOPHY_GROUPS = [
     ("QB", "QBPP", {"0"}), ("HB", "HBPP", {"1"}), ("FB", "FBPP", {"2"}), ("WR", "WRPP", {"3"}), ("TE", "TEPP", {"4"}),
@@ -1269,10 +1277,27 @@ def _philosophy_numbers_of(row, cols):
     return out
 
 
+def load_body_weights():
+    """{(PPOS, hand): {LPHC column: weight}} from the cached LPHC table (the Durability grade's body-part weights by
+    position and left / right hand), or None if it has not been extracted yet."""
+    try:
+        with open(os.path.join(PHILOSOPHY_CACHE_DIR, BODY_WEIGHT_TABLE.lower() + ".csv"), newline="", encoding="utf-8") as f:
+            out = {}
+            for r in csv.DictReader(f):
+                ppos, hand = safe_int(r.get("PPOS", "")), safe_int(r.get("PHAN", ""))
+                if ppos is not None and hand is not None:
+                    out[(ppos, hand)] = _philosophy_numbers_of(r, PHILOSOPHY_BODY_COLS)
+            return out or None
+    except OSError:
+        return None
+
+
 def load_philosophy_model():
     """{philosophy value: {"athletic": {rating column: weight}, "skill": {...}, "factors": {"OINW": w, ...},
     "size": (HTSW, WTSW)}} from the cached PEAW, PEIW, PEOW and PESW tables, or {} if they have not been extracted
-    from the game files yet (a cache from before PEOW and PESW were used counts as not extracted)."""
+    from the game files yet (a cache from before LPHC was read counts as not extracted)."""
+    if load_body_weights() is None:
+        return {}
     tables = {}
     for table in PHILOSOPHY_WEIGHT_TABLES:
         rows = _read_philosophy_table(table)
@@ -1296,29 +1321,34 @@ def load_philosophy_model():
 
 PHILOSOPHY_MODEL = {}
 PHILOSOPHY_WEIGHTS = {}     # {philosophy value: {rating column: weight}} athletic and skill together, for the key ratings
+PHILOSOPHY_BODY_WEIGHTS = {}
 
 
 def reload_philosophy_data():
-    """Read the cached philosophy tables into PHILOSOPHY_MODEL and PHILOSOPHY_WEIGHTS."""
-    global PHILOSOPHY_MODEL, PHILOSOPHY_WEIGHTS
+    """Read the cached philosophy tables into PHILOSOPHY_MODEL, PHILOSOPHY_WEIGHTS and PHILOSOPHY_BODY_WEIGHTS."""
+    global PHILOSOPHY_MODEL, PHILOSOPHY_WEIGHTS, PHILOSOPHY_BODY_WEIGHTS
     PHILOSOPHY_MODEL = load_philosophy_model()
     PHILOSOPHY_WEIGHTS = {gid: {**m["athletic"], **m["skill"]} for gid, m in PHILOSOPHY_MODEL.items()}
+    PHILOSOPHY_BODY_WEIGHTS = (load_body_weights() or {}) if PHILOSOPHY_MODEL else {}
 
 
 reload_philosophy_data()
 
 
-def _weighted_rating_average(row, weights, skip=()):
-    """Weighted average of the player's ratings (0-99) with the given weights; None if none of them are present."""
+def _weighted_rating_average(row, weights, use_max=False):
+    """Weighted average of the player's ratings (0-99) with the given weights (or of their maximum ratings, the ...X
+    columns); None if none of them are present."""
     num = den = 0.0
     for attr, w in weights.items():
-        if attr in skip:
-            continue
-        v = safe_int(row.get(attr, ""))
+        v = safe_int(row.get(PLAYER_MAX_HARDCODED.get(attr, attr) if use_max else attr, ""))
         if v is not None:
             num += w * v
             den += w
     return num / den if den else None
+
+
+def _floor_grade(x):
+    return None if x is None else math.floor(x + 1e-9)
 
 
 def philosophy_size_population(players, group_ppos):
@@ -1340,52 +1370,67 @@ def _size_percentile(sorted_vals, v):
     return 99.0 * (bisect.bisect_left(sorted_vals, v) + bisect.bisect_right(sorted_vals, v)) / 2.0 / len(sorted_vals)
 
 
-def philosophy_balanced_skill(field):
-    """The skill (PEIW) weights of the Balanced preset of one position (field = its xxPP, e.g. "CBPP"): the all-round
-    skill score estimate_philosophy_overall uses for potential. {} if there is none."""
-    for value, name in PHILOSOPHY_VALUES[field].items():
-        if name == "Balanced" and value in PHILOSOPHY_MODEL:
-            return PHILOSOPHY_MODEL[value]["skill"]
-    return {}
-
-
-def estimate_philosophy_overall(row, model, size_population, balanced_skill):
-    """The overall the game's Evaluate Roster screen would show for this player under one philosophy, estimated as
-    Sum(factor weight * factor score) / Sum(factor weight); see the comment above PHILOSOPHY_CACHE_DIR for what is
-    known and what is a stand-in. balanced_skill: philosophy_balanced_skill of the position. None if the player has
-    neither skill nor athletic ratings. A factor whose rating is missing is left out. Within 2-3 points of the
-    game's number for most players (checked for CB, SS, DT and FS only)."""
-    factors = model["factors"]
-    skills = _weighted_rating_average(row, model["skill"])
-    athletic = _weighted_rating_average(row, model["athletic"])
-    if skills is None and athletic is None:
+def _durability_grade(row):
+    """The Durability grade: the body-part healths (maximum) weighted by LPHC for the position and the player's hand."""
+    w = PHILOSOPHY_BODY_WEIGHTS.get((safe_int(row.get(PLAYER_POS_CODE, "")), safe_int(row.get("PHAN", "")) or 0))
+    if not w:
         return None
-    parts = []
-    if skills is not None:
-        parts.append((factors["OINW"], skills))
-    if athletic is not None:
-        parts.append((factors["OATW"], athletic))
-    learning, injury = safe_int(row.get("PLRN", "")), safe_int(row.get("PINJ", ""))
-    if learning is not None:
-        parts.append((factors["OLNW"], learning))
-    if injury is not None:
-        parts.append((factors["ODRW"], injury))
-    potential = _weighted_rating_average(row, balanced_skill)
-    if potential is None:
-        potential = skills
-    if potential is not None:
-        parts.append((factors["OPTW"] + factors["OPDW"], potential))
+    num = den = 0.0
+    for col, attr in PHILOSOPHY_BODY_COLS.items():
+        v = safe_int(row.get(attr, ""))
+        if v is None:
+            return None
+        num += w[col] * v
+        den += w[col]
+    return _floor_grade(num / den / 10.0) if den else None
+
+
+def philosophy_grades(row, model, size_population):
+    """The game's grades (0-99) for one player under one philosophy, and the overall they give: {"athletic",
+    "intangibles", "learning", "durability", "potential", "size", "overall"}; a grade that can't be worked out is
+    None and is left out of the overall. Athletic, intangibles, learning and potential are the game's exact formulas,
+    durability is close, size is approximate and production is counted as 0 (see the comment above
+    PHILOSOPHY_CACHE_DIR). None if the player has neither skill nor athletic ratings."""
+    f = model["factors"]
+    athletic = _floor_grade(_weighted_rating_average(row, model["athletic"]))
+    intangibles = _floor_grade(_weighted_rating_average(row, model["skill"]))
+    if athletic is None and intangibles is None:
+        return None
+    learning = safe_int(row.get("PLRN", ""))
+    durability = _durability_grade(row)
+    size = None
     hsw, wsw = model["size"]
     heights, weights = size_population
     h_pct = _size_percentile(heights, safe_int(row.get("PHGT", "")))
     w_pct = _size_percentile(weights, safe_int(row.get("PWGT", "")))
     if hsw + wsw > 0 and h_pct is not None and w_pct is not None:
-        size = PHILOSOPHY_SIZE_BASE + (PHILOSOPHY_SIZE_HEIGHT * hsw * h_pct + PHILOSOPHY_SIZE_WEIGHT * wsw * w_pct) / (hsw + wsw)
-        parts.append((factors["OSZW"], size))
-    total = sum(w for w, _ in parts)
-    if total <= 0:
+        size = min(99.0, PHILOSOPHY_SIZE_BASE + (PHILOSOPHY_SIZE_HEIGHT * hsw * h_pct + PHILOSOPHY_SIZE_WEIGHT * wsw * w_pct) / (hsw + wsw))
+
+    def combine(parts, extra_weight=0.0):
+        got = [(f[k], v) for k, v in parts if v is not None]
+        total = sum(w for w, _ in got) + extra_weight
+        return sum(w * v for w, v in got) / total if total > 0 else None
+
+    # Potential: the same combination over the grades built from the maximum ratings
+    potential = _floor_grade(combine([
+        ("OINW", _floor_grade(_weighted_rating_average(row, model["skill"], use_max=True))),
+        ("OLNW", safe_int(row.get(PLAYER_MAX_HARDCODED["PLRN"], ""))),
+        ("OATW", _floor_grade(_weighted_rating_average(row, model["athletic"], use_max=True))),
+        ("ODRW", durability), ("OSZW", size)]))
+    overall = _floor_grade(combine([("OATW", athletic), ("OINW", intangibles), ("OLNW", learning), ("ODRW", durability),
+                                    ("OPTW", potential), ("OSZW", size)], extra_weight=f["OPDW"]))
+    if overall is None:
         return None
-    return max(0.0, min(99.0, sum(w * v for w, v in parts) / total))
+    return {"athletic": athletic, "intangibles": intangibles, "learning": learning, "durability": durability,
+            "potential": potential, "size": size, "overall": max(0, min(99, overall))}
+
+
+def estimate_philosophy_overall(row, model, size_population):
+    """The overall the game's Evaluate Roster screen shows for this player under one philosophy, rebuilt from the game's
+    own formulas (see philosophy_grades); None if it can't be worked out. Within 1 point of the game's number for 51 of
+    55 readings (CB, SS, DT, FS) and never more than 3 off."""
+    grades = philosophy_grades(row, model, size_population)
+    return None if grades is None else grades["overall"]
 
 
 def philosophy_key_ratings(weights, n=8):
@@ -3418,6 +3463,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
         self._groups = {label: (field, ppos) for label, field, ppos in PHILOSOPHY_GROUPS}
         self._preset_ids = {}
         self._size_pops = {}
+        self._grades = {}
 
         top = ttk.Frame(self)
         top.pack(fill="x", padx=12, pady=(12, 4))
@@ -3448,12 +3494,14 @@ class PlayerTypeFitDialog(tk.Toplevel):
         self.lbl_key.pack(anchor="w", padx=12, pady=(4, 2))
         ttk.Label(
             self, foreground="gray", wraplength=780, justify="left",
-            text="Est. OVR estimates the overall the game's Evaluate Roster screen shows for a player under this preset, rebuilt "
-                 "from the game's own weights for it (athletic and skill ratings, learning, durability, height and weight). It is an "
-                 "estimate, not the game's number: against 55 readings taken from the game (cornerbacks, safeties and defensive "
-                 "tackles) it was within 2 points for most and within 3 for nearly all, and the worst was 5 off; an unusual build may "
-                 "be further out. Other positions use the same method but haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that player's team has "
-                 "now. Nothing is changed.",
+            text="Est. OVR rebuilds the overall the game's Evaluate Roster screen shows for a player under this preset, with the "
+                 "game's own formulas: seven grades (Athletic, Intangibles, Learning, Durability, Potential, Size, Production) "
+                 "combined with the preset's weights. Athletic, Intangibles, Learning and Potential are the game's exact formulas, "
+                 "Durability is close, Size is approximated from height and weight, and Production is counted as 0. Against 55 "
+                 "readings taken from the game (cornerbacks, safeties and defensive tackles) it was within 1 point for 51 and never "
+                 "more than 3 off; an unusual build could be a little further out. Other positions use the same formulas but "
+                 "haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that "
+                 "player's team has now. Nothing is changed.",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
         table_frm = ttk.Frame(self)
@@ -3469,6 +3517,9 @@ class PlayerTypeFitDialog(tk.Toplevel):
         self.tree.configure(yscrollcommand=yscroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
         yscroll.pack(side="right", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._on_select())
+        self.lbl_grades = ttk.Label(self, wraplength=780, justify="left")
+        self.lbl_grades.pack(anchor="w", padx=12, pady=(0, 6))
 
         btn_frm = ttk.Frame(self)
         btn_frm.pack(fill="x", padx=12, pady=(0, 12))
@@ -3547,17 +3598,20 @@ class PlayerTypeFitDialog(tk.Toplevel):
         if label not in self._size_pops:
             self._size_pops[label] = philosophy_size_population(self.model.players, group_ppos)
         size_pop = self._size_pops[label]
-        balanced = philosophy_balanced_skill(field)
 
         names = PHILOSOPHY_VALUES[field]
         everyone = self.other_var.get()
+        self._grades = {}
+        self.lbl_grades.configure(text="Select a player to see his grades.")
         count = 0
         for r in self._pool_rows():
             if not everyone and (r.get(PLAYER_POS_CODE, "") or "").strip() not in group_ppos:
                 continue
-            est = estimate_philosophy_overall(r, model, size_pop, balanced)
-            if est is None:
+            grades = philosophy_grades(r, model, size_pop)
+            if grades is None:
                 continue
+            est = grades["overall"]
+            self._grades[str(count)] = grades
             team_id = self.model.player_team_id(r)
             pick_value = self._team_pick_value(team_id, field)
             self.tree.insert("", tk.END, iid=str(count), values=(
@@ -3567,6 +3621,19 @@ class PlayerTypeFitDialog(tk.Toplevel):
 
         self._sort_state = {}
         self._sort_by("est", default_reverse=True)
+
+    def _on_select(self):
+        """Show the selected player's grades, as the game's Roster Breakdown does."""
+        sel = self.tree.selection()
+        g = self._grades.get(sel[0]) if sel else None
+        if not g:
+            self.lbl_grades.configure(text="Select a player to see his grades.")
+            return
+        shown = lambda v: "-" if v is None else f"{v:.0f}"
+        self.lbl_grades.configure(text=(
+            f"{self.tree.set(sel[0], 'name')} under this preset - Athletic {shown(g['athletic'])}, Intangibles "
+            f"{shown(g['intangibles'])}, Learning {shown(g['learning'])}, Durability {shown(g['durability'])}, "
+            f"Potential {shown(g['potential'])}, Size {shown(g['size'])} (approximate), Production counted as 0."))
 
     def _sort_by(self, col, default_reverse=None):
         reverse = self._sort_state.get(col, False) if default_reverse is None else default_reverse
@@ -7429,15 +7496,15 @@ class App(tk.Tk):
         return path or ""
 
     def _extract_philosophy_weights_from_game(self):
-        """Pull the PEAW / PEIW / PEOW / PESW tables out of the user's own qkl_boot.ast into a local cache and load
-        them. Returns True if the philosophy weights are now available."""
+        """Pull the PEAW / PEIW / PEOW / PESW / LPHC tables out of the user's own qkl_boot.ast into a local cache and
+        load them. Returns True if the philosophy weights are now available."""
         boot_ast = self._find_boot_ast()
         if not boot_ast:
             return False
         self.config(cursor="watch")
         self.update_idletasks()
         try:
-            self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", ",".join(PHILOSOPHY_WEIGHT_TABLES),
+            self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", ",".join(PHILOSOPHY_WEIGHT_TABLES + (BODY_WEIGHT_TABLE,)),
                                    "--out-dir", PHILOSOPHY_CACHE_DIR])
         except Exception as e:
             messagebox.showerror("Couldn't read game data", str(e))
