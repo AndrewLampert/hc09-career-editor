@@ -853,6 +853,90 @@ STAFF_SPECIAL_SKILLS = {
     61: "Potential Intuition",
 }
 STAFF_SKILL_BITS = (1 << len(STAFF_SPECIAL_SKILLS)) - 1
+# What each skill does, in the game's words (its table ESPS, column SPDC).
+STAFF_SKILL_DESCRIPTIONS = {
+    0: "Increases a free agent coach's compatibility with the team going into the hiring process",
+    1: 'Players will recover Health faster during the offseason',
+    2: 'Instantly unlocks ALL scouting information for every projected 1st Round Draft Pick.',
+    3: 'Instantly unlocks ALL scouting information for some top players in the Draft Class - occurs at the start of each scouting period',
+    4: 'Increases the effects of positive Approval changes and decreases the effects of negative Approval changes',
+    5: 'Players coming off of injury status will return with the injured body part at maximum health',
+    6: 'Allows the team to select one or more additional Agenda Items in game planning each week',
+    7: 'Decreases the rate at which players lose Play Knowledge during the offseason',
+    8: "Directly impacts how quickly a player's stats will develop",
+    9: 'Reduces the cost of all other Special Skills for this staff member by 15%',
+    10: "Reduces the negative impact to a player's stats that is normally associated with low levels of health and fatigue",
+    11: 'Players have an increased percent chance of successfully blocking',
+    12: 'Players have an increased percent chance of successfully tackling',
+    13: 'Quarterbacks have an increased percent chance of finding the right receiver',
+    14: 'Players have an increased percent chance of successfully catching the ball',
+    15: 'Players have an increased percent chance of successfully breaking tackles',
+    16: 'Players have an increased percent chance of successfully shedding blocks',
+    17: 'Players have an increased percent chance of successfully making a play on the ball',
+    18: 'Players have an increased percent chance of successfully pressing',
+    19: 'Players have an increased percent chance of successfully releasing',
+    20: 'Players have an increased percent chance of successfully forcing fumbles',
+    21: 'Players have a reduced percent chance of fumbling the ball',
+    22: 'Makes the effects of all Emotional Reaction decisions slightly more positive in terms of Approval',
+    23: 'Guarantees that the Coordinators will be able to steal plays from the opponent at the end of every game',
+    24: "Reduces or negates the permanent impact to a player's attributes that can be caused by severe injuries",
+    25: 'Unlocks additional scouting information about players from small schools during the scouting process',
+    26: 'Unlocks additional scouting information about players from mid-major schools during the scouting process',
+    27: 'Unlocks additional scouting information about players from major schools during the scouting process',
+    28: 'Every play used in practice is set to Learned level after one rep',
+    29: "Decreases the rate at which players' Play Knowledge degrades during the regular season",
+    30: 'Increases the rate at which the players that report to this coach will learn plays',
+    31: 'Improves defensive player stats to increase the effectiveness of blitz defenses',
+    32: "Increases stats which impact the defense's ability to employ effective coverage",
+    33: "Improves player stats that impact a defensive back's ability to effectively cover the opponent's receivers",
+    34: 'Increases player stats that impact the ability to learn and remember plays',
+    35: 'Permanently increases EVERY Skill level by 1 level for every coach except the Head Coach - This effect only occurs ONCE at the time the skill is purchased!',
+    36: 'Increases player stats which impact high-finesse moves and fancy footwork for ball carriers',
+    37: "Increases intangible player stats which impact the ability to assess the situation on the field and remain aware of the opponent's maneuvering",
+    38: "Increases the Coordinators' play-calling skills by 1 level - This effect only occurs ONCE at the time the skill is purchased!",
+    39: 'Teaches defensive players how to find the ball, lay down huge hits, and tackle effectively',
+    40: 'Increases player stats that relate to intercepting passes',
+    41: 'Increases kicker and punter accuracy',
+    42: 'Increases kicker and punter kicking power',
+    43: 'Gives the kick returner boosts to speed and ball carrying stats when returning a kickoff or punt',
+    44: 'Generally improves kicker and punter stats',
+    45: 'Increases ALL coach skill levels related to developing player attributes for each staff member reporting to this coach, while the staff member is on the team.',
+    46: 'Generally improves linebacker stats',
+    47: 'Adds one level to the highest available Skill level for EVERY regular Skill for EVERY coach. This effect only occurs ONCE at the time of purchase.',
+    48: 'Increases the Potential (Max) value for ALL attributes for player that report to this coach.',
+    49: 'Generally improves the stats of offensive linemen',
+    50: 'Improves the ability of the offense to block effectively for the pass',
+    51: 'Increases stats of the quarterback and receivers that involve passing and catching',
+    52: 'Increases quarterback stats related to passing power and accuracy',
+    53: "Increases quarterback's awareness and evasion of defenders",
+    54: 'Increases receiver stats related to catching',
+    55: 'Generally increases player stats which relate to blocking for the run',
+    56: 'Increases halfback stats which relate to carrying the ball',
+    57: 'Generally increases player stats that relate to the running game',
+    58: 'Increases speed, acceleration, and agility',
+    59: 'Increases player strength and magnifies hitting power',
+    60: 'Increases the Strategy skill level of all coaches that report to the coach by 2 levels.  This effect only occurs ONCE at the time the skill is purchased!',
+    61: 'Adds the Potential Grade to the information unlocked about any players scouted during Pro Day Scouting in the off-season',
+}
+# Which skills the game offers each kind of staff (its table LSSD): the head coach has 44 (the game shows "3 / 44"),
+# the coordinators 28 and 23, a special teams coach 4, a trainer 4, a GM 7, position coaches 5 to 8.
+STAFF_ROLE_SKILLS = {   # staff role -> the skills the game offers it (its table LSSD)
+    'HC': (4, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60),
+    'OC': (7, 8, 9, 11, 13, 14, 15, 19, 21, 23, 28, 29, 30, 34, 36, 37, 38, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59),
+    'DC': (7, 8, 9, 12, 16, 17, 18, 20, 23, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39, 40, 46, 58, 59),
+    'ST': (41, 42, 43, 44),
+    'QB': (13, 34, 37, 52, 53, 58, 59),
+    'RB': (15, 21, 34, 36, 37, 56, 58, 59),
+    'WR': (14, 19, 34, 37, 54, 58, 59),
+    'OL': (11, 34, 37, 50, 55, 58, 59),
+    'DL': (16, 34, 37, 58, 59),
+    'LB': (12, 20, 31, 34, 37, 39, 58, 59),
+    'DB': (18, 32, 34, 37, 40, 58, 59),
+    'GM': (0, 2, 3, 25, 26, 27, 61),
+    'TR': (1, 5, 10, 24),
+}
+# COCH's COPS (coach position) -> the key above
+STAFF_COACH_ROLE = {"0": "HC", "1": "OC", "2": "DC", "3": "ST", "4": "QB", "5": "RB", "6": "WR", "7": "OL", "8": "LB", "9": "DL", "10": "DB"}
 
 
 def staff_skills_from_mask(mask):
@@ -3054,48 +3138,83 @@ class PersonalityDialog(tk.Toplevel):
 
 class StaffSkillsDialog(tk.Toplevel):
     """The special skills of one staff member (coach, trainer or GM), by the game's names. A skill is one bit of the
-    person's mask in the save's PSSK table (see STAFF_SPECIAL_SKILLS). Apply writes just that mask."""
+    person's mask in the save's PSSK table (see STAFF_SPECIAL_SKILLS). Only the skills the game offers the person's role
+    are shown (STAFF_ROLE_SKILLS), plus any he already holds; a switch shows all 62. Apply writes just the mask."""
 
-    ROWS = 21     # skills per column
-
-    def __init__(self, parent, model, pnid, subject_label):
+    def __init__(self, parent, model, pnid, subject_label, role):
         super().__init__(parent)
         p = getattr(parent, "_ui_palette", None)
         if p:
             self.configure(background=p["bg"])
         self.title("Special skills")
         self.transient(parent)
-        self.parent, self.model, self.pnid = parent, model, str(pnid)
+        self.parent, self.model, self.pnid, self.role = parent, model, str(pnid), role
         self._mask = model.staff_skills_mask(pnid)
+        self.offered = set(STAFF_ROLE_SKILLS.get(role, ()))
+        held = set(staff_skills_from_mask(self._mask))
+        self.always = self.offered | held          # shown even without the switch
 
         btn = ttk.Frame(self)
         btn.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
         ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Tick all", command=self._tick_all).pack(side="right", padx=(0, 8))
         self.lbl_count = ttk.Label(btn, foreground="gray")
         self.lbl_count.pack(side="left")
 
         ttk.Label(self, text=subject_label, font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
-        ttk.Label(self, foreground="gray", wraplength=640, justify="left", padding=(12, 2, 12, 6),
-                  text="Tick the special skills this person has. The names are the game's own, matched to the save from "
-                       "the game's data (each skill turned up only on the staff it belongs to); not yet checked on the "
-                       "game's screen - try changes on a copy of your save.").pack(anchor="w")
+        ttk.Label(self, foreground="gray", wraplength=640, justify="left", padding=(12, 2, 12, 4),
+                  text="Tick the special skills this person has. These are the skills the game offers this role, with the "
+                       "game's names and descriptions (hover over one). Checked in the game: a skill added here shows as "
+                       "acquired on the staff card. Try changes on a copy of your save.").pack(anchor="w")
+        self.show_all = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self, text="Show all 62 skills, including ones the game doesn't offer this role",
+                        variable=self.show_all, command=self._layout).pack(anchor="w", padx=12)
 
-        grid = ttk.Frame(self)
-        grid.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        self.vars = {}
+        self.grid_frm = ttk.Frame(self)
+        self.grid_frm.pack(fill="both", expand=True, padx=12, pady=(6, 4))
+        self.vars, self.checks = {}, {}
         for n, name in STAFF_SPECIAL_SKILLS.items():
             var = tk.BooleanVar(value=bool(self._mask >> n & 1))
             var.trace_add("write", lambda *_: self._count())
             self.vars[n] = var
-            ttk.Checkbutton(grid, text=name, variable=var).grid(row=n % self.ROWS, column=n // self.ROWS, sticky="w", padx=(0, 14), pady=1)
-        self._count()
+            cb = ttk.Checkbutton(self.grid_frm, text=name, variable=var)
+            cb.bind("<Enter>", lambda e, n=n: self._describe(n))
+            self.checks[n] = cb
+        self.lbl_desc = ttk.Label(self, wraplength=620, justify="left", foreground="gray", padding=(12, 0, 12, 4))
+        self.lbl_desc.pack(anchor="w", fill="x")
+        self._describe(None)
+        self._layout()
         self.bind("<Escape>", lambda e: self.destroy())
         self.grab_set()
 
+    def _layout(self):
+        """Show the skills the role is offered (or all of them), in the game's order, in as many columns as they need."""
+        shown = sorted(STAFF_SPECIAL_SKILLS) if self.show_all.get() else sorted(self.always)
+        for cb in self.checks.values():
+            cb.grid_forget()
+        cols = 1 if len(shown) <= 8 else (2 if len(shown) <= 24 else 3)
+        rows = -(-len(shown) // cols)
+        for i, n in enumerate(shown):
+            self.checks[n].grid(row=i % rows, column=i // rows, sticky="w", padx=(0, 14), pady=1)
+        self._count()
+
+    def _tick_all(self):
+        """Tick every skill the game offers this role (the dialog's version of the Max button)."""
+        for n in self.offered:
+            self.vars[n].set(True)
+
+    def _describe(self, n):
+        self.lbl_desc.configure(text="Hover over a skill to see what it does." if n is None
+                                else f"{STAFF_SPECIAL_SKILLS[n]}: {STAFF_SKILL_DESCRIPTIONS[n]}")
+
     def _count(self):
-        n = sum(1 for v in self.vars.values() if v.get())
-        self.lbl_count.configure(text=f"{n} selected")
+        inside = sum(1 for n, v in self.vars.items() if v.get() and n in self.offered)
+        outside = sum(1 for n, v in self.vars.items() if v.get() and n not in self.offered)
+        text = f"{inside} / {len(self.offered)} selected"
+        if outside:
+            text += f" (+{outside} the game doesn't offer this role)"
+        self.lbl_count.configure(text=text)
 
     def _apply(self):
         chosen = sum(1 << n for n, v in self.vars.items() if v.get())
@@ -6072,6 +6191,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_trainer).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Trainer's Stats", command=self.on_max_selected_trainer).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Special skills...", command=self.on_open_trainer_skills).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Max Special Skills", command=self.on_max_trainer_skills).pack(side="left", padx=(8, 0))
         self._build_staff_team_filter(top)
 
         help_text = (
@@ -6118,6 +6238,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Max Selected Coach's Stats", command=self.on_max_selected_coach).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Personality...", command=self.on_open_coach_personality_editor).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Special skills...", command=self.on_open_coach_skills).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Max Special Skills", command=self.on_max_coach_skills).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Team Philosophy...", command=self.on_open_team_philosophy).pack(side="left", padx=(8, 0))
 
         # Search controls for coach first/last name
@@ -6178,6 +6299,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_gm).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected GM's Stats", command=self.on_max_selected_gm).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Special skills...", command=self.on_open_gm_skills).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Max Special Skills", command=self.on_max_gm_skills).pack(side="left", padx=(8, 0))
         self._build_staff_team_filter(top)
 
         help_text = (
@@ -7870,40 +7992,83 @@ class App(tk.Tk):
             subject_kind="coach",
         )
 
-    def _open_staff_skills(self, tree, rows, label_of, who):
-        """Open the special skills dialog for the person selected in one of the staff tabs."""
+    def _skills_kind(self, kind):
+        """(tree, rows, label_of, who, role_of) for the Coach, Trainer or GM tab."""
+        def team_of(r):
+            tid = (r.get("TGID", "") or "").strip()
+            return team_nickname(tid) or tid
+        if kind == "coach":
+            def label(r):
+                name = f"{(r.get('CFNM', '') or '').strip()} {(r.get('CLNM', '') or '').strip()}".strip()
+                pos = COACH_POSITION_LABELS.get((r.get("COPS", "") or "").strip(), "")
+                return f"Coach: {name} ({pos}, {team_of(r)})".replace("(, ", "(")
+            return (self.tree_coach, self.model.coaches, label, "coach",
+                    lambda r: STAFF_COACH_ROLE.get((r.get("COPS", "") or "").strip(), "HC"))
+        if kind == "trainer":
+            return self.tree_trainer, self.model.trainers, lambda r: f"Trainer: {team_of(r)}", "trainer", lambda r: "TR"
+        return self.tree_gm, self.model.gms, lambda r: f"GM: {team_of(r)}", "GM", lambda r: "GM"
+
+    def _staff_skills_target(self, kind, auto_select):
+        """The person selected in a staff tab as (PNid, label, role), or None after telling the user why not.
+        auto_select: pick the first row if none is selected, as the Max buttons do."""
+        tree, rows, label_of, who, role_of = self._skills_kind(kind)
         if not self.model.pssk_headers:
             messagebox.showinfo("Special skills", "This save has no special skills table.")
-            return
-        sel = tree.selection()
+            return None
+        sel = self._ensure_tree_selection(tree) if auto_select else tree.selection()
         if not sel:
             messagebox.showinfo(f"No {who}", f"Select a {who} first.")
-            return
+            return None
         try:
             row = rows[int(sel[0])]
         except (ValueError, IndexError):
-            return
+            return None
         pnid = (row.get("PNid", "") or "").strip()
         if not pnid:
             messagebox.showinfo("Special skills", f"This {who} has no person ID in the save.")
+            return None
+        return pnid, label_of(row), role_of(row)
+
+    def _open_staff_skills(self, kind):
+        target = self._staff_skills_target(kind, auto_select=False)
+        if target:
+            pnid, label, role = target
+            StaffSkillsDialog(self, self.model, pnid, label, role)
+
+    def _max_staff_skills(self, kind):
+        """Give the selected person every special skill the game offers his role (the Max button)."""
+        target = self._staff_skills_target(kind, auto_select=True)
+        if not target:
             return
-        StaffSkillsDialog(self, self.model, pnid, label_of(row))
+        pnid, label, role = target
+        offered = STAFF_ROLE_SKILLS.get(role, ())
+        mask = self.model.staff_skills_mask(pnid)
+        full = mask | sum(1 << n for n in offered)
+        if full == mask:
+            messagebox.showinfo("Special skills", f"{label.split(': ', 1)[-1]} already has all {len(offered)} special skills the game offers.")
+            return
+        self.model.set_staff_skills_mask(pnid, full)
+        self.mark_dirty()
+        messagebox.showinfo("Special skills", f"{label.split(': ', 1)[-1]} now has all {len(offered)} special skills the game offers "
+                                              "this role. Save to File to keep it.")
 
     def on_open_coach_skills(self):
-        def label(r):
-            name = f"{(r.get('CFNM', '') or '').strip()} {(r.get('CLNM', '') or '').strip()}".strip()
-            pos = COACH_POSITION_LABELS.get((r.get("COPS", "") or "").strip(), "")
-            tid = (r.get("TGID", "") or "").strip()
-            return f"Coach: {name} ({pos}, {team_nickname(tid) or tid})".replace("(, ", "(")
-        self._open_staff_skills(self.tree_coach, self.model.coaches, label, "coach")
+        self._open_staff_skills("coach")
 
     def on_open_trainer_skills(self):
-        self._open_staff_skills(self.tree_trainer, self.model.trainers,
-                                lambda r: f"Trainer: {team_nickname((r.get('TGID', '') or '').strip()) or (r.get('TGID', '') or '').strip()}", "trainer")
+        self._open_staff_skills("trainer")
 
     def on_open_gm_skills(self):
-        self._open_staff_skills(self.tree_gm, self.model.gms,
-                                lambda r: f"GM: {team_nickname((r.get('TGID', '') or '').strip()) or (r.get('TGID', '') or '').strip()}", "GM")
+        self._open_staff_skills("gm")
+
+    def on_max_coach_skills(self):
+        self._max_staff_skills("coach")
+
+    def on_max_trainer_skills(self):
+        self._max_staff_skills("trainer")
+
+    def on_max_gm_skills(self):
+        self._max_staff_skills("gm")
 
     def on_open_team_philosophy(self):
         """The team philosophy the game's Team Philosophy screen shows (TPHS table), for the
