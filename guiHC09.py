@@ -34,7 +34,7 @@ import threading
 import time
 import subprocess
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import font as tkfont, ttk, filedialog, messagebox
 
 try:
     from PIL import Image, ImageTk
@@ -154,6 +154,7 @@ DB_TABLE_FILES = {
     "TEAM": "team.csv",
     "cINF": "cinf.csv",
     "TPHS": "tphs.csv",
+    "PSSK": "pssk.csv",
 }
 # (table code, CSVModel rows attr, headers attr, path attr) - drives
 # load_all_from_db/save_to_db/_finish_load's per-table wiring below, so
@@ -172,6 +173,7 @@ DB_TABLE_ATTRS = [
     ("TEAM", "team", "team_headers", "team_path"),
     ("cINF", "cinf", "cinf_headers", "cinf_path"),
     ("TPHS", "tphs", "tphs_headers", "tphs_path"),
+    ("PSSK", "pssk", "pssk_headers", "pssk_path"),
 ]
 
 # cINF (1 row, global/save-level state) has a SEYR field ("Season Year" per
@@ -824,29 +826,148 @@ del _cat, _cur, _mx, _catname, _b
 # in the Coach tab (see is_cops_column in _on_tree_double_click), not the
 # generic numeric entry box, since it's a fixed set of labeled codes rather
 # than an arbitrary integer.
+# Staff special skills (the game's table ESPS, 62 of them). A person's skills are one bit each in the
+# 64-bit SPSB mask of the save's PSSK table (hex text; bit n is skill n; PNid is the person, the same
+# PNid as on their COCH / TRVW / GMVW row). People with no special skill have no row. The order was
+# checked from the data: every skill sits only on the staff it belongs to (Accommodation and the
+# "...School Insider" skills only on GMs, Off Season Rehab and Cardio Training only on trainers, the
+# blocking skills on offensive line coaches, kick skills on special teams coaches, and so on). Not yet
+# checked on the game's screen.
+STAFF_SPECIAL_SKILLS = {
+    0: "Accommodation", 1: "Off Season Rehab", 2: "First Round Intuition", 3: "Draft Intuition", 4: "Charisma",
+    5: "Specialized Rehabilitation", 6: "Practice Film Evaluation", 7: "Off Season Seminar", 8: "Innovator",
+    9: "Ambition", 10: "Cardio Training Program", 11: "Improved Blocking", 12: "Improved Tackling",
+    13: "Improved QB Reads", 14: "Improved Catching", 15: "Improved Break Tackle", 16: "Improved Block Shedding",
+    17: "Improved Defending", 18: "Improved Press", 19: "Improved Release", 20: "Improved Forced Fumble",
+    21: "Improved Carrying", 22: "Charm", 23: "Play Stealing", 24: "Long Term Rehabilitation",
+    25: "Small School Insider", 26: "Mid Major School Insider", 27: "Major School Insider",
+    28: "Advanced Playbook Training", 29: "Regular Season Seminar", 30: "Playbook Training", 31: "Blitz Discipline",
+    32: "Coverage Analysis", 33: "Defensive Back Discipline", 34: "Disciplined Routine", 35: "Educator",
+    36: "Improved Ball Carrier Moves", 37: "Game Film Analysis", 38: "Gameplan Analysis", 39: "Hard Hit Training",
+    40: "Interception Training", 41: "Kick Accuracy Training", 42: "Kick Power Training",
+    43: "Kick Return Discipline", 44: "Kicking Discipline", 45: "Leadership", 46: "Linebacker Discipline",
+    47: "Mentor", 48: "Motivator", 49: "Offensive Line Discipline", 50: "Pass Blocking Discipline",
+    51: "Passing Game Discipline", 52: "QB Passing Discipline", 53: "Quarterback Readiness",
+    54: "Receiver Discipline", 55: "Run Blocking Discipline", 56: "Running Back Discipline",
+    57: "Running Game Discipline", 58: "Speed Training", 59: "Strength Training", 60: "Superb Strategist",
+    61: "Potential Intuition",
+}
+STAFF_SKILL_BITS = (1 << len(STAFF_SPECIAL_SKILLS)) - 1
+# What each skill does, in the game's words (its table ESPS, column SPDC).
+STAFF_SKILL_DESCRIPTIONS = {
+    0: "Increases a free agent coach's compatibility with the team going into the hiring process",
+    1: 'Players will recover Health faster during the offseason',
+    2: 'Instantly unlocks ALL scouting information for every projected 1st Round Draft Pick.',
+    3: 'Instantly unlocks ALL scouting information for some top players in the Draft Class - occurs at the start of each scouting period',
+    4: 'Increases the effects of positive Approval changes and decreases the effects of negative Approval changes',
+    5: 'Players coming off of injury status will return with the injured body part at maximum health',
+    6: 'Allows the team to select one or more additional Agenda Items in game planning each week',
+    7: 'Decreases the rate at which players lose Play Knowledge during the offseason',
+    8: "Directly impacts how quickly a player's stats will develop",
+    9: 'Reduces the cost of all other Special Skills for this staff member by 15%',
+    10: "Reduces the negative impact to a player's stats that is normally associated with low levels of health and fatigue",
+    11: 'Players have an increased percent chance of successfully blocking',
+    12: 'Players have an increased percent chance of successfully tackling',
+    13: 'Quarterbacks have an increased percent chance of finding the right receiver',
+    14: 'Players have an increased percent chance of successfully catching the ball',
+    15: 'Players have an increased percent chance of successfully breaking tackles',
+    16: 'Players have an increased percent chance of successfully shedding blocks',
+    17: 'Players have an increased percent chance of successfully making a play on the ball',
+    18: 'Players have an increased percent chance of successfully pressing',
+    19: 'Players have an increased percent chance of successfully releasing',
+    20: 'Players have an increased percent chance of successfully forcing fumbles',
+    21: 'Players have a reduced percent chance of fumbling the ball',
+    22: 'Makes the effects of all Emotional Reaction decisions slightly more positive in terms of Approval',
+    23: 'Guarantees that the Coordinators will be able to steal plays from the opponent at the end of every game',
+    24: "Reduces or negates the permanent impact to a player's attributes that can be caused by severe injuries",
+    25: 'Unlocks additional scouting information about players from small schools during the scouting process',
+    26: 'Unlocks additional scouting information about players from mid-major schools during the scouting process',
+    27: 'Unlocks additional scouting information about players from major schools during the scouting process',
+    28: 'Every play used in practice is set to Learned level after one rep',
+    29: "Decreases the rate at which players' Play Knowledge degrades during the regular season",
+    30: 'Increases the rate at which the players that report to this coach will learn plays',
+    31: 'Improves defensive player stats to increase the effectiveness of blitz defenses',
+    32: "Increases stats which impact the defense's ability to employ effective coverage",
+    33: "Improves player stats that impact a defensive back's ability to effectively cover the opponent's receivers",
+    34: 'Increases player stats that impact the ability to learn and remember plays',
+    35: 'Permanently increases EVERY Skill level by 1 level for every coach except the Head Coach - This effect only occurs ONCE at the time the skill is purchased!',
+    36: 'Increases player stats which impact high-finesse moves and fancy footwork for ball carriers',
+    37: "Increases intangible player stats which impact the ability to assess the situation on the field and remain aware of the opponent's maneuvering",
+    38: "Increases the Coordinators' play-calling skills by 1 level - This effect only occurs ONCE at the time the skill is purchased!",
+    39: 'Teaches defensive players how to find the ball, lay down huge hits, and tackle effectively',
+    40: 'Increases player stats that relate to intercepting passes',
+    41: 'Increases kicker and punter accuracy',
+    42: 'Increases kicker and punter kicking power',
+    43: 'Gives the kick returner boosts to speed and ball carrying stats when returning a kickoff or punt',
+    44: 'Generally improves kicker and punter stats',
+    45: 'Increases ALL coach skill levels related to developing player attributes for each staff member reporting to this coach, while the staff member is on the team.',
+    46: 'Generally improves linebacker stats',
+    47: 'Adds one level to the highest available Skill level for EVERY regular Skill for EVERY coach. This effect only occurs ONCE at the time of purchase.',
+    48: 'Increases the Potential (Max) value for ALL attributes for player that report to this coach.',
+    49: 'Generally improves the stats of offensive linemen',
+    50: 'Improves the ability of the offense to block effectively for the pass',
+    51: 'Increases stats of the quarterback and receivers that involve passing and catching',
+    52: 'Increases quarterback stats related to passing power and accuracy',
+    53: "Increases quarterback's awareness and evasion of defenders",
+    54: 'Increases receiver stats related to catching',
+    55: 'Generally increases player stats which relate to blocking for the run',
+    56: 'Increases halfback stats which relate to carrying the ball',
+    57: 'Generally increases player stats that relate to the running game',
+    58: 'Increases speed, acceleration, and agility',
+    59: 'Increases player strength and magnifies hitting power',
+    60: 'Increases the Strategy skill level of all coaches that report to the coach by 2 levels.  This effect only occurs ONCE at the time the skill is purchased!',
+    61: 'Adds the Potential Grade to the information unlocked about any players scouted during Pro Day Scouting in the off-season',
+}
+# Which skills the game offers each kind of staff (its table LSSD): the head coach has 44 (the game shows "3 / 44"),
+# the coordinators 28 and 23, a special teams coach 4, a trainer 4, a GM 7, position coaches 5 to 8.
+STAFF_ROLE_SKILLS = {   # staff role -> the skills the game offers it (its table LSSD)
+    'HC': (4, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60),
+    'OC': (7, 8, 9, 11, 13, 14, 15, 19, 21, 23, 28, 29, 30, 34, 36, 37, 38, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59),
+    'DC': (7, 8, 9, 12, 16, 17, 18, 20, 23, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39, 40, 46, 58, 59),
+    'ST': (41, 42, 43, 44),
+    'QB': (13, 34, 37, 52, 53, 58, 59),
+    'RB': (15, 21, 34, 36, 37, 56, 58, 59),
+    'WR': (14, 19, 34, 37, 54, 58, 59),
+    'OL': (11, 34, 37, 50, 55, 58, 59),
+    'DL': (16, 34, 37, 58, 59),
+    'LB': (12, 20, 31, 34, 37, 39, 58, 59),
+    'DB': (18, 32, 34, 37, 40, 58, 59),
+    'GM': (0, 2, 3, 25, 26, 27, 61),
+    'TR': (1, 5, 10, 24),
+}
+# COCH's COPS (coach position) -> the key above
+STAFF_COACH_ROLE = {"0": "HC", "1": "OC", "2": "DC", "3": "ST", "4": "QB", "5": "RB", "6": "WR", "7": "OL", "8": "LB", "9": "DL", "10": "DB"}
+
+
+def staff_skills_from_mask(mask):
+    """The skill numbers whose bit is set in a PSSK mask."""
+    return [n for n in STAFF_SPECIAL_SKILLS if mask >> n & 1]
+
+
 COACH_POSITION_LABELS = {
     "0": "HC", "1": "OC", "2": "DC", "3": "STC", "4": "QBC", "5": "RBC",
     "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
 }
 
-# Team philosophy: the schemes and philosophies the game's Team Philosophy screen
-# shows, stored per team in the TPHS table (the same field codes also appear on each
-# coach row, COCH, but that screen does not read those). Value names come from the
-# community HC09 config (docs/hc09_field_reference.md); the number is what is stored
-# in the save. CHECKED IN THE GAME'S Team Philosophy screen, both ways (changed in
-# game and read back from the save; written by the editor and read off the screen):
-# NHPP 0 Heavily / 1 Balanced / 2 Rarely; OPPP 0 Head Coach / 1 Offensive Coordinator;
-# OSPP 0 West Coast Normal / 2 Vertical Passing / 3 Spread / 4 Power Running (the
-# config says "Speed" for 3); DSPP 0 3-4; DPPP 1 Defensive Coordinator; BZPP 0 Heavy;
-# CVPP 2 Zone; DMPP 0 Aggressive; QBPP 0 Mobile/Speed; CBPP 61 Man; KKPP 75 Power (the
-# game words the position ones in full, e.g. "Man Coverage/Ballhawk CB", "Big Foot/
-# Distance K"); FS 67, SS 74 and punter 79 match what the screen shows. The other names
-# in each list are the config's and have not been checked.
+# Team philosophy: every setting on the game's Team Philosophy screen, stored per team in the
+# TPHS table (110 fields; the same field codes also appear on each coach row, COCH, but that
+# screen does not read those). The names and value lists are the game's own, read from its data
+# (qkl_boot.ast): table EGPP names every position preset (value 0-80), PCAT lists the 110
+# categories, and a small table per category names its values (see docs/hc09_gamedata_findings.md).
+# The community HC09 config's lists differ in places (its tight end list is in a different order).
+# CHECKED IN THE GAME'S Team Philosophy screen, both ways (changed in game and read back from the
+# save; written by the editor and read off the screen): NHPP 0 Heavily / 1 Balanced / 2 Rarely;
+# OPPP 0 Head Coach / 1 Offensive Coordinator; OSPP 0 West Coast Normal / 2 Vertical Passing /
+# 3 Spread / 4 Power Running; DSPP 0 3-4; DPPP 1 Defensive Coordinator; BZPP 0 Heavy; CVPP 2 Zone;
+# DMPP 0 Aggressive; QBPP 0 Mobile/Speed; CBPP 61 Man; KKPP 75 Power; FS 67, SS 74 and punter 79,
+# and (from a user's screenshots) the DT, FS and SS lists. The GM, staff, roster-minimum, health and
+# fatigue settings (tabs after "Position philosophies") are decoded from the game's data only: the
+# values are the game's, which field is which was matched from the data and not yet checked in game.
 PHILOSOPHY_VALUES = {
     "OSPP": {0: "West Coast Normal", 1: "West Coast Heavy Pass", 2: "Vertical Passing", 3: "Spread", 4: "Power Running"},
     "OPPP": {0: "Head Coach", 1: "Offensive Coordinator"},
     "NHPP": {0: "Heavily", 1: "Balanced", 2: "Rarely"},
-    "DSPP": {0: "3-4", 1: "4-3", 2: "4-6"},
+    "DSPP": {0: "3-4", 1: "4-3", 2: "46/Multiple Front"},
     "DPPP": {0: "Head Coach", 1: "Defensive Coordinator"},
     "BZPP": {0: "Heavy", 1: "Normal", 2: "Light"},
     "CVPP": {0: "Man", 1: "Cover 2", 2: "Zone"},
@@ -854,34 +975,110 @@ PHILOSOPHY_VALUES = {
     "QBPP": {0: "Mobile/Speed", 1: "Strong Arm/Tools", 2: "Pure Passer", 3: "Field General", 4: "Balanced"},
     "HBPP": {5: "Speed", 6: "Moves", 7: "Power", 8: "Receiving", 9: "Workhorse", 10: "Balanced"},
     "FBPP": {11: "Ball Carrier", 12: "Blocking", 13: "Receiving", 14: "Balanced"},
-    "WRPP": {15: "Strong", 16: "Tall", 17: "Speed", 18: "Route-Runner", 19: "Balanced"},
-    "TEPP": {20: "Playmaker", 21: "H-Back", 22: "Balanced", 23: "Soft Hands", 24: "Blocking"},
-    "TKPP": {25: "Size", 26: "Run Block", 27: "Pass Block", 28: "Zone Block", 29: "Balanced"},
-    "GDPP": {30: "Size", 31: "Run Block", 32: "Pass Block", 33: "Zone Block", 34: "Balanced"},
-    "CRPP": {35: "Size", 36: "Run Block", 37: "Pass Block", 38: "Zone Block", 39: "Balanced"},
-    "DEPP": {40: "Balanced", 41: "Prototype", 42: "Speed", 43: "Run Stopper", 44: "3-4"},
-    "DTPP": {45: "Balanced", 46: "Prototype", 47: "One-Gap Penetrator", 48: "Run Stopper", 49: "Versatile/3-4"},
-    "OLPP": {50: "Balanced", 51: "Cover 2", 52: "Run Stopper", 53: "3-4 Pass Rush", 54: "Prototype"},
-    "MLPP": {55: "Balanced", 56: "Coverage", 57: "Power", 58: "Tackler", 59: "Prototype"},
+    "WRPP": {15: "Strong/Blocking", 16: "Tall/Redzone Threat", 17: "Speed", 18: "Quick/Route Runner", 19: "Balanced"},
+    "TEPP": {20: "Soft Hands/Routes", 21: "Blocking", 22: "Playmaker", 23: "H-back", 24: "Balanced"},
+    "TKPP": {25: "Size/Strength/Engulfer", 26: "Run Block Specialist", 27: "Pass Block Specialist", 28: "Zone Blocking", 29: "Balanced"},
+    "GDPP": {30: "Size/Strength/Mauler", 31: "Run Block Specialist", 32: "Pass Block Specialist", 33: "Zone Blocking", 34: "Balanced"},
+    "CRPP": {35: "Size/Strength/Mauler", 36: "Run Block Specialist", 37: "Pass Block Specialist", 38: "Zone Blocking", 39: "Balanced"},
+    "DEPP": {40: "Balanced", 41: "Prototype", 42: "Undersized Speed Rusher", 43: "Run Stopper", 44: "Versatile/3-4"},
+    "DTPP": {45: "Balanced", 46: "Prototype", 47: "One Gap Penetrator", 48: "Run Stopper", 49: "Versatile/3-4"},
+    "OLPP": {50: "Balanced", 51: "Coverage/Cover 2", 52: "Run Stopper", 53: "PassRusher/3-4 Blitzer", 54: "Prototype"},
+    "MLPP": {55: "Balanced", 56: "Coverage/Speed", 57: "Power/Blitzer", 58: "3-4/Tackler", 59: "Prototype"},
     "CBPP": {60: "Balanced", 61: "Man Coverage/Ballhawk", 62: "Strong/Press/Run Support", 63: "Prototype", 64: "Cover 2"},
     "FSPP": {65: "Balanced", 66: "Man Coverage", 67: "Centerfielder", 68: "Prototype", 69: "Run Support/Blitzer"},
     "SsPP": {70: "Balanced", 71: "Coverage", 72: "Prototype", 73: "Run Support/Big Hitter", 74: "Smart/Productive"},
-    "KKPP": {75: "Big Foot/Distance", 76: "Accuracy", 77: "Balanced"},
-    "KPPP": {78: "Power", 79: "Pinpoint Accuracy", 80: "Balanced"},
+    "KKPP": {75: "Big Foot/Distance", 76: "Pinpoint Accuracy", 77: "Balanced"},
+    "KPPP": {78: "Big Foot/Distance", 79: "Pinpoint Accuracy", 80: "Balanced"},
+    # game management (coach decisions)
+    "BPSP": {0: "Prefers to bench", 1: "Prefers to start", 2: "Balanced"},
+    "BMCP": {0: "Prefers to bench", 1: "Prefers to start", 2: "Balanced"},
+    "BNPP": {0: "Prefers to bench", 1: "Prefers to start", 2: "Balanced"},
+    "SRQP": {0: "Prefers to start", 1: "Doesn't prefer to start", 2: "Balanced"},
+    "SRHP": {0: "Prefers to start", 1: "Doesn't prefer to start", 2: "Balanced"},
+    "IPSP": {0: "Aggressive", 1: "Moderate", 2: "Conservative"},
+    # GM and staff
+    "GmCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "OCCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "DCCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "PCCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "TRCP": {0: "Give up a lot of control", 1: "Give up some control", 2: "Give up a little control", 3: "Give up no control"},
+    "TDFP": {0: "Heavy Trader", 1: "Light Trader", 2: "Neutral"},
+    "TMSP": {0: "Passive", 1: "Normal", 2: "Aggressive"},
+    "GFTP": {0: "Overvalue future draft picks", 1: "Undervalue future draft picks", 2: "Neutral"},
+    "GTDP": {0: "Trade up", 1: "Trade down", 2: "Neutral"},
+    "DFTP": {0: "Draft best available players", 1: "Draft biggest team needs"},
+    "IWKP": {0: "Scout best available players", 1: "Scout biggest team needs"},
+    "RSSP": {0: "Big school focus", 1: "Medium school focus", 2: "Small school focus", 3: "Balanced focus", 4: "Team needs focus"},
+    "BTTP": {0: "Build through the NFL draft", 1: "Build through free agency"},
+    "PRDP": {0: "Favors overall grade", 1: "Favors role", 2: "Favors upside", 3: "Favors contract", 4: "Favors play knowledge"},
+    "CDVP": {0: "Physical development", 1: "Intangibles development", 2: "Learning development"},
+    "NGTP": {0: "Low ball", 1: "Give in to demands", 2: "Haggle", 3: "Overpay"},
+    "CINP": {0: "Cheap", 1: "Normal", 2: "Generous"},
+    "ESCP": {0: "Prefers 5M in cap room", 1: "Prefers 3M in cap room", 2: "Prefers 1M in cap room"},
+    "GSMP": {0: "Distribute money evenly", 1: "Spend on the biggest need", 2: "Spend on the 2 biggest needs", 3: "Spend on the 3 biggest needs"},
+    "FTGP": {0: "Heavily use", 1: "Sometimes use", 2: "Rarely use"},
+    "RFAP": {0: "Normal", 1: "Tender with higher compensation", 2: "Tender with lower compensation"},
+    "RSPP": {0: "Re-sign based on high approval", 1: "Re-sign all players", 2: "Based on quality"},
+    # roster minimums: the value is an index; the minimum number of players kept at the position is shown
+    "QBMP": {0: "2", 1: "3", 2: "4"}, "HBMP": {0: "2", 1: "3", 2: "4"}, "FBMP": {0: "0", 1: "1", 2: "2"},
+    "WRMP": {0: "4", 1: "5", 2: "6"}, "TEMP": {0: "2", 1: "3", 2: "4"},
+    "TKMP": {0: "3", 1: "4", 2: "5"}, "GDMP": {0: "3", 1: "4", 2: "5"}, "CRMP": {0: "1", 1: "2", 2: "3"},
+    "DEMP": {0: "3", 1: "4", 2: "5"}, "DTMP": {0: "2", 1: "3", 2: "4"},
+    "OLMP": {0: "3", 1: "4", 2: "5"}, "MLMP": {0: "2", 1: "3", 2: "4"},
+    "CBMP": {0: "4", 1: "5", 2: "6"}, "FSMP": {0: "1", 1: "2", 2: "3"}, "SSMP": {0: "1", 1: "2", 2: "3"},
+    "KKMP": {0: "1", 1: "2"}, "KPMP": {0: "0", 1: "1", 2: "2"},
 }
+# practice and game health / fatigue, one field per position group (QB HB FB WR TE OL DL LB DB K/P)
+for _suffix, _values in (
+    ("PH", {0: "Practice at moderate health", 1: "Practice at low health"}),
+    ("HS", {0: "Sub player at moderate health", 1: "Sub player at low health"}),
+    ("FP", {0: "Practice at moderate fatigue", 1: "Practice at heavy fatigue"}),
+    ("FS", {0: "Sub player at moderate fatigue", 1: "Sub player at heavy fatigue"}),
+):
+    for _group in ("QB", "HB", "FB", "WR", "TE", "OL", "DL", "LB", "DB", "KP"):
+        PHILOSOPHY_VALUES[_group + _suffix] = dict(_values)
+
+_PHILOSOPHY_HEALTH_GROUPS = [("QB", "QB"), ("HB", "HB"), ("FB", "FB"), ("WR", "WR"), ("TE", "TE"), ("OL", "OL"),
+                             ("DL", "DL"), ("LB", "LB"), ("DB", "DB"), ("KP", "K/P")]
 
 PHILOSOPHY_TABS = [
     ("Game plan", [
         ("Offense", [("OSPP", "Offensive scheme"), ("OPPP", "Offensive playbook control"), ("NHPP", "No-huddle philosophy")]),
         ("Defense", [("DSPP", "Defensive scheme"), ("DPPP", "Defensive playbook control"),
                      ("BZPP", "Blitzing"), ("CVPP", "Coverage")]),
-        ("Game management", [("DMPP", "Defining moments")]),
+        ("Game management", [("DMPP", "Defining moments"), ("BPSP", "Bench a struggling player"),
+                             ("BMCP", "Bench a player who complains to the media"), ("BNPP", "Bench a player who skips practice"),
+                             ("SRQP", "Start a rookie QB"), ("SRHP", "Start a young HB"), ("IPSP", "Playing through injuries")]),
     ]),
     ("Position philosophies", [
         ("Offense", [("QBPP", "QB"), ("HBPP", "HB"), ("FBPP", "FB"), ("WRPP", "WR"), ("TEPP", "TE"),
                      ("TKPP", "Tackle"), ("GDPP", "Guard"), ("CRPP", "Center")]),
         ("Defense", [("DEPP", "DE"), ("DTPP", "DT"), ("OLPP", "OLB"), ("MLPP", "MLB"), ("CBPP", "CB"), ("FSPP", "FS"), ("SsPP", "SS")]),
         ("Kicking", [("KKPP", "Kicker"), ("KPPP", "Punter")]),
+    ]),
+    ("GM and staff", [
+        ("Staff control", [("GmCP", "GM hire control"), ("OCCP", "Offensive coordinator hire control"),
+                           ("DCCP", "Defensive coordinator hire control"), ("PCCP", "Position coach hire control"),
+                           ("TRCP", "Trainer hire control")]),
+        ("Trading", [("TDFP", "Trading frequency"), ("TMSP", "Trading philosophy"), ("GFTP", "Future draft picks"),
+                     ("GTDP", "Draft pick trades")]),
+        ("Draft and scouting", [("DFTP", "Draft philosophy"), ("IWKP", "Workout scouting"), ("RSSP", "Regular-season scouting"),
+                                ("BTTP", "Team building"), ("PRDP", "Player roadmap evaluation"), ("CDVP", "Career development")]),
+        ("Contracts and spending", [("NGTP", "Negotiation"), ("CINP", "Counter offers"), ("ESCP", "Salary cap room"),
+                                    ("GSMP", "Spending"), ("FTGP", "Franchise tag"), ("RFAP", "Restricted free agents"),
+                                    ("RSPP", "Re-signing")]),
+    ]),
+    ("Roster minimums", [
+        ("Offense", [("QBMP", "QB"), ("HBMP", "HB"), ("FBMP", "FB"), ("WRMP", "WR"), ("TEMP", "TE"),
+                     ("TKMP", "Tackle"), ("GDMP", "Guard"), ("CRMP", "Center")]),
+        ("Defense", [("DEMP", "DE"), ("DTMP", "DT"), ("OLMP", "OLB"), ("MLMP", "MLB"), ("CBMP", "CB"), ("FSMP", "FS"), ("SSMP", "SS")]),
+        ("Kicking", [("KKMP", "Kicker"), ("KPMP", "Punter")]),
+    ]),
+    ("Health and fatigue", [
+        ("Practice health", [(g + "PH", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
+        ("Game health (substitute at)", [(g + "HS", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
+        ("Practice fatigue", [(g + "FP", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
+        ("Game fatigue (substitute at)", [(g + "FS", label) for g, label in _PHILOSOPHY_HEALTH_GROUPS]),
     ]),
 ]
 
@@ -990,9 +1187,10 @@ def safe_int(s):
 # Strong/Press weights tackling, pursuit and press, and Prototype is high everywhere.
 #
 # The Evaluate Roster overall behaves like Sum(factor weight * factor score) / Sum(factor weight), which is what
-# estimate_philosophy_overall does: OIN is the PEIW-weighted average of the skills, OAT the PEAW-weighted average of
-# the athletic ratings, OSZ a size score from height and weight (weighted by PESW), OLN learning, ODR durability and
-# OPT / OPD potential and production. Only OIN and OAT are known from the files. The other scores are stand-ins fitted
+# estimate_philosophy_overall does. The game names the grades (table EGRD: Athletic, Intangibles, Production,
+# Potential, Size, Learning, Durability): OIN Intangibles is the PEIW-weighted average of the skills, OAT Athletic the
+# PEAW-weighted average of the athletic ratings, OSZ Size a score from height and weight (weighted by PESW), OLN
+# Learning, ODR Durability, OPT Potential and OPD Production. Only OIN and OAT are known from the files. The other scores are stand-ins fitted
 # to 55 readings off the game's Evaluate Roster screen: learning is the Learning rating, durability the Injury
 # rating, potential / production the skill average under the position's own Balanced preset, and the size score is
 # built from height and weight percentiles among that position's players (the weight counts about five times as much
@@ -1281,6 +1479,10 @@ class CSVModel:
         self.tphs = []               # list[dict] - one row per team: the Team Philosophy screen (keyed by TGID)
         self.tphs_headers = []       # list[str]
         self.tphs_path = ""
+        self.pssk = []               # list[dict] - staff special skills: SPSB (64-bit mask, hex text) per person PNid
+        self.pssk_headers = []       # list[str]; empty if the save has no such table
+        self.pssk_path = ""
+        self.pssk_stored = 0         # how many PSSK rows the save file has (rows added since need the append import)
 
         self.team_col = None
         self.max_map = {}
@@ -1344,6 +1546,9 @@ class CSVModel:
 
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_save_")
         pending = {t: rows for t, rows in self.pb_pending.items() if t in PLAYBOOK_TABLE_HEADERS}
+        # Playbook edits and a first special skill for someone add rows, which an ordinary import never does, so
+        # growing is enabled for exactly the tables that grew.
+        grown = list(pending) + (["PSSK"] if len(self.pssk) > self.pssk_stored else [])
         try:
             for code, rows_attr, headers_attr, _path_attr in DB_TABLE_ATTRS:
                 rows = getattr(self, rows_attr)
@@ -1358,21 +1563,20 @@ class CSVModel:
             # No --out: save in place. (Passing --out equal to --db would hit a
             # clone-to-self race in HC09Helper.save() and corrupt the file.)
             args = ["import", "--db", self.db_path, "--in", tmp_dir]
-            if pending:
-                # Playbook edits add rows, which an ordinary import never does, so
-                # growing is enabled for exactly the edited tables.
+            if grown:
                 args += ["--tables", ",".join([c for c, *_ in DB_TABLE_ATTRS] + list(pending)),
-                         "--allow-append", ",".join(pending)]
-            if pending:
+                         "--allow-append", ",".join(grown)]
+            if grown:
                 try:
                     result = self.run_bridge(args)
                 except Exception as e:
                     # The import may have died partway through writing the file.
                     shutil.copy2(backup_path, self.db_path)
                     raise RuntimeError(
-                        "The playbook edits could not be saved, so your save was restored from its backup. "
-                        f"Details: {e}") from e
-                self._check_playbook_save(result, pending, backup_path)
+                        "The edits that add rows (playbooks, special skills) could not be saved, so your save was "
+                        f"restored from its backup. Details: {e}") from e
+                self._check_playbook_save(result, grown, backup_path)
+                self.pssk_stored = len(self.pssk)
             else:
                 self.run_bridge(args)
         finally:
@@ -1382,7 +1586,7 @@ class CSVModel:
         return backup_path
 
     def _check_playbook_save(self, import_result, pending, backup_path):
-        """After a save that grew playbook tables: every pending table must have
+        """After a save that grew tables (playbooks, special skills): every grown table must have
         been written, and the file must pass the bridge's structure check
         (every table header checksum, the checksum chain, row counts). If not,
         put the backup back rather than leave a save the game might reject."""
@@ -1400,7 +1604,7 @@ class CSVModel:
         if problems:
             shutil.copy2(backup_path, self.db_path)
             raise RuntimeError(
-                "The playbook edits could not be saved safely, so your save was restored from its backup. "
+                "The edits that add rows could not be saved safely, so your save was restored from its backup. "
                 "Details: " + "; ".join(str(p) for p in problems[:4]))
 
     def _write_csv(self, path, rows, headers):
@@ -1469,6 +1673,7 @@ class CSVModel:
             rows, headers = self.load_csv(path) if path else ([], [])
             setattr(self, rows_attr, rows)
             setattr(self, headers_attr, headers)
+        self.pssk_stored = len(self.pssk)
 
         if not self.players:
             raise ValueError("play.csv loaded 0 players/rows.")
@@ -1491,6 +1696,30 @@ class CSVModel:
 
         self.team_col = detect_team_col_case_sensitive(self.player_headers)
         self.max_map = build_player_max_map(self.player_headers)
+
+    def staff_skills_mask(self, pnid):
+        """The special-skill mask of a person (PNid), 0 if they have none. If a save has two rows for one person (the
+        game adds a new row when it doesn't find ours), the later one is the game's."""
+        found = 0
+        for r in self.pssk:
+            if (r.get("PNid", "") or "").strip() == str(pnid):
+                try:
+                    found = int((r.get("SPSB", "") or "0").strip(), 16)
+                except ValueError:
+                    found = 0
+        return found
+
+    def set_staff_skills_mask(self, pnid, mask):
+        """Set a person's special-skill mask: changes their PSSK row, or adds one if they had none (the save then
+        needs the append import, which save_to_db does)."""
+        text = "0x%016x" % mask
+        found = False
+        for r in self.pssk:                       # every row of this person, so a duplicate can't hold an old mask
+            if (r.get("PNid", "") or "").strip() == str(pnid):
+                r["SPSB"] = text
+                found = True
+        if not found:
+            self.pssk.append({"SPSB": text, "PNid": str(pnid)})
 
     def player_name(self, row):
         fn = (row.get(PLAYER_FIRST_NAME_CODE, "") or "").strip()
@@ -2911,6 +3140,95 @@ class PersonalityDialog(tk.Toplevel):
         self.destroy()
 
 
+class StaffSkillsDialog(tk.Toplevel):
+    """The special skills of one staff member (coach, trainer or GM), by the game's names. A skill is one bit of the
+    person's mask in the save's PSSK table (see STAFF_SPECIAL_SKILLS). Only the skills the game offers the person's role
+    are shown (STAFF_ROLE_SKILLS), plus any he already holds; a switch shows all 62. Apply writes just the mask."""
+
+    def __init__(self, parent, model, pnid, subject_label, role):
+        super().__init__(parent)
+        p = getattr(parent, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Special skills")
+        self.transient(parent)
+        self.parent, self.model, self.pnid, self.role = parent, model, str(pnid), role
+        self._mask = model.staff_skills_mask(pnid)
+        self.offered = set(STAFF_ROLE_SKILLS.get(role, ()))
+        held = set(staff_skills_from_mask(self._mask))
+        self.always = self.offered | held          # shown even without the switch
+
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Tick all", command=self._tick_all).pack(side="right", padx=(0, 8))
+        self.lbl_count = ttk.Label(btn, foreground="gray")
+        self.lbl_count.pack(side="left")
+
+        ttk.Label(self, text=subject_label, font=("", 10, "bold"), padding=(12, 12, 12, 0)).pack(anchor="w")
+        ttk.Label(self, foreground="gray", wraplength=640, justify="left", padding=(12, 2, 12, 4),
+                  text="Tick the special skills this person has. These are the skills the game offers this role, with the "
+                       "game's names and descriptions (hover over one). Checked in the game: a skill added here shows as "
+                       "acquired on the staff card. Try changes on a copy of your save.").pack(anchor="w")
+        self.show_all = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self, text="Show all 62 skills, including ones the game doesn't offer this role",
+                        variable=self.show_all, command=self._layout).pack(anchor="w", padx=12)
+
+        self.grid_frm = ttk.Frame(self)
+        self.grid_frm.pack(fill="both", expand=True, padx=12, pady=(6, 4))
+        self.vars, self.checks = {}, {}
+        for n, name in STAFF_SPECIAL_SKILLS.items():
+            var = tk.BooleanVar(value=bool(self._mask >> n & 1))
+            var.trace_add("write", lambda *_: self._count())
+            self.vars[n] = var
+            cb = ttk.Checkbutton(self.grid_frm, text=name, variable=var)
+            cb.bind("<Enter>", lambda e, n=n: self._describe(n))
+            self.checks[n] = cb
+        self.lbl_desc = ttk.Label(self, wraplength=620, justify="left", foreground="gray", padding=(12, 0, 12, 4))
+        self.lbl_desc.pack(anchor="w", fill="x")
+        self._describe(None)
+        self._layout()
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+
+    def _layout(self):
+        """Show the skills the role is offered (or all of them), in the game's order, in as many columns as they need."""
+        shown = sorted(STAFF_SPECIAL_SKILLS) if self.show_all.get() else sorted(self.always)
+        for cb in self.checks.values():
+            cb.grid_forget()
+        cols = 1 if len(shown) <= 8 else (2 if len(shown) <= 24 else 3)
+        rows = -(-len(shown) // cols)
+        for i, n in enumerate(shown):
+            self.checks[n].grid(row=i % rows, column=i // rows, sticky="w", padx=(0, 14), pady=1)
+        self._count()
+
+    def _tick_all(self):
+        """Tick every skill the game offers this role (the dialog's version of the Max button)."""
+        for n in self.offered:
+            self.vars[n].set(True)
+
+    def _describe(self, n):
+        self.lbl_desc.configure(text="Hover over a skill to see what it does." if n is None
+                                else f"{STAFF_SPECIAL_SKILLS[n]}: {STAFF_SKILL_DESCRIPTIONS[n]}")
+
+    def _count(self):
+        inside = sum(1 for n, v in self.vars.items() if v.get() and n in self.offered)
+        outside = sum(1 for n, v in self.vars.items() if v.get() and n not in self.offered)
+        text = f"{inside} / {len(self.offered)} selected"
+        if outside:
+            text += f" (+{outside} the game doesn't offer this role)"
+        self.lbl_count.configure(text=text)
+
+    def _apply(self):
+        chosen = sum(1 << n for n, v in self.vars.items() if v.get())
+        new_mask = (self._mask & ~STAFF_SKILL_BITS) | chosen      # bits the game's list doesn't name stay as they are
+        if new_mask != self._mask:
+            self.model.set_staff_skills_mask(self.pnid, new_mask)
+            self.parent.mark_dirty()
+        self.destroy()
+
+
 class AssignPortraitDialog(tk.Toplevel):
     """Reassign one of the game's ~3580 existing in-game portraits to a
     player - no game-file modification needed, since PSXP (the player's
@@ -3407,6 +3725,10 @@ class TeamPhilosophyDialog(tk.Toplevel):
         canvas = self._canvases[0]
         need_h = self.winfo_reqheight() - canvas.winfo_reqheight() + max(i.winfo_reqheight() for i in self._inners) + 6
         need_w = max(600, max(i.winfo_reqwidth() for i in self._inners) + 90)
+        # wide enough for the whole tab strip too (bold, as the selected tab is), or tab names get cut off
+        tab_font = tkfont.Font(font="TkDefaultFont")
+        tab_font.configure(weight="bold")
+        need_w = max(need_w, sum(tab_font.measure(self._nb.tab(i, "text")) + 34 for i in range(self._nb.index("end"))) + 60)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         w, h = min(need_w, sw - 40), max(320, min(need_h, int(sh * 0.8)))
         x = max(0, min(parent.winfo_rootx() + 40, sw - w - 20))
@@ -5831,7 +6153,7 @@ class App(tk.Tk):
         self.lbl_playbook_hit.configure(text=f"In: {shown}" if names else "In no playbook in this save")
 
     # ---------- Staff Tabs (Trainer / Coach / GM) ----------
-    def _build_staff_team_filter(self, parent):
+    def _build_staff_team_filter(self, parent, row_extra=None):
         """Shared 'My Team' / 'All Teams' toggle for the Trainer/Coach/GM
         tabs - these tables have 300+ league-wide rows, which is what made
         those tabs slow to render/scroll. One shared setting across all
@@ -5860,6 +6182,8 @@ class App(tk.Tk):
             lay, text="Horizontal", variable=self.staff_layout_var, value="horizontal",
             command=self.on_staff_layout_changed,
         ).pack(side="left", padx=(6, 0))
+        if row_extra:
+            row_extra(lay)
         ttk.Label(lay, text="(vertical: click a name at the top to select it; double-click a section heading to collapse or expand it)", foreground="gray").pack(side="left", padx=(16, 0))
 
     def _build_trainer_tab(self):
@@ -5872,6 +6196,8 @@ class App(tk.Tk):
         ttk.Label(top, text="Trainer (trvw.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_trainer).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Trainer's Stats", command=self.on_max_selected_trainer).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Special skills...", command=self.on_open_trainer_skills).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Max Special Skills", command=self.on_max_trainer_skills).pack(side="left", padx=(8, 0))
         self._build_staff_team_filter(top)
 
         help_text = (
@@ -5917,6 +6243,8 @@ class App(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_coach).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected Coach's Stats", command=self.on_max_selected_coach).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Personality...", command=self.on_open_coach_personality_editor).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Special skills...", command=self.on_open_coach_skills).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Max Special Skills", command=self.on_max_coach_skills).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Team Philosophy...", command=self.on_open_team_philosophy).pack(side="left", padx=(8, 0))
 
         # Search controls for coach first/last name
@@ -5926,7 +6254,8 @@ class App(tk.Tk):
         self.ent_coach_search.pack(side="left")
         ttk.Button(top, text="Find", command=lambda: self.refresh_coach()).pack(side="left", padx=(6, 4))
         ttk.Button(top, text="Clear", command=lambda: (self.coach_search_var.set(""), self.refresh_coach())).pack(side="left")
-        self._build_staff_team_filter(top)
+        self._build_staff_team_filter(
+            top, row_extra=lambda lay: ttk.Button(lay, text="Max All Coaches", command=self.on_max_all_coaches).pack(side="left", padx=(16, 0)))
 
         # Help text reflects what's actually confirmed in-game (verified via direct testing).
         help_text = (
@@ -5976,6 +6305,8 @@ class App(tk.Tk):
         ttk.Label(top, text="GM (gmvw.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_gm).pack(side="left", padx=8)
         ttk.Button(top, text="Max Selected GM's Stats", command=self.on_max_selected_gm).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Special skills...", command=self.on_open_gm_skills).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Max Special Skills", command=self.on_max_gm_skills).pack(side="left", padx=(8, 0))
         self._build_staff_team_filter(top)
 
         help_text = (
@@ -6363,7 +6694,7 @@ class App(tk.Tk):
         team_name = TEAM_NAMES.get(tid, tid)
         ok = messagebox.askyesno(
             "Confirm team staff max",
-            f"Max SKPT and all confirmed skills for every trainer, coach, and GM on {team_name}?"
+            f"Max SKPT, all confirmed skills and all special skills for every trainer, coach, and GM on {team_name}?"
         )
         if not ok:
             return
@@ -6400,6 +6731,17 @@ class App(tk.Tk):
             if (row.get("TGID", "") or "").strip() == tid:
                 self._max_out_coach_development(idx)
 
+        # Special skills (PSSK): every skill the game offers each person's role
+        if self.model.pssk_headers:
+            for rows, role_of in ((self.model.trainers, lambda r: "TR"), (self.model.gms, lambda r: "GM"),
+                                  (self.model.coaches, lambda r: STAFF_COACH_ROLE.get((r.get("COPS", "") or "").strip(), "HC"))):
+                for row in rows:
+                    pnid = (row.get("PNid", "") or "").strip()
+                    if pnid and (row.get("TGID", "") or "").strip() == tid:
+                        self.model.set_staff_skills_mask(
+                            pnid, self.model.staff_skills_mask(pnid) | sum(1 << n for n in STAFF_ROLE_SKILLS.get(role_of(row), ())))
+
+        self.mark_dirty()
         self.refresh_trainer()
         self.refresh_coach()
         self.refresh_gm()
@@ -6410,6 +6752,7 @@ class App(tk.Tk):
             f"Trainers maxed (SKPT + skills): {trainer_count}\n"
             f"Coaches maxed (SKPT + skills): {coach_count}\n"
             f"GMs maxed (SKPT + skills): {gm_count}"
+            + ("\nSpecial skills: all the game offers each role" if self.model.pssk_headers else "")
         )
 
     def _on_player_search_changed(self, *_args):
@@ -7393,13 +7736,45 @@ class App(tk.Tk):
             return None
         if idx < 0 or idx >= len(staff_list):
             return None
-        row = staff_list[idx]
+        self._max_staff_row_fields(staff_list[idx], field_names)
+        return iid
+
+    def _max_staff_row_fields(self, row, field_names):
+        """Set a staff row's skill fields to their maximums."""
         headers = set(row.keys())
         for field in field_names:
             if field in headers:
                 _, hi = STAFF_NUMERIC_FIELDS.get(field, (0, 0))
                 row[field] = str(hi)
-        return iid
+
+    def on_max_all_coaches(self):
+        """Max out every coach the Coach tab is showing (My Team: the whole staff): the confirmed skills and
+        development (as Max Selected Coach's Stats), skill points, and every special skill the game offers the role."""
+        rows = self._filter_rows_by_staff_team(list(enumerate(self.model.coaches)))
+        if not rows:
+            messagebox.showinfo("No coaches shown", "No coach rows - check the My Team / All Teams filter.")
+            return
+        everyone = self.staff_filter_var.get() != "my_team" or not self.selected_team_id.get().strip()
+        if everyone and not messagebox.askyesno(
+                "Max all coaches", f"The Coach tab is showing all teams. Max all {len(rows)} coaches in the league?"):
+            return
+        with_skills = bool(self.model.pssk_headers)
+        for idx, row in rows:
+            self._max_staff_row_fields(row, COACH_MAXABLE_SKILL_FIELDS)
+            self._max_out_coach_development(idx)
+            if "SKPT" in row:
+                row["SKPT"] = "131071"
+            pnid = (row.get("PNid", "") or "").strip()
+            if with_skills and pnid:
+                role = STAFF_COACH_ROLE.get((row.get("COPS", "") or "").strip(), "HC")
+                self.model.set_staff_skills_mask(
+                    pnid, self.model.staff_skills_mask(pnid) | sum(1 << n for n in STAFF_ROLE_SKILLS.get(role, ())))
+        self.mark_dirty()
+        self.refresh_coach()
+        messagebox.showinfo(
+            "Max all coaches",
+            f"Maxed {len(rows)} coaches: play calling, strategy, chemistry, performance, development, skill points"
+            f"{' and all the special skills the game offers each role' if with_skills else ''}. Save to File to keep it.")
 
     def _reselect(self, tree, iid):
         if iid and tree.exists(iid):
@@ -7668,6 +8043,84 @@ class App(tk.Tk):
             subject_kind="coach",
         )
 
+    def _skills_kind(self, kind):
+        """(tree, rows, label_of, who, role_of) for the Coach, Trainer or GM tab."""
+        def team_of(r):
+            tid = (r.get("TGID", "") or "").strip()
+            return team_nickname(tid) or tid
+        if kind == "coach":
+            def label(r):
+                name = f"{(r.get('CFNM', '') or '').strip()} {(r.get('CLNM', '') or '').strip()}".strip()
+                pos = COACH_POSITION_LABELS.get((r.get("COPS", "") or "").strip(), "")
+                return f"Coach: {name} ({pos}, {team_of(r)})".replace("(, ", "(")
+            return (self.tree_coach, self.model.coaches, label, "coach",
+                    lambda r: STAFF_COACH_ROLE.get((r.get("COPS", "") or "").strip(), "HC"))
+        if kind == "trainer":
+            return self.tree_trainer, self.model.trainers, lambda r: f"Trainer: {team_of(r)}", "trainer", lambda r: "TR"
+        return self.tree_gm, self.model.gms, lambda r: f"GM: {team_of(r)}", "GM", lambda r: "GM"
+
+    def _staff_skills_target(self, kind, auto_select):
+        """The person selected in a staff tab as (PNid, label, role), or None after telling the user why not.
+        auto_select: pick the first row if none is selected, as the Max buttons do."""
+        tree, rows, label_of, who, role_of = self._skills_kind(kind)
+        if not self.model.pssk_headers:
+            messagebox.showinfo("Special skills", "This save has no special skills table.")
+            return None
+        sel = self._ensure_tree_selection(tree) if auto_select else tree.selection()
+        if not sel:
+            messagebox.showinfo(f"No {who}", f"Select a {who} first.")
+            return None
+        try:
+            row = rows[int(sel[0])]
+        except (ValueError, IndexError):
+            return None
+        pnid = (row.get("PNid", "") or "").strip()
+        if not pnid:
+            messagebox.showinfo("Special skills", f"This {who} has no person ID in the save.")
+            return None
+        return pnid, label_of(row), role_of(row)
+
+    def _open_staff_skills(self, kind):
+        target = self._staff_skills_target(kind, auto_select=False)
+        if target:
+            pnid, label, role = target
+            StaffSkillsDialog(self, self.model, pnid, label, role)
+
+    def _max_staff_skills(self, kind):
+        """Give the selected person every special skill the game offers his role (the Max button)."""
+        target = self._staff_skills_target(kind, auto_select=True)
+        if not target:
+            return
+        pnid, label, role = target
+        offered = STAFF_ROLE_SKILLS.get(role, ())
+        mask = self.model.staff_skills_mask(pnid)
+        full = mask | sum(1 << n for n in offered)
+        if full == mask:
+            messagebox.showinfo("Special skills", f"{label.split(': ', 1)[-1]} already has all {len(offered)} special skills the game offers.")
+            return
+        self.model.set_staff_skills_mask(pnid, full)
+        self.mark_dirty()
+        messagebox.showinfo("Special skills", f"{label.split(': ', 1)[-1]} now has all {len(offered)} special skills the game offers "
+                                              "this role. Save to File to keep it.")
+
+    def on_open_coach_skills(self):
+        self._open_staff_skills("coach")
+
+    def on_open_trainer_skills(self):
+        self._open_staff_skills("trainer")
+
+    def on_open_gm_skills(self):
+        self._open_staff_skills("gm")
+
+    def on_max_coach_skills(self):
+        self._max_staff_skills("coach")
+
+    def on_max_trainer_skills(self):
+        self._max_staff_skills("trainer")
+
+    def on_max_gm_skills(self):
+        self._max_staff_skills("gm")
+
     def on_open_team_philosophy(self):
         """The team philosophy the game's Team Philosophy screen shows (TPHS table), for the
         selected coach's team, or the team selected on the Players tab if no coach is."""
@@ -7687,8 +8140,9 @@ class App(tk.Tk):
         TeamPhilosophyDialog(
             self, self.model.tphs, idx, f"{nick} team philosophy", lambda: None,
             note="This is the data behind the game's Team Philosophy screen. Checked against the game: the playcall "
-                 "settings and the QB, CB, FS, SS, kicker and punter philosophies (at least one value each). The other "
-                 "names come from a community list - try changes on a copy of your save.")
+                 "settings and the QB, CB, FS, SS, DT, kicker and punter philosophies. The names are the game's own, read from "
+                 "its data; the GM and staff, roster minimum, health and fatigue tabs are matched from that data and not "
+                 "yet checked in the game - try changes on a copy of your save.")
 
     def _apply_coach_skpt(self):
         sel = self.tree_coach.selection()

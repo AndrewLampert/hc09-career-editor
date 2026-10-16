@@ -47,13 +47,136 @@ It was then checked the other way: values written with the editor and read off t
 | `KKPP` | Kicker Philosophy | 75 "Big Foot/Distance K" | config: "Power" |
 | `FSPP`, `SsPP`, `KPPP` | FS / SS / Punter Philosophy | 67 "Centerfielder FS", 74 "Smart/Productive SS", 79 "Pinpoint Accuracy P" | seen as the saved values; config: Centerfielder, Smart, Accuracy |
 
-The game words the position philosophies in full ("... QB", "... CB", "... K"); the config's short names are the same options. The running back, fullback, receiver, tight end, line and linebacker philosophies were not checked.
+The game words the position philosophies in full ("... QB", "... CB", "... K"); the config's short names are the same options for most, but not all (the tight end list is in a different order). The editor now uses the game's own names (see "Team Philosophy: all 110 fields" below); the lists in "Value lists" are the config's.
 
-The editor's **Team Philosophy...** button (Coach tab) edits `TPHS`.
+The editor's **Team Philosophy...** button (Coach tab) edits `TPHS`: every one of its 110 fields, in five tabs.
+
+### Team Philosophy: all 110 fields (decoded from the game's data)
+
+The game's own data names every field and value. Table `PCAT` in `qkl_boot.ast` lists the 110 Team Philosophy categories in the game's order (id, name, default); `EGPP` names the 81 position presets (values 0 to 80); and a small table per category names its values (for example `CHCP` for the hire-control levels, `TAGP` for the franchise tag, `BOSP` for benching decisions). Field codes were matched to categories from the group they belong to (the position philosophies, the roster minimums, practice and game health and fatigue, and the playcall settings already checked in game), from the number of values each category has against the values in real saves (every value stored in every team of every test save is one of the named values), from the short names `PCAT` gives, and from the other game tables that use the same codes (for instance the GM profile table `GMPL`, the coach pool `COPL` and the trade tables `LTPC` / `DTDC`). Which of three trade columns (`TDFP`, `GFTP`, `GTDP`) is which rests on the names and on `LTPC`, where `TDFP` values 0 / 1 / 2 map to 25 / 35 / 30, heavy lowest and light highest, as a frequency would: **matched from data, not yet checked in the game** (only the rows marked checked were).
+
+The hire-control fields (`GmCP`, `OCCP`, `DCCP`, `PCCP`, `TRCP`) are also on the owner rows (`OWNR`) and the GM profile fields on the GM rows (`GMVW`): `TPHS` looks like the per-team result of the owner, GM, head coach and trainer settings, which fits "some are locked based on control given up during staff hiring" and why editing the coach rows alone never changed the screen. Whether the game recomputes `TPHS` from the staff (for example when staff change) is not known.
+
+Notes from the data: the tight end list in the community config is in a different order from the game's (the game: 20 Soft Hands/Routes, 21 Blocking, 22 Playmaker, 23 H-back, 24 Balanced; the weight tables agree: 21 weighs impact and run blocking, 20 route running and catching). The earlier idea that `xxPH` means "Physical Development" is wrong: `xxPH` is practice health, `xxHS` game health, `xxFP` practice fatigue and `xxFS` game fatigue, one per position group. `GSMP` is the GM spending philosophy, not a roster minimum. The 11th `xxFP` column, `TDFP`, is trading frequency. Roster minimum values are an index: the number shown is the minimum number of players kept at the position. `TPHL` (31 in every column of every team) is not explained by this.
+
+| # | Field | The game's name | Game default | Values (value name) |
+|---|---|---|---|---|
+| 0 | `GmCP` | GM Hire Control | 1 | 0 Give up a lot of control; 1 Give up some control; 2 Give up a little control; 3 Give up no control |
+| 1 | `OCCP` | OC Hire Control | 1 | 0 Give up a lot of control; 1 Give up some control; 2 Give up a little control; 3 Give up no control |
+| 2 | `DCCP` | DC Hire Control | 1 | 0 Give up a lot of control; 1 Give up some control; 2 Give up a little control; 3 Give up no control |
+| 3 | `PCCP` | Position Coach Hire Control | 1 | 0 Give up a lot of control; 1 Give up some control; 2 Give up a little control; 3 Give up no control |
+| 4 | `TRCP` | Trainer Hire Control | 1 | 0 Give up a lot of control; 1 Give up some control; 2 Give up a little control; 3 Give up no control |
+| 5 | `TDFP` | Trading Frequency | 2 | 0 Heavy Trader; 1 Light Trader; 2 Neutral |
+| 6 | `TMSP` | Trading Philosophy | 1 | 0 Passive; 1 Normal; 2 Aggressive |
+| 7 | `GFTP` | GM Future Draft Picks | 2 | 0 Overvalue future draft picks; 1 Undervalue future draft picks; 2 Neutral |
+| 8 | `GTDP` | GM Draft Trade Philosophy | 2 | 0 Trade up; 1 Trade down; 2 Neutral |
+| 9 | `DFTP` | Draft Philosophy | 0 | 0 Draft best available players; 1 Draft biggest team needs |
+| 10 | `IWKP` | Workouts Scouting Philosophy | 0 | 0 Scout best available players; 1 Scout biggest team needs |
+| 11 | `RSSP` | Reg. Season Scouting Philosophy | 3 | 0 Big school focus; 1 Medium school focus; 2 Small school focus; 3 Balanced focus; 4 Team needs focus |
+| 12 | `FTGP` | Franchise Tag Philosophy | 1 | 0 Heavily use; 1 Sometimes use; 2 Rarely use |
+| 13 | `NGTP` | General Negotiation Philosophy | 2 | 0 Low ball; 1 Give in to demands; 2 Haggle; 3 Overpay |
+| 14 | `CINP` | Counter Offer Philosophy | 1 | 0 Cheap; 1 Normal; 2 Generous |
+| 15 | `ESCP` | GM Salary Cap Philosophy | 1 | 0 Prefers 5M in cap room; 1 Prefers 3M in cap room; 2 Prefers 1M in cap room |
+| 16 | `GSMP` | GM Spending Philosophy | 0 | 0 Distribute money evenly; 1 Spend on the biggest need; 2 Spend on the 2 biggest needs; 3 Spend on the 3 biggest needs |
+| 17 | `RFAP` | GM RFA Philosophy | 0 | 0 Normal; 1 Tender with higher compensation; 2 Tender with lower compensation |
+| 18 | `RSPP` | GM Re-sign Philosophy | 2 | 0 Re-sign based on high approval; 1 Re-sign all players; 2 Based on quality |
+| 19 | `CDVP` | Career Development | 0 | 0 Physical development; 1 Intangibles development; 2 Learning development |
+| 20 | `BTTP` | Team Building Philosophy | 0 | 0 Build through the NFL draft; 1 Build through free agency |
+| 21 | `PRDP` | Player Roadmap Evaluation | 0 | 0 Favors overall grade; 1 Favors role; 2 Favors upside; 3 Favors contract; 4 Favors play knowledge |
+| 22 | `QBPP` | QB Philosophy (checked in game) | 4 | 0 Mobile/Speed; 1 Strong Arm/Tools; 2 Pure Passer; 3 Field General; 4 Balanced |
+| 23 | `HBPP` | HB Philosophy | 10 | 5 Speed; 6 Moves; 7 Power; 8 Receiving; 9 Workhorse; 10 Balanced |
+| 24 | `FBPP` | FB Philosophy | 14 | 11 Ball Carrier; 12 Blocking; 13 Receiving; 14 Balanced |
+| 25 | `WRPP` | WR Philosophy | 19 | 15 Strong/Blocking; 16 Tall/Redzone Threat; 17 Speed; 18 Quick/Route Runner; 19 Balanced |
+| 26 | `TEPP` | TE Philosophy | 24 | 20 Soft Hands/Routes; 21 Blocking; 22 Playmaker; 23 H-back; 24 Balanced |
+| 27 | `TKPP` | Tackle Philosophy | 29 | 25 Size/Strength/Engulfer; 26 Run Block Specialist; 27 Pass Block Specialist; 28 Zone Blocking; 29 Balanced |
+| 28 | `GDPP` | Guard Philosophy | 34 | 30 Size/Strength/Mauler; 31 Run Block Specialist; 32 Pass Block Specialist; 33 Zone Blocking; 34 Balanced |
+| 29 | `CRPP` | Center Philosophy | 39 | 35 Size/Strength/Mauler; 36 Run Block Specialist; 37 Pass Block Specialist; 38 Zone Blocking; 39 Balanced |
+| 30 | `DEPP` | DE Philosophy | 40 | 40 Balanced; 41 Prototype; 42 Undersized Speed Rusher; 43 Run Stopper; 44 Versatile/3-4 |
+| 31 | `DTPP` | DT Philosophy (checked in game) | 45 | 45 Balanced; 46 Prototype; 47 One Gap Penetrator; 48 Run Stopper; 49 Versatile/3-4 |
+| 32 | `OLPP` | OLB Philosophy | 50 | 50 Balanced; 51 Coverage/Cover 2; 52 Run Stopper; 53 PassRusher/3-4 Blitzer; 54 Prototype |
+| 33 | `MLPP` | MLB Philosophy | 55 | 55 Balanced; 56 Coverage/Speed; 57 Power/Blitzer; 58 3-4/Tackler; 59 Prototype |
+| 34 | `CBPP` | Cornerback Philosophy (checked in game) | 60 | 60 Balanced; 61 Man Coverage/Ballhawk; 62 Strong/Press/Run Support; 63 Prototype; 64 Cover 2 |
+| 35 | `FSPP` | FS Philosophy (checked in game) | 65 | 65 Balanced; 66 Man Coverage; 67 Centerfielder; 68 Prototype; 69 Run Support/Blitzer |
+| 36 | `SsPP` | SS Philosophy (checked in game) | 70 | 70 Balanced; 71 Coverage; 72 Prototype; 73 Run Support/Big Hitter; 74 Smart/Productive |
+| 37 | `KKPP` | Kicker Philosophy (checked in game) | 77 | 75 Big Foot/Distance; 76 Pinpoint Accuracy; 77 Balanced |
+| 38 | `KPPP` | Punter Philosophy (checked in game) | 80 | 78 Big Foot/Distance; 79 Pinpoint Accuracy; 80 Balanced |
+| 39 | `QBMP` | QB Roster Minimum | 1 | 0 2; 1 3; 2 4 |
+| 40 | `HBMP` | HB Roster Minimum | 1 | 0 2; 1 3; 2 4 |
+| 41 | `FBMP` | FB Roster Minimum | 1 | 0 0; 1 1; 2 2 |
+| 42 | `WRMP` | WR Roster Minimum | 0 | 0 4; 1 5; 2 6 |
+| 43 | `TEMP` | TE Roster Minimum | 1 | 0 2; 1 3; 2 4 |
+| 44 | `TKMP` | Tackle Roster Minimum | 0 | 0 3; 1 4; 2 5 |
+| 45 | `GDMP` | Guard Roster Minimum | 0 | 0 3; 1 4; 2 5 |
+| 46 | `CRMP` | Center Roster Minimum | 1 | 0 1; 1 2; 2 3 |
+| 47 | `DEMP` | DE Roster Minimum | 1 | 0 3; 1 4; 2 5 |
+| 48 | `DTMP` | DT Roster Minimum | 1 | 0 2; 1 3; 2 4 |
+| 49 | `OLMP` | OLB Roster Minimum | 1 | 0 3; 1 4; 2 5 |
+| 50 | `MLMP` | MLB Roster Minimum | 1 | 0 2; 1 3; 2 4 |
+| 51 | `CBMP` | Cornerback Roster Minimum | 1 | 0 4; 1 5; 2 6 |
+| 52 | `FSMP` | FS Roster Minimum | 1 | 0 1; 1 2; 2 3 |
+| 53 | `SSMP` | SS Roster Minimum | 1 | 0 1; 1 2; 2 3 |
+| 54 | `KKMP` | Kicker Roster Minimum | 0 | 0 1; 1 2 |
+| 55 | `KPMP` | Punter Roster Minimum | 1 | 0 0; 1 1; 2 2 |
+| 56 | `QBPH` | QB Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 57 | `HBPH` | HB Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 58 | `FBPH` | FB Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 59 | `WRPH` | WR Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 60 | `TEPH` | TE Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 61 | `OLPH` | OL Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 62 | `DLPH` | DL Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 63 | `LBPH` | LB Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 64 | `DBPH` | DB Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 65 | `KPPH` | K/P Practice Health Status | 0 | 0 Practice at moderate health; 1 Practice at low health |
+| 66 | `QBHS` | QB Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 67 | `HBHS` | HB Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 68 | `FBHS` | FB Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 69 | `WRHS` | WR Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 70 | `TEHS` | TE Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 71 | `OLHS` | OL Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 72 | `DLHS` | DL Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 73 | `LBHS` | LB Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 74 | `DBHS` | DB Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 75 | `KPHS` | K/P Game Health Status | 0 | 0 Sub player at moderate health; 1 Sub player at low health |
+| 76 | `QBFP` | QB Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 77 | `HBFP` | HB Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 78 | `FBFP` | FB Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 79 | `WRFP` | WR Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 80 | `TEFP` | TE Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 81 | `OLFP` | OL Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 82 | `DLFP` | DL Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 83 | `LBFP` | LB Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 84 | `DBFP` | DB Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 85 | `KPFP` | K/P Practice Fatigue Status | 0 | 0 Practice at moderate fatigue; 1 Practice at heavy fatigue |
+| 86 | `QBFS` | QB Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 87 | `HBFS` | HB Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 88 | `FBFS` | FB Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 89 | `WRFS` | WR Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 90 | `TEFS` | TE Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 91 | `OLFS` | OL Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 92 | `DLFS` | DL Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 93 | `LBFS` | LB Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 94 | `DBFS` | DB Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 95 | `KPFS` | K/P Game Fatigue Status | 0 | 0 Sub player at moderate fatigue; 1 Sub player at heavy fatigue |
+| 96 | `OPPP` | Offensive Playbook Control (checked in game) | 1 | 0 Head Coach; 1 Offensive Coordinator |
+| 97 | `DPPP` | Defensive Playbook Control (checked in game) | 1 | 0 Head Coach; 1 Defensive Coordinator |
+| 98 | `DMPP` | Defining Moment Philosophy (checked in game) | 2 | 0 Aggressive; 1 Conservative; 2 Balanced |
+| 99 | `DSPP` | Defensive Scheme (checked in game) | 0 | 0 3-4; 1 4-3; 2 46/Multiple Front |
+| 100 | `BZPP` | Blitz Philosophy (checked in game) | 0 | 0 Heavy; 1 Normal; 2 Light |
+| 101 | `CVPP` | Pass Coverage Philosophy (checked in game) | 0 | 0 Man; 1 Cover 2; 2 Zone |
+| 102 | `OSPP` | Offensive Scheme (checked in game) | 0 | 0 West Coast Normal; 1 West Coast Heavy Pass; 2 Vertical Passing; 3 Spread; 4 Power Running |
+| 103 | `NHPP` | No Huddle Philosophy (checked in game) | 1 | 0 Heavily; 1 Balanced; 2 Rarely |
+| 104 | `BPSP` | Bench Player | 2 | 0 Prefers to bench; 1 Prefers to start; 2 Balanced |
+| 105 | `SRQP` | Start Rookie QB | 2 | 0 Prefers to start; 1 Doesn't prefer to start; 2 Balanced |
+| 106 | `SRHP` | Start Rookie HB | 2 | 0 Prefers to start; 1 Doesn't prefer to start; 2 Balanced |
+| 107 | `BMCP` | Bench Media Complainer | 2 | 0 Prefers to bench; 1 Prefers to start; 2 Balanced |
+| 108 | `BNPP` | Bench Skip Practice | 2 | 0 Prefers to bench; 1 Prefers to start; 2 Balanced |
+| 109 | `IPSP` | Injury Playing Status | 1 | 0 Aggressive; 1 Moderate; 2 Conservative |
 
 The config has no name for 11 fields the editor already edits (`PLJM`, `SKTD`, `SKTM`, `SKNG`, `SKNM`, `TSIE`, `TSIM`, `TSRH`, `TSRM`, `TSFR`, `TSFM`); those come from the editor's own in-game testing.
 
 ## Value lists
+
+These are the community config's lists. For the Team Philosophy fields the editor uses the game's own names instead (section "Team Philosophy: all 110 fields"), which differ in wording for most position presets and in order for tight ends.
 
 The number in front of each label is the value stored in the save. Checked against a real save: every stored value in 14 coach fields (`CRPP CBPP DEPP QBPP OSPP DSPP CDTY OPPP DPPP NHPP COPS PTId CFDA CFFA`) falls inside its list, with none outside. Small lists are shown in full; `PNid` (3,585 names), `PCOL` (297 colleges) and the team lists are in the JSON file.
 
@@ -211,8 +334,11 @@ Unnamed: `SKSC`, `SKRE`, `SKRM`, `SKSX`
 ### TPHL - Team Philosophies
 111 fields (1 named); mostly per-position preference and health tables, see the config.
 
-### TPHS - Team Health
-111 fields (29 named); mostly per-position preference and health tables, see the config.
+### TPHS - Team Philosophy (the config calls it "Team Health")
+111 fields (29 named in the config); all 110 philosophy fields are decoded above, in "Team Philosophy: all 110 fields".
+
+### PSSK - Staff special skills
+`SPSB` (a 64-bit mask, written as hex text such as `0x0000000020051080`) and `PNid` (the person: the same `PNid` as on the `COCH`, `TRVW` and `GMVW` rows). One row per person who has at least one special skill (185 in the test career); people with none have no row. Bit *n* of the mask is skill *n* of the game's table `ESPS` (62 skills, 0 Accommodation to 61 Potential Intuition; the bits above 61 are not used). The match was checked statistically: each skill is held only by the staff it belongs to (Accommodation and the School Insider skills only by GMs, Off Season Rehab and Cardio Training only by trainers, Improved Blocking and the blocking disciplines by offensive line coaches, Kick Accuracy / Power / Return by special teams coaches, Coverage Analysis by defensive staff, and so on); the Bears head coach (Lovie Smith) has Coverage Analysis and the GM Small School Insider. **Checked in the game** (test career): giving the Bears head coach Improved Tackling and Leadership showed Improved Tackling as "Skill Acquired" on his Staff Skills Selection screen, and the Develop Staff list showed "Special Skills 3 / 44". Which skills each kind of staff is offered is in the game's table `LSSD` (one flag per role: `ATHC` head coach 44 skills, `ATOC` 28, `ATDC` 23, `ATST` 4, `ATQB` 7, `ATRB` 8, `ATWR` 7, `ATOL` 7, `ATDL` 5, `ATLB` 8, `ATDB` 7, `ATGM` 7, `ATTR` 4), the description of each skill is `ESPS.SPDC`, and what the 34 training skills do to which player attributes is `SSPE`. The editor's **Special skills...** button (Coach, Trainer and GM tabs) shows the skills the game offers the role, with the descriptions, and reads and writes the mask; **Max Special Skills** gives the selected person all of them; giving a first skill to someone with no row adds a row, which is saved with the bridge's append import (`--allow-append PSSK`) and checked with `verify-db`. How many skills the game lets one person hold, and what each does, is not known.
 
 ### DCHT - Depth Chart
 `TGID` Team ID, `PPOS` Position [26], `ddep` Depth, `PGID` Player ID.
@@ -232,7 +358,7 @@ Unnamed: `IJSK`, `INJR`, `INTT`, `RHBU`, `ITUt`
 
 ## What could be built next (ranked)
 
-1. **Coach game plan - partly built**, as the **Team Philosophy...** button, on the team's `TPHS` row (the table the game's screen reads; see "Checked in the game" above): offensive and defensive scheme, no-huddle, playbook control, blitzing, coverage, defining moments, and the position philosophies. **Not built, and not looked at in the game:** the coach-row (`COCH`) versions of these fields, `CDTY` defensive philosophy, CPU play-call aggression (`COTA`, `CDTA`), simulated run/pass ratios (`COTR`, `CDTR`), RB strategy `CRBT`, and start young HB / rookie QB (`SRHP`, `SRQP`). An earlier version of the editor wrote some of these on the coach rows; it was removed because the Team Philosophy screen did not read them, which says nothing about whether the game uses them elsewhere.
+1. **Coach game plan - built**, as the **Team Philosophy...** button, on the team's `TPHS` row (the table the game's screen reads; see "Checked in the game" above): all 110 fields, from the offensive and defensive scheme, no-huddle, playbook control, blitzing, coverage, defining moments and the position philosophies, to the GM and staff settings, roster minimums and health and fatigue substitution. **Not built, and not looked at in the game:** the coach-row (`COCH`) versions of these fields, `CDTY` defensive philosophy, CPU play-call aggression (`COTA`, `CDTA`), simulated run/pass ratios (`COTR`, `CDTR`), RB strategy `CRBT`, and start young HB / rookie QB (`SRHP`, `SRQP`). An earlier version of the editor wrote some of these on the coach rows; it was removed because the Team Philosophy screen did not read them, which says nothing about whether the game uses them elsewhere.
 2. **Coach philosophies** on the coach rows (23 fields, the same lists as the team's): the team versions are built (item 1); whether the coach-row copies matter is untested.
 3. **Who handles what** (`COCH` Responsibilities): User / CPU for drafting, signing draft picks and free agents, filling rosters, re-signing, depth chart (`CFDA`, `CFDP`, `CFFA`, `CFFR`, `CFRP`, `CFRR`), plus `CFUC` User Control.
 4. **Player info with names**: College (297-name list), position names, height, weight, home state/town, jersey number, Pro Bowl flag, throwing style, body-part health (all named above).
