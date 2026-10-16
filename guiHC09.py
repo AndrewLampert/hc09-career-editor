@@ -35,7 +35,7 @@ import threading
 import time
 import subprocess
 import tkinter as tk
-from tkinter import font as tkfont, ttk, filedialog, messagebox
+from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
     from PIL import Image, ImageTk
@@ -563,7 +563,7 @@ STAT_META = {
     "PLRL": ("Release", "Beating press coverage"),
     "PJMP": ("Jump", "Vertical leap"),
     "PPBK": ("Pass Block", "Pass protection"),
-    "PPBS": ("Pass Block Power", "Anchor vs power rush"),
+    "PPBS": ("Pass Block Strength", "Anchor vs power rush"),
     "PPBF": ("Pass Block Finesse", "Mirror finesse rush"),
     "PRBK": ("Run Block", "Run blocking"),
     "PRBS": ("Run Block Strength", "Run blocking strength / anchor"),
@@ -1293,6 +1293,9 @@ def load_body_weights():
 
 
 PHILOSOPHY_OVERRIDES = {}   # {preset: {table: {column: weight}}}: weights changed in the editor (the game keeps its own)
+PHILOSOPHY_CUSTOM_BASE_ID = 1000    # presets saved in the editor get ids from here up; the game's are 0 to 81
+PHILOSOPHY_CUSTOM_NAME_MAX = 40
+PHILOSOPHY_CUSTOM = {}      # {id: {"name", "field", "base", "weights": {table: {column: weight}}}}: presets saved in the editor
 
 
 def _with_philosophy_overrides(table, rows):
@@ -1331,6 +1334,8 @@ def load_philosophy_model():
             "factors": _philosophy_numbers_of(peow, ("OPDW", "OINW", "OLNW", "ODRW", "OATW", "OPTW", "OSZW")),
             "size": (size["HTSW"], size["WTSW"]),
         }
+    for cid, preset in PHILOSOPHY_CUSTOM.items():
+        out[cid] = philosophy_model_from(preset["weights"])
     return out
 
 
@@ -1381,6 +1386,54 @@ def save_philosophy_overrides(app, overrides):
     app.ui_prefs["philosophy_overrides"] = {str(k): v for k, v in overrides.items()}
     save_ui_prefs(app.ui_prefs)
     set_philosophy_overrides(app.ui_prefs["philosophy_overrides"])
+
+
+def _clean_philosophy_presets(raw):
+    """Saved presets as the preferences file holds them (a list) -> {id: preset}, dropping any that is not complete: an id
+    from PHILOSOPHY_CUSTOM_BASE_ID up, a name, a position's philosophy field, and a whole number weight for every column."""
+    out = {}
+    if not isinstance(raw, list):
+        return out
+    fields = philosophy_weight_fields()
+    groups = {f for _l, f, _p in PHILOSOPHY_GROUPS}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cid, name, field, weights = item.get("id"), item.get("name"), item.get("field"), item.get("weights")
+        if not isinstance(cid, int) or isinstance(cid, bool) or cid < PHILOSOPHY_CUSTOM_BASE_ID or cid in out:
+            continue
+        if not isinstance(name, str) or not 0 < len(name.strip()) <= PHILOSOPHY_CUSTOM_NAME_MAX:
+            continue
+        if field not in groups or not isinstance(weights, dict):
+            continue
+        clean = {}
+        for _tab, table, cols in fields:
+            row = weights.get(table)
+            if not isinstance(row, dict):
+                break
+            vals = {c: row.get(c) for c, _label in cols}
+            if not all(isinstance(w, int) and not isinstance(w, bool) and 0 <= w <= PHILOSOPHY_WEIGHT_MAX for w in vals.values()):
+                break
+            clean[table] = vals
+        else:
+            base = item.get("base")
+            out[cid] = {"name": name.strip(), "field": field, "base": base if isinstance(base, int) and not isinstance(base, bool) else None,
+                        "weights": clean}
+    return out
+
+
+def set_philosophy_presets(raw):
+    """Use the presets saved in the editor and rebuild the model."""
+    global PHILOSOPHY_CUSTOM
+    PHILOSOPHY_CUSTOM = _clean_philosophy_presets(raw)
+    reload_philosophy_data()
+
+
+def save_philosophy_presets(app, presets):
+    """Keep the presets saved in the editor in its preferences and use them now."""
+    app.ui_prefs["philosophy_presets"] = [{"id": cid, **preset} for cid, preset in sorted(presets.items())]
+    save_ui_prefs(app.ui_prefs)
+    set_philosophy_presets(app.ui_prefs["philosophy_presets"])
 
 
 def _weighted_rating_average(row, weights, use_max=False):
@@ -1503,7 +1556,7 @@ def philosophy_key_ratings(weights, n=8):
 # the game's Evaluate Roster screen did not change, so the game keeps its own weights somewhere else; that was restored.
 # -----------------------------
 PHILOSOPHY_FACTOR_ROWS = (   # (PEOW column, label)
-    ("OATW", "Athletic grade"), ("OINW", "Intangibles grade (skill ratings)"), ("OLNW", "Learning grade"),
+    ("OATW", "Athletic grade"), ("OINW", "Intangibles grade"), ("OLNW", "Learning grade"),
     ("ODRW", "Durability grade"), ("OPTW", "Potential grade"), ("OSZW", "Size grade"), ("OPDW", "Production grade (counted as 0)"),
 )
 # The weights copied from Balanced by "Copy from Balanced" in the weights editor: Play Recognition, Awareness and Learning
@@ -1521,13 +1574,51 @@ def philosophy_balanced_id(field):
     return None
 
 
+# Positions that can really switch to one another. The game lets anyone be put anywhere on the depth chart, but a player
+# off his position takes no part in practice drills (a TE at WR1 does not learn the plays of a 5-WR set) and complains
+# about not starting, so these families are the ones Player Type Fit lists across. A kicker and a punter can swap too, but
+# with hard-coded penalties (a 90 K is about a 70 P) the editor does not know, so they are not listed across.
+PHILOSOPHY_SWITCH_FAMILIES = (("CBPP", "FSPP", "SsPP"), ("OLPP", "MLPP", "DEPP", "DTPP"), ("TKPP", "GDPP", "CRPP"),
+                              ("TEPP", "FBPP", "HBPP"), ("QBPP", "WRPP"))
+PHILOSOPHY_SHORT_NAMES = {
+    "QBPP": "QB", "HBPP": "HB", "FBPP": "FB", "WRPP": "WR", "TEPP": "TE", "TKPP": "OT", "GDPP": "OG", "CRPP": "C",
+    "DEPP": "DE", "DTPP": "DT", "OLPP": "OLB", "MLPP": "MLB", "CBPP": "CB", "FSPP": "FS", "SsPP": "SS", "KKPP": "K", "KPPP": "P",
+}
+
+
+def philosophy_switchable_ppos(field):
+    """The PPOS values of the players who can switch to the position whose preset field this is (the position's own among
+    them), or just the position's own for a kicker or punter."""
+    for family in PHILOSOPHY_SWITCH_FAMILIES:
+        if field in family:
+            return set().union(*(ppos for _l, f, ppos in PHILOSOPHY_GROUPS if f in family))
+    return set(next((ppos for _l, f, ppos in PHILOSOPHY_GROUPS if f == field), ()))
+
+
+def philosophy_names(field):
+    """{preset value: name} of a team philosophy field: the game's presets, then the ones saved in the editor."""
+    names = dict(PHILOSOPHY_VALUES[field])
+    for cid, preset in sorted(PHILOSOPHY_CUSTOM.items()):
+        if preset["field"] == field:
+            names[cid] = preset["name"]
+    return names
+
+
+def philosophy_display_name(field, value):
+    """A preset's name as the lists show it: "(edited)" after a game preset whose weights were changed in the editor,
+    "(saved)" after a preset saved in the editor."""
+    if value in PHILOSOPHY_CUSTOM:
+        return PHILOSOPHY_CUSTOM[value]["name"] + " (saved)"
+    return PHILOSOPHY_VALUES[field].get(value, str(value)) + (" (edited)" if value in PHILOSOPHY_OVERRIDES else "")
+
+
 def philosophy_weight_fields():
     """[(tab label, table, [(column, label)])] for every weight the editor can change."""
     rating = lambda attrs: sorted(((col, STAT_META.get(attr, (attr,))[0]) for col, attr in attrs.items()), key=lambda cl: cl[1])
     return [
         ("Grades", "PEOW", list(PHILOSOPHY_FACTOR_ROWS)),
-        ("Athletic ratings", "PEAW", rating(PHILOSOPHY_ATHLETIC_ATTR)),
-        ("Skill ratings", "PEIW", rating(PHILOSOPHY_SKILL_ATTR)),
+        ("Athletic grade", "PEAW", rating(PHILOSOPHY_ATHLETIC_ATTR)),
+        ("Intangibles grade", "PEIW", rating(PHILOSOPHY_SKILL_ATTR)),
         ("Size", "PESW", [("HTSW", "Height"), ("WTSW", "Weight")]),
     ]
 
@@ -3650,8 +3741,10 @@ class PlayerTypeFitDialog(tk.Toplevel):
         opts = ttk.Frame(self)
         opts.pack(fill="x", padx=12, pady=(0, 2))
         self.other_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts, text="Include players of other positions (e.g. corners for a safety preset)",
+        ttk.Checkbutton(opts, text="Include players of positions that can switch to this one",
                         variable=self.other_var, command=self._refresh).pack(side="left")
+        self.lbl_other = ttk.Label(opts, foreground="gray")
+        self.lbl_other.pack(side="left", padx=(8, 0))
 
         self.lbl_key = ttk.Label(self, wraplength=780, justify="left")
         self.lbl_key.pack(anchor="w", padx=12, pady=(4, 2))
@@ -3664,8 +3757,12 @@ class PlayerTypeFitDialog(tk.Toplevel):
                  "readings taken from the game (cornerbacks, safeties and defensive tackles) it was within 1 point for 51 and never "
                  "more than 3 off; an unusual build could be a little further out. Other positions use the same formulas but "
                  "haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that "
-                 "player's team has now. Edit weights... changes the weights this window uses (kept in the editor only; the game, "
-                 "your saves and your game files are not touched).",
+                 "player's team has now. Edit weights... changes the weights this window uses, and can save them as a preset of your "
+                 "own; both are kept in the editor only (the game, your saves and your game files are not touched). The "
+                 "positions listed with 'include players of positions that can switch' are the ones that can really switch "
+                 "(CB / FS / SS; OLB / MLB / DE / DT; OT / OG / C; TE / FB / HB; QB / WR): the game lets you put anyone "
+                 "anywhere on the depth chart, but a player off his position takes no part in drills and complains about "
+                 "not starting.",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
         table_frm = ttk.Frame(self)
@@ -3708,8 +3805,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
     # ---- presets
     def _on_group(self, select_value=None):
         field, _ppos = self._groups[self.group_var.get()]
-        names = PHILOSOPHY_VALUES[field]
-        self._preset_ids = {name + (" (edited)" if value in PHILOSOPHY_OVERRIDES else ""): value for value, name in sorted(names.items())}
+        self._preset_ids = {philosophy_display_name(field, value): value for value in sorted(philosophy_names(field))}
         self.cmb_preset.configure(values=list(self._preset_ids))
         chosen = next((n for n, v in self._preset_ids.items() if v == select_value), next(iter(self._preset_ids)))
         self.preset_var.set(chosen)
@@ -3767,11 +3863,16 @@ class PlayerTypeFitDialog(tk.Toplevel):
 
         names = PHILOSOPHY_VALUES[field]
         everyone = self.other_var.get()
+        allowed = philosophy_switchable_ppos(field) if everyone else group_ppos
+        family = next((f for f in PHILOSOPHY_SWITCH_FAMILIES if field in f), None)
+        self.lbl_other.configure(text=(
+            "(" + ", ".join(PHILOSOPHY_SHORT_NAMES[f] for f in family) + ")" if family else
+            "(none: a kicker and a punter can swap, but the game gives them hard-coded penalties the editor does not know)"))
         self._grades = {}
         self.lbl_grades.configure(text="Select a player to see his grades.")
         count = 0
         for r in self._pool_rows():
-            if not everyone and (r.get(PLAYER_POS_CODE, "") or "").strip() not in group_ppos:
+            if (r.get(PLAYER_POS_CODE, "") or "").strip() not in allowed:
                 continue
             grades = philosophy_grades(r, model, size_pop)
             if grades is None:
@@ -3818,9 +3919,10 @@ class PlayerTypeFitDialog(tk.Toplevel):
             return
         PhilosophyWeightsDialog(self.parent, self, self.group_var.get(), field, value, self._weights_changed)
 
-    def _weights_changed(self):
-        """Weights were changed in the editor: redraw the list (and an open breakdown) with them."""
-        value = self._preset_ids.get(self.preset_var.get())
+    def _weights_changed(self, select_value=None):
+        """Weights or saved presets changed in the editor: redraw the list (and an open breakdown) with them, on the
+        preset selected now or on `select_value`."""
+        value = select_value if select_value is not None else self._preset_ids.get(self.preset_var.get())
         self._on_group(select_value=value)
         dlg = getattr(self, "_breakdown", None)
         if dlg is not None and dlg.winfo_exists():
@@ -3913,15 +4015,16 @@ class PhilosophyBreakdownDialog(tk.Toplevel):
         self.minsize(620, 420)
         self.field = field
         self.balanced = philosophy_balanced_id(field)
-        self._names = {name: v for v, name in sorted(PHILOSOPHY_VALUES[field].items())}
+        self._value = value
+        self._names = {}
 
         top = ttk.Frame(self)
         top.pack(fill="x", padx=12, pady=(12, 4))
         ttk.Label(top, text=f"{group_label}  -  preset:").pack(side="left")
-        self.preset_var = tk.StringVar(value=PHILOSOPHY_VALUES[field].get(value, ""))
-        cmb = ttk.Combobox(top, state="readonly", width=30, textvariable=self.preset_var, values=list(self._names))
-        cmb.pack(side="left", padx=(6, 0))
-        cmb.bind("<<ComboboxSelected>>", lambda e: self._refresh())
+        self.preset_var = tk.StringVar()
+        self.cmb = ttk.Combobox(top, state="readonly", width=30, textvariable=self.preset_var)
+        self.cmb.pack(side="left", padx=(6, 0))
+        self.cmb.bind("<<ComboboxSelected>>", lambda e: self._pick())
 
         ttk.Label(
             self, foreground="gray", wraplength=720, justify="left",
@@ -3962,7 +4065,7 @@ class PhilosophyBreakdownDialog(tk.Toplevel):
         btn.pack(fill="x", padx=12, pady=(0, 12))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
         if on_edit:
-            ttk.Button(btn, text="Edit weights...", command=lambda: on_edit(self._names.get(self.preset_var.get()))).pack(side="left")
+            ttk.Button(btn, text="Edit weights...", command=lambda: on_edit(self._value)).pack(side="left")
         self.bind("<Escape>", lambda e: self.destroy())
         self._refresh()
 
@@ -3970,8 +4073,18 @@ class PhilosophyBreakdownDialog(tk.Toplevel):
     def _bar(share, scale=60):
         return "█" * max(0, round(share * scale))
 
+    def _pick(self):
+        self._value = self._names.get(self.preset_var.get(), self._value)
+        self._refresh()
+
     def _refresh(self):
-        value = self._names.get(self.preset_var.get())
+        # the list follows renames, edits and saved presets; the preset shown stays selected by value
+        self._names = {philosophy_display_name(self.field, v): v for v in sorted(philosophy_names(self.field))}
+        self.cmb.configure(values=list(self._names))
+        if self._value not in self._names.values():
+            self._value = next(iter(self._names.values()))
+        self.preset_var.set(philosophy_display_name(self.field, self._value))
+        value = self._value
         model = PHILOSOPHY_MODEL.get(value)
         for tree in (self.tree_f, self.tree_i):
             for iid in tree.get_children():
@@ -4007,8 +4120,22 @@ class PhilosophyBreakdownDialog(tk.Toplevel):
 
 class PhilosophyWeightsDialog(tk.Toplevel):
     """Change the weights of one preset, for the editor's own Est. OVR (the game keeps its own; see the comment above
-    philosophy_balanced_id). Every weight the game has for the preset is here: the seven grades, the athletic and skill
-    ratings, and height / weight for the Size grade. Apply keeps the changed ones in the editor's preferences."""
+    philosophy_balanced_id). Every weight the game has for the preset is here: the seven grades, the ratings of the Athletic
+    and Intangibles grades, and height / weight for the Size grade. For a game preset, Apply keeps the changed weights over
+    the game's. Save as new preset... keeps a copy under a name of the user's own, which is then a preset in its own right
+    (PHILOSOPHY_CUSTOM) that this dialog edits in place."""
+
+    GROUP_NOTES = {
+        "PEAW": "These ratings make up the Athletic grade (the game's table PEAW). The split between the Athletic and the "
+                "Intangibles grade is the game's own: grouped this way, the grade formulas reproduce the Athletic and "
+                "Intangibles grades the game stores for all 350 draft prospects exactly; moving any of the ratings tried (Finesse "
+                "Move, Spin Move, Hit Power, Pass Block Strength) to the other grade stops them matching.",
+        "PEIW": "These ratings make up the Intangibles grade (the game's table PEIW), Stamina and Learning included, in "
+                "spite of the name. That is the game's own grouping: it reproduces the stored Intangibles grades exactly, "
+                "and moving Stamina to the Athletic grade, for one, makes 88 of the 350 stored Intangibles grades wrong.",
+        "PEOW": "The overall is the average of the grades weighted by these. Potential is the same average over the other "
+                "grades' maximum ratings. Production's weight counts in the average but the grade counts as 0.",
+    }
 
     def __init__(self, app, parent, group_label, field, value, on_changed):
         super().__init__(parent)
@@ -4017,29 +4144,38 @@ class PhilosophyWeightsDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Edit weights")
         self.transient(parent)
-        self.geometry("780x640")
-        self.minsize(640, 520)
+        self.geometry(f"960x{min(760, self.winfo_screenheight() - 70)}")
+        self.minsize(800, 560)
         self.app, self.parent, self.on_changed = app, parent, on_changed
         self.field, self.value, self.group_label = field, value, group_label
         self.group_ppos = next((ppos for label, f, ppos in PHILOSOPHY_GROUPS if f == field), set())
         self.balanced = philosophy_balanced_id(field)
-        self.game = philosophy_game_weights(value)
+        self.custom = PHILOSOPHY_CUSTOM.get(value)
+        game_ids = _read_philosophy_table("PEOW") or {}
+        self.base = (self.custom or {}).get("base") if self.custom else value
+        if self.base not in game_ids:
+            self.base = self.balanced
+        self.ref_word = "base" if self.custom else "game"
+        self.game = philosophy_game_weights(self.base)
         self.vars = {}     # (table, column) -> StringVar
-        self.marks = {}    # (table, column) -> Label showing the game's value
+        self.marks = {}    # (table, column) -> Label showing the game's (or base's) value
         self._effect_job = None
 
-        name = PHILOSOPHY_VALUES[field].get(value, str(value))
-        ttk.Label(self, text=f"{group_label}: {name}", font=("", 11, "bold"), padding=(12, 12, 12, 2)).pack(anchor="w")
-        ttk.Label(
-            self, wraplength=740, justify="left", foreground="gray", padding=(12, 0, 12, 6),
-            text="These are the weights the game's Evaluate Roster formulas use for this preset. Changing them changes the Est. "
-                 "OVR in this editor only: the game itself, your saves and your game files are not touched, and the game "
-                 "keeps using its own weights. A weight of 0 means the rating or grade does not count. The game's own value "
-                 "is shown beside each box.",
-        ).pack(anchor="w")
+        self.lbl_title = ttk.Label(self, font=("", 11, "bold"), padding=(12, 12, 12, 2))
+        self.lbl_title.pack(anchor="w")
+        if self.custom:
+            intro = ("This is a preset you saved in the editor. Its weights start from the game's "
+                     f"{PHILOSOPHY_VALUES[field].get(self.base, 'preset')} preset (shown beside each box as 'base'). Apply "
+                     "keeps your changes to it. It exists in this editor only: the game, your saves and your game files are "
+                     "not touched.")
+        else:
+            intro = ("These are the weights the game's Evaluate Roster formulas use for this preset. Changing them changes the "
+                     "Est. OVR in this editor only: the game itself, your saves and your game files are not touched, and the "
+                     "game keeps using its own weights. A weight of 0 means the rating or grade does not count. The game's own "
+                     "value is shown beside each box. Save as new preset... keeps a copy under a name you choose.")
+        ttk.Label(self, wraplength=920, justify="left", foreground="gray", padding=(12, 0, 12, 6), text=intro).pack(anchor="w")
 
         nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=12, pady=(0, 6))
         for tab, table, cols in philosophy_weight_fields():
             if table not in self.game:
                 continue
@@ -4056,32 +4192,46 @@ class PhilosophyWeightsDialog(tk.Toplevel):
                 mark = ttk.Label(frm, foreground="gray", width=19)
                 mark.grid(row=r, column=block * 3 + 2, sticky="w", padx=(6, 10))
                 self.marks[(table, col)] = mark
-            if table == "PEOW":
-                ttk.Label(frm, foreground="gray", wraplength=600, justify="left",
-                          text="The overall is the average of the grades weighted by these. Potential is the same average over "
-                               "the other grades' maximum ratings. Production's weight counts in the average but the grade "
-                               "counts as 0.").grid(row=len(cols) + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+            note = self.GROUP_NOTES.get(table)
+            if note:
+                ttk.Label(frm, foreground="gray", wraplength=860, justify="left", text=note).grid(
+                    row=per_col + 1, column=0, columnspan=9, sticky="w", pady=(10, 0))
 
-        self.lbl_effect = ttk.Label(self, wraplength=740, justify="left", padding=(12, 0, 12, 2))
-        self.lbl_effect.pack(anchor="w")
-        self.lbl_status = ttk.Label(self, foreground="gray", wraplength=740, justify="left", padding=(12, 0, 12, 4))
-        self.lbl_status.pack(anchor="w")
-        btn = ttk.Frame(self)
-        btn.pack(fill="x", padx=12, pady=(0, 12))
-        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
-        ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
-        ttk.Button(btn, text="Reset to the game's values", command=self._reset).pack(side="right", padx=(0, 8))
-        self.btn_copy = ttk.Button(btn, text="Copy Play Rec / Awareness / Learning from Balanced", command=self._copy_balanced)
+        self.lbl_effect = ttk.Label(self, wraplength=920, justify="left", padding=(12, 0, 12, 2))
+        self.lbl_status = ttk.Label(self, foreground="gray", wraplength=920, justify="left", padding=(12, 0, 12, 4))
+        row1 = ttk.Frame(self)
+        self.btn_copy = ttk.Button(row1, text="Copy Play Rec / Awareness / Learning from Balanced", command=self._copy_balanced)
         self.btn_copy.pack(side="left")
         if self.balanced is None or self.balanced == value:
             self.btn_copy.configure(state="disabled")
+        ttk.Button(row1, text="Save as new preset...", command=self._save_as).pack(side="left", padx=(8, 0))
+        if self.custom:
+            ttk.Button(row1, text="Rename...", command=self._rename).pack(side="left", padx=(8, 0))
+            ttk.Button(row1, text="Delete preset", command=self._delete).pack(side="left", padx=(8, 0))
+        row2 = ttk.Frame(self)
+        ttk.Button(row2, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(row2, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        ttk.Button(row2, text="Reset to the base preset's values" if self.custom else "Reset to the game's values",
+                   command=self._reset).pack(side="right", padx=(0, 8))
+        # the buttons are packed first from the bottom, so a small screen cuts the weights, not the buttons
+        row2.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
+        row1.pack(side="bottom", fill="x", padx=12, pady=(0, 4))
+        self.lbl_status.pack(side="bottom", anchor="w")
+        self.lbl_effect.pack(side="bottom", anchor="w")
+        nb.pack(fill="both", expand=True, padx=12, pady=(0, 6))
         self.bind("<Escape>", lambda e: self.destroy())
+        self._set_title()
         for key in self.vars:
             self._changed(*key)
         self._update_effect()
 
+    def _set_title(self):
+        self.lbl_title.configure(text=f"{self.group_label}: {philosophy_display_name(self.field, self.value)}")
+
     def _current(self, table, col):
-        """The weight in use now: the editor's change if there is one, else the game's."""
+        """The weight in use now: a saved preset's own, the editor's change to a game preset, or the game's."""
+        if self.custom:
+            return self.custom["weights"][table][col]
         return PHILOSOPHY_OVERRIDES.get(self.value, {}).get(table, {}).get(col, self.game[table][col])
 
     def _read(self, table, col):
@@ -4097,9 +4247,9 @@ class PhilosophyWeightsDialog(tk.Toplevel):
         if v is None:
             mark.configure(text=f"0-{PHILOSOPHY_WEIGHT_MAX} only", foreground="#d9534f")
         elif v != game:
-            mark.configure(text=f"game: {game}  (changed)", foreground="#d98c1f")
+            mark.configure(text=f"{self.ref_word}: {game}  (changed)", foreground="#d98c1f")
         else:
-            mark.configure(text=f"game: {game}", foreground="gray")
+            mark.configure(text=f"{self.ref_word}: {game}", foreground="gray")
         if self._effect_job is not None:
             self.after_cancel(self._effect_job)
         self._effect_job = self.after(250, self._update_effect)
@@ -4131,28 +4281,92 @@ class PhilosophyWeightsDialog(tk.Toplevel):
         for table, col in PHILOSOPHY_COPY_COLUMNS:
             if (table, col) in self.vars and table in bal:
                 self.vars[(table, col)].set(str(bal[table][col]))
-        self.lbl_status.configure(text="Copied from Balanced. Apply to use them.")
+        self.lbl_status.configure(text="Copied from Balanced. Apply to use them, or save them as a new preset.")
 
     def _reset(self):
         for (table, col), var in self.vars.items():
             var.set(str(self.game[table][col]))
-        self.lbl_status.configure(text="Back to the game's values. Apply to use them.")
+        self.lbl_status.configure(text="Back to the " + ("base preset's" if self.custom else "game's") + " values. Apply to use them.")
 
     def _apply(self):
         weights = self._weights()
         if weights is None:
             messagebox.showerror("Invalid weight", f"Every weight must be a whole number from 0 to {PHILOSOPHY_WEIGHT_MAX}.")
             return
-        changed = {t: {c: w for c, w in cols.items() if w != self.game[t][c]} for t, cols in weights.items()}
-        changed = {t: cols for t, cols in changed.items() if cols}
-        overrides = {k: v for k, v in PHILOSOPHY_OVERRIDES.items() if k != self.value}
-        if changed:
-            overrides[self.value] = changed
-        save_philosophy_overrides(self.app, overrides)
-        self.lbl_status.configure(text=("Applied: this preset now uses your weights in the editor." if changed
-                                        else "Applied: this preset uses the game's weights."))
+        if self.custom:
+            presets = dict(PHILOSOPHY_CUSTOM)
+            presets[self.value] = {**self.custom, "weights": weights}
+            save_philosophy_presets(self.app, presets)
+            self.custom = PHILOSOPHY_CUSTOM[self.value]
+            self.lbl_status.configure(text="Applied: your changes to this preset are saved.")
+        else:
+            changed = {t: {c: w for c, w in cols.items() if w != self.game[t][c]} for t, cols in weights.items()}
+            changed = {t: cols for t, cols in changed.items() if cols}
+            overrides = {k: v for k, v in PHILOSOPHY_OVERRIDES.items() if k != self.value}
+            if changed:
+                overrides[self.value] = changed
+            save_philosophy_overrides(self.app, overrides)
+            self.lbl_status.configure(text=("Applied: this preset now uses your weights in the editor." if changed
+                                            else "Applied: this preset uses the game's weights."))
+        self._set_title()
         self.on_changed()
         self._update_effect()
+
+    def _name_problem(self, name, own_id=None):
+        """Why a preset name can't be used, or "" if it can."""
+        if not name:
+            return "Type a name for the preset."
+        if len(name) > PHILOSOPHY_CUSTOM_NAME_MAX:
+            return f"Use {PHILOSOPHY_CUSTOM_NAME_MAX} characters or fewer."
+        taken = {n.lower() for v, n in philosophy_names(self.field).items() if v != own_id}
+        if name.lower() in taken:
+            return "This position already has a preset with that name."
+        return ""
+
+    def _ask_name(self, title, initial="", own_id=None):
+        name = simpledialog.askstring(title, "Name:", parent=self, initialvalue=initial)
+        if name is None:
+            return None
+        name = " ".join(name.split())
+        problem = self._name_problem(name, own_id)
+        if problem:
+            messagebox.showerror("Preset name", problem)
+            return None
+        return name
+
+    def _save_as(self):
+        weights = self._weights()
+        if weights is None:
+            messagebox.showerror("Invalid weight", f"Every weight must be a whole number from 0 to {PHILOSOPHY_WEIGHT_MAX}.")
+            return
+        name = self._ask_name("Save as new preset")
+        if name is None:
+            return
+        new_id = max([PHILOSOPHY_CUSTOM_BASE_ID - 1] + list(PHILOSOPHY_CUSTOM)) + 1
+        presets = dict(PHILOSOPHY_CUSTOM)
+        presets[new_id] = {"name": name, "field": self.field, "base": self.base, "weights": weights}
+        save_philosophy_presets(self.app, presets)
+        self.on_changed(select_value=new_id)
+        self.destroy()
+
+    def _rename(self):
+        name = self._ask_name("Rename preset", self.custom["name"], own_id=self.value)
+        if name is None:
+            return
+        presets = dict(PHILOSOPHY_CUSTOM)
+        presets[self.value] = {**self.custom, "name": name}
+        save_philosophy_presets(self.app, presets)
+        self.custom = PHILOSOPHY_CUSTOM[self.value]
+        self._set_title()
+        self.on_changed()
+
+    def _delete(self):
+        if not messagebox.askyesno("Delete preset", f"Delete the preset \"{self.custom['name']}\"? This can't be undone."):
+            return
+        presets = {k: v for k, v in PHILOSOPHY_CUSTOM.items() if k != self.value}
+        save_philosophy_presets(self.app, presets)
+        self.on_changed(select_value=self.base)
+        self.destroy()
 
 
 class TeamPhilosophyDialog(tk.Toplevel):
@@ -5134,6 +5348,7 @@ class App(tk.Tk):
 
         self.ui_prefs = load_ui_prefs()
         set_philosophy_overrides(self.ui_prefs.get("philosophy_overrides"))
+        set_philosophy_presets(self.ui_prefs.get("philosophy_presets"))
         self.dark_mode_var = tk.BooleanVar(value=(self.ui_prefs.get("mode") == "dark"))
         # Master switch: every feature added alongside the visual facelift
         # (Motivator boost, contract dialog, staff filters, per-save team

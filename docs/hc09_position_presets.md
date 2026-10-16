@@ -66,7 +66,25 @@ How it got here: a plain weighted average of the `PEAW` and `PEIW` ratings was t
 
 The **?** button next to the preset list opens a breakdown of the preset selected now, beside the position's Balanced preset: the seven grades and their `PEOW` weights, then every rating as its share of the whole overall. A rating counts directly (through the Athletic or Intangibles grade) and again through Potential, which is the same weighted average over the maximum ratings, so the second table adds both up: `grade share = (w + OPTW * w / (OINW + OLNW + OATW + ODRW + OSZW)) / Sum(all seven)`, split among the ratings by their `PEAW` / `PEIW` weights. The Learning rating also counts as its own grade (`OLNW`). Production's weight stays in the divisor and counts as 0.
 
-**Edit weights...** (bottom of Player Type Fit, and in the breakdown) changes any of the weights the editor read from the game for the preset shown: the seven grades (`PEOW`), the 14 athletic ratings (`PEAW`), the 32 skill ratings (`PEIW`) and height / weight for Size (`PESW`). Each box shows the game's own value beside it. Changes affect the **editor's Est. OVR only**: they are kept in the editor's preferences (`.hc09_ui_prefs.json`, key `philosophy_overrides`, only the weights that differ from the game's) and laid over the game's tables when the model is built; edited presets are marked "(edited)" in the list. Nothing in the game, a save or the game's files changes. **Reset to the game's values** and Apply removes them.
+**Edit weights...** (bottom of Player Type Fit, and in the breakdown) changes any of the weights the editor read from the game for the preset shown: the seven grades (`PEOW`), the 14 ratings of the Athletic grade (`PEAW`), the 32 of the Intangibles grade (`PEIW`) and height / weight for Size (`PESW`). Each box shows the game's own value beside it. Changes affect the **editor's Est. OVR only**: they are kept in the editor's preferences (`.hc09_ui_prefs.json`, key `philosophy_overrides`, only the weights that differ from the game's) and laid over the game's tables when the model is built; edited presets are marked "(edited)" in the list. Nothing in the game, a save or the game's files changes. **Reset to the game's values** and Apply removes them.
+
+**Saved presets.** *Save as new preset...* in the weights editor keeps the weights in the boxes (all 55) under a name you choose, as a preset of that position in its own right: it is listed after the game's presets as "name (saved)", Est. OVR and the breakdown work on it, and *Edit weights...* on it changes it in place (*Rename...* and *Delete preset* are there too). A saved preset remembers the game preset it started from (shown as "base" beside the boxes). Names must be unique per position and at most 40 characters. They are kept in the editor's preferences (key `philosophy_presets`, ids from 1000 up; the game's presets are 0 to 81) and exist in the editor only.
+
+**Which ratings are Athletic and which are Intangibles** is the game's own split, not a choice of the editor: the game's weight table `PEAW` has 14 rating columns (acceleration, speed, agility, strength, jumping, throw power, kick power, hit power, elusiveness, juke move, spin move, finesse move, run block strength, pass block strength) and `PEIW` has the other 32 (Stamina, Awareness, Learning, Play Recognition, Power Move and every other skill, and Injury / Toughness). Against the 350 draft prospects' stored grades in `RPGR`, that split gives the Athletic and the Intangibles grade exactly for all 350; moving a rating to the other grade breaks it:
+
+| Moved | Athletic grade exact | Intangibles grade exact |
+|---|---|---|
+| nothing (the game's split) | 350 of 350 | 350 of 350 |
+| Stamina to Athletic | 268 | 262 |
+| Finesse Move to Intangibles | 263 | 298 |
+| Spin Move to Intangibles | 309 | 327 |
+| Pass Block Strength to Intangibles | 293 | 285 |
+| Hit Power to Intangibles | 243 | 250 |
+| Awareness to Athletic | 6 | 56 |
+
+How the rest of the game groups these ratings (the player card, practice) is a separate question this does not answer; the weights editor's tabs are named "Athletic grade" and "Intangibles grade" after the grades they feed.
+
+**Which positions are listed across.** *Include players of positions that can switch to this one* lists, for a position's preset, only players of positions that can really play it: CB / FS / SS, OLB / MLB / DE / DT, OT / OG / C, TE / FB / HB and QB / WR. The game lets you put anyone anywhere on the depth chart, but a player off his position takes no part in practice drills (a TE at WR1 does not learn the plays of a 5-WR set) and complains about not starting. A kicker and a punter can swap too, but with hard-coded penalties (a 90 K is about a 70 P) that the editor does not know, so a K or P preset lists only kickers or punters.
 
 **One Gap Penetrator (DT, 47) and Undersized Speed Rusher (DE, 42)** (the community calls them the Aaron Donald / John Randle and Dwight Freeney / Elvis Dumervil types) are weak in the game's own data, compared with the position's Balanced preset (45 and 40):
 
