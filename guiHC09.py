@@ -6694,7 +6694,7 @@ class App(tk.Tk):
         team_name = TEAM_NAMES.get(tid, tid)
         ok = messagebox.askyesno(
             "Confirm team staff max",
-            f"Max SKPT and all confirmed skills for every trainer, coach, and GM on {team_name}?"
+            f"Max SKPT, all confirmed skills and all special skills for every trainer, coach, and GM on {team_name}?"
         )
         if not ok:
             return
@@ -6731,6 +6731,17 @@ class App(tk.Tk):
             if (row.get("TGID", "") or "").strip() == tid:
                 self._max_out_coach_development(idx)
 
+        # Special skills (PSSK): every skill the game offers each person's role
+        if self.model.pssk_headers:
+            for rows, role_of in ((self.model.trainers, lambda r: "TR"), (self.model.gms, lambda r: "GM"),
+                                  (self.model.coaches, lambda r: STAFF_COACH_ROLE.get((r.get("COPS", "") or "").strip(), "HC"))):
+                for row in rows:
+                    pnid = (row.get("PNid", "") or "").strip()
+                    if pnid and (row.get("TGID", "") or "").strip() == tid:
+                        self.model.set_staff_skills_mask(
+                            pnid, self.model.staff_skills_mask(pnid) | sum(1 << n for n in STAFF_ROLE_SKILLS.get(role_of(row), ())))
+
+        self.mark_dirty()
         self.refresh_trainer()
         self.refresh_coach()
         self.refresh_gm()
@@ -6741,6 +6752,7 @@ class App(tk.Tk):
             f"Trainers maxed (SKPT + skills): {trainer_count}\n"
             f"Coaches maxed (SKPT + skills): {coach_count}\n"
             f"GMs maxed (SKPT + skills): {gm_count}"
+            + ("\nSpecial skills: all the game offers each role" if self.model.pssk_headers else "")
         )
 
     def _on_player_search_changed(self, *_args):
