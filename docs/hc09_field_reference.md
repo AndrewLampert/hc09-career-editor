@@ -14,7 +14,7 @@ Generated from the **HC09 Detailed Config.xml** (made by JHamilton9 in 2020 for 
 
 | Field | Editor says | Config says | Notes |
 |---|---|---|---|
-| `PPBS` | Pass Block Power | Pass Block Strength | same meaning, different word (the attribute is `PassBlockPowerRating` in the other lookup sheet) |
+| `PPBS` | Pass Block Strength | Pass Block Strength | the game calls it Pass Block Strength (a player confirmed it); older versions of this editor said "Pass Block Power", as the attribute is `PassBlockPowerRating` in the other lookup sheet |
 | `PPBF` | Pass Block Finesse | Pass Block Footwork | same meaning (`PassBlockFinesseRating`) |
 | `PRBF` | Run Block Finesse | Run Block Footwork | same meaning (`RunBlockFinesseRating`) |
 | `SKPX` | Play Call Max | Play Call Potential | "potential" = the max of the pair; consistent |

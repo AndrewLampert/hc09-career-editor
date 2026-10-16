@@ -49,8 +49,10 @@ export/import through HC09Editor required.
   to the preset list breaks down what the selected preset weights, beside Balanced, and
   *Edit weights...* lets you change any of those weights for the editor's own estimate (for
   example copying Play Recognition, Awareness and Learning from Balanced into the One Gap DT
-  and Speed Rusher DE types, which the game barely weighs those ratings in). The game, your saves and
-  your game files are not changed),
+  and Speed Rusher DE types, which the game barely weighs those ratings in), and save the result
+  as a preset of your own under a name you choose. The game, your saves and your game files are
+  not changed. *Include players of positions that can switch* lists only positions that can really
+  play the preset's position (CB / FS / SS, OLB / MLB / DE / DT, OT / OG / C, TE / FB / HB, QB / WR)),
   the recent-saves list,
   and *Options* (modern UI, dark mode).
 
