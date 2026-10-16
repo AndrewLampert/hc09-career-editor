@@ -41,11 +41,16 @@ export/import through HC09Editor required.
   are shown one at a time. Playbooks 1-10 (your custom playbooks) and the plays you made in the
   game are named from your profile save, found next to your career and only read.
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
-  (read-only: rebuilds each player's overall under one of the game's team position presets,
+  (rebuilds each player's overall under one of the game's team position presets,
   such as Cover 2 or Man Coverage CB, with the game's own formulas, and ranks them; select a
   player to see his seven grades. It is an estimate: within 1 point of the Evaluate Roster screen
   for 51 of the 55 readings checked and never more than 3 off (cornerbacks, safeties, defensive
-  tackles); Size is approximated; other positions are unchecked on the screen),
+  tackles); Size is approximated; other positions are unchecked on the screen. The **?** next
+  to the preset list breaks down what the selected preset weights, beside Balanced, and
+  *Edit weights...* lets you change any of those weights for the editor's own estimate (for
+  example copying Play Recognition, Awareness and Learning from Balanced into the One Gap DT
+  and Speed Rusher DE types, which the game barely weighs those ratings in). The game, your saves and
+  your game files are not changed),
   the recent-saves list,
   and *Options* (modern UI, dark mode).
 

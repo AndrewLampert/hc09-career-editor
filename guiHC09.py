@@ -1292,6 +1292,21 @@ def load_body_weights():
         return None
 
 
+PHILOSOPHY_OVERRIDES = {}   # {preset: {table: {column: weight}}}: weights changed in the editor (the game keeps its own)
+
+
+def _with_philosophy_overrides(table, rows):
+    """The table's rows with the editor's changed weights laid over the game's."""
+    out = {}
+    for gid, row in rows.items():
+        changed = PHILOSOPHY_OVERRIDES.get(gid, {}).get(table)
+        if changed:
+            row = dict(row)
+            row.update({col: str(w) for col, w in changed.items()})
+        out[gid] = row
+    return out
+
+
 def load_philosophy_model():
     """{philosophy value: {"athletic": {rating column: weight}, "skill": {...}, "factors": {"OINW": w, ...},
     "size": (HTSW, WTSW)}} from the cached PEAW, PEIW, PEOW and PESW tables, or {} if they have not been extracted
@@ -1303,7 +1318,7 @@ def load_philosophy_model():
         rows = _read_philosophy_table(table)
         if rows is None:
             return {}
-        tables[table] = rows
+        tables[table] = _with_philosophy_overrides(table, rows)
     out = {}
     for gid, peaw in tables["PEAW"].items():
         peiw, peow, pesw = tables["PEIW"].get(gid), tables["PEOW"].get(gid), tables["PESW"].get(gid)
@@ -1333,6 +1348,39 @@ def reload_philosophy_data():
 
 
 reload_philosophy_data()
+
+
+def _clean_philosophy_overrides(raw):
+    """Overrides as the preferences file holds them (JSON keys are strings) -> {preset: {table: {column: weight}}},
+    dropping anything that is not a whole number weight for a known table."""
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, tables in raw.items():
+        preset = safe_int(str(key))
+        if preset is None or not isinstance(tables, dict):
+            continue
+        for table, cols in tables.items():
+            if table not in PHILOSOPHY_WEIGHT_TABLES or not isinstance(cols, dict):
+                continue
+            for col, w in cols.items():
+                if isinstance(w, int) and not isinstance(w, bool) and 0 <= w <= PHILOSOPHY_WEIGHT_MAX:
+                    out.setdefault(preset, {}).setdefault(table, {})[str(col)] = w
+    return out
+
+
+def set_philosophy_overrides(raw):
+    """Use the editor's own weights for the presets they name, in place of the game's, and rebuild the model."""
+    global PHILOSOPHY_OVERRIDES
+    PHILOSOPHY_OVERRIDES = _clean_philosophy_overrides(raw)
+    reload_philosophy_data()
+
+
+def save_philosophy_overrides(app, overrides):
+    """Keep the editor's weight changes in its preferences and use them now."""
+    app.ui_prefs["philosophy_overrides"] = {str(k): v for k, v in overrides.items()}
+    save_ui_prefs(app.ui_prefs)
+    set_philosophy_overrides(app.ui_prefs["philosophy_overrides"])
 
 
 def _weighted_rating_average(row, weights, use_max=False):
@@ -1437,6 +1485,119 @@ def philosophy_key_ratings(weights, n=8):
     """The ratings a philosophy weights most, as 'Man Coverage 31, Speed 31, ...'."""
     top = sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
     return ", ".join(f"{STAT_META.get(a, (a,))[0]} {w:g}" for a, w in top)
+
+
+# -----------------------------
+# Weighting breakdown ("?" in Player Type Fit) and editable weights ("Edit weights...").
+#
+# The overall under a preset is Sum(factor weight x grade) / Sum(factor weights) over seven grades (PEOW), and the
+# Potential grade is itself the same combination over the other grades' maximum ratings, so a grade reaches the overall
+# directly and again through Potential. philosophy_breakdown() adds both up per rating.
+#
+# In the game's own data the One Gap Penetrator DT (47) and Undersized Speed Rusher DE (42) types barely weigh Play
+# Recognition, Awareness and Learning (PEIW PRGW / AWRW / LRNW), and weigh the Intangibles and Learning grades (PEOW
+# OINW / OLNW) at a fraction of Balanced, so smart pass rushers rate low under them. The editor lets the user change any
+# of the weights it reads from the game, for its own Est. OVR only: changes are kept in the editor's preferences
+# (PHILOSOPHY_OVERRIDES) and laid over the game's tables when the model is built. Writing them into the game's files was
+# tried (both copies of the database, qkl_boot.ast entry 46 and qkl_fe2ig.ast entry 1816, byte-patched and read back) and
+# the game's Evaluate Roster screen did not change, so the game keeps its own weights somewhere else; that was restored.
+# -----------------------------
+PHILOSOPHY_FACTOR_ROWS = (   # (PEOW column, label)
+    ("OATW", "Athletic grade"), ("OINW", "Intangibles grade (skill ratings)"), ("OLNW", "Learning grade"),
+    ("ODRW", "Durability grade"), ("OPTW", "Potential grade"), ("OSZW", "Size grade"), ("OPDW", "Production grade (counted as 0)"),
+)
+# The weights copied from Balanced by "Copy from Balanced" in the weights editor: Play Recognition, Awareness and Learning
+# (PEIW) and the Learning grade's own weight (PEOW). The three ratings alone move an overall by about 0.2 points on average;
+# the Learning grade's weight is what makes the difference.
+PHILOSOPHY_COPY_COLUMNS = (("PEIW", "PRGW"), ("PEIW", "AWRW"), ("PEIW", "LRNW"), ("PEOW", "OLNW"))
+PHILOSOPHY_WEIGHT_MAX = 99
+
+
+def philosophy_balanced_id(field):
+    """The Balanced preset of a team philosophy field (45 for DTPP), or None if it has none."""
+    for value, name in sorted(PHILOSOPHY_VALUES.get(field, {}).items()):
+        if name == "Balanced":
+            return value
+    return None
+
+
+def philosophy_weight_fields():
+    """[(tab label, table, [(column, label)])] for every weight the editor can change."""
+    rating = lambda attrs: sorted(((col, STAT_META.get(attr, (attr,))[0]) for col, attr in attrs.items()), key=lambda cl: cl[1])
+    return [
+        ("Grades", "PEOW", list(PHILOSOPHY_FACTOR_ROWS)),
+        ("Athletic ratings", "PEAW", rating(PHILOSOPHY_ATHLETIC_ATTR)),
+        ("Skill ratings", "PEIW", rating(PHILOSOPHY_SKILL_ATTR)),
+        ("Size", "PESW", [("HTSW", "Height"), ("WTSW", "Weight")]),
+    ]
+
+
+def philosophy_game_weights(preset):
+    """{table: {column: int}} the game's own weights for one preset (the cached tables, without the editor's changes)."""
+    out = {}
+    for _tab, table, cols in philosophy_weight_fields():
+        row = (_read_philosophy_table(table) or {}).get(preset)
+        if row is not None:
+            out[table] = {col: (safe_int(row.get(col, "")) or 0) for col, _label in cols}
+    return out
+
+
+def philosophy_breakdown(model):
+    """What the overall under one preset is made of: {"factors": {PEOW column: share}, "items": {rating attribute,
+    "durability" or "size": share}}, shares as fractions of the whole (they add up to 1 with Production's share, which
+    counts as 0)."""
+    f = model["factors"]
+    total = sum(f.values()) or 1.0
+    graded = f["OINW"] + f["OLNW"] + f["OATW"] + f["ODRW"] + f["OSZW"]
+
+    def effective(col):   # a grade's share of the overall, counting what reaches it through Potential
+        return (f[col] + (f["OPTW"] * f[col] / graded if graded else 0.0)) / total
+
+    items = {}
+    athletic, skill = model["athletic"], model["skill"]
+    athletic_total, skill_total = sum(athletic.values()), sum(skill.values())
+    for attr, w in athletic.items():
+        items[attr] = items.get(attr, 0.0) + effective("OATW") * w / athletic_total
+    for attr, w in skill.items():
+        items[attr] = items.get(attr, 0.0) + effective("OINW") * w / skill_total
+    items["PLRN"] = items.get("PLRN", 0.0) + effective("OLNW")
+    items["durability"] = effective("ODRW")
+    items["size"] = effective("OSZW")
+    return {"factors": {col: f[col] / total for col, _label in PHILOSOPHY_FACTOR_ROWS}, "items": items}
+
+
+def philosophy_item_label(key):
+    if key == "durability":
+        return "Body-part health (Durability grade)"
+    if key == "size":
+        return "Height and weight (Size grade)"
+    return STAT_META.get(key, (key,))[0]
+
+
+def philosophy_model_from(weights):
+    """The model for one preset (as PHILOSOPHY_MODEL holds it) from {table: {column: weight}} of PEAW, PEIW, PEOW, PESW."""
+    return {
+        "athletic": _philosophy_weights_of(weights["PEAW"], PHILOSOPHY_ATHLETIC_ATTR),
+        "skill": _philosophy_weights_of(weights["PEIW"], PHILOSOPHY_SKILL_ATTR),
+        "factors": _philosophy_numbers_of(weights["PEOW"], ("OPDW", "OINW", "OLNW", "ODRW", "OATW", "OPTW", "OSZW")),
+        "size": (float(weights["PESW"].get("HTSW") or 0), float(weights["PESW"].get("WTSW") or 0)),
+    }
+
+
+def philosophy_effect(players, group_ppos, old_model, new_model):
+    """(players counted, average change in overall, largest drop, largest rise) over the players at a position when a
+    preset's weights go from old_model to new_model; None if no player could be rated."""
+    pool = [r for r in players if (r.get(PLAYER_POS_CODE, "") or "").strip() in group_ppos]
+    size_pop = philosophy_size_population(players, group_ppos)
+    deltas = []
+    for r in pool:
+        before = estimate_philosophy_overall(r, old_model, size_pop)
+        after = estimate_philosophy_overall(r, new_model, size_pop)
+        if before is not None and after is not None:
+            deltas.append(after - before)
+    if not deltas:
+        return None
+    return len(deltas), sum(abs(d) for d in deltas) / len(deltas), min(deltas), max(deltas)
 
 
 def detect_team_col_case_sensitive(headers):
@@ -3475,8 +3636,10 @@ class PlayerTypeFitDialog(tk.Toplevel):
         ttk.Label(top, text="Preset:").pack(side="left")
         self.preset_var = tk.StringVar()
         self.cmb_preset = ttk.Combobox(top, state="readonly", width=28, textvariable=self.preset_var)
-        self.cmb_preset.pack(side="left", padx=(6, 14))
+        self.cmb_preset.pack(side="left", padx=(6, 4))
         self.cmb_preset.bind("<<ComboboxSelected>>", lambda e: self._refresh())
+        self.btn_breakdown = ttk.Button(top, text="?", width=3, command=self._open_breakdown)
+        self.btn_breakdown.pack(side="left", padx=(0, 14))
         ttk.Label(top, text="Pool:").pack(side="left")
         pool_labels = [label for _key, label in self.POOL_OPTIONS]
         self.pool_var = tk.StringVar(value=pool_labels[0])
@@ -3501,7 +3664,8 @@ class PlayerTypeFitDialog(tk.Toplevel):
                  "readings taken from the game (cornerbacks, safeties and defensive tackles) it was within 1 point for 51 and never "
                  "more than 3 off; an unusual build could be a little further out. Other positions use the same formulas but "
                  "haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that "
-                 "player's team has now. Nothing is changed.",
+                 "player's team has now. Edit weights... changes the weights this window uses (kept in the editor only; the game, "
+                 "your saves and your game files are not touched).",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
         table_frm = ttk.Frame(self)
@@ -3524,6 +3688,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
         btn_frm = ttk.Frame(self)
         btn_frm.pack(fill="x", padx=12, pady=(0, 12))
         ttk.Button(btn_frm, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn_frm, text="Edit weights...", command=self._open_weights).pack(side="left")
 
         self._sort_state = {}
         # start on the selected player's position, and on the preset his team has for it
@@ -3544,7 +3709,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
     def _on_group(self, select_value=None):
         field, _ppos = self._groups[self.group_var.get()]
         names = PHILOSOPHY_VALUES[field]
-        self._preset_ids = {name: value for value, name in sorted(names.items())}
+        self._preset_ids = {name + (" (edited)" if value in PHILOSOPHY_OVERRIDES else ""): value for value, name in sorted(names.items())}
         self.cmb_preset.configure(values=list(self._preset_ids))
         chosen = next((n for n, v in self._preset_ids.items() if v == select_value), next(iter(self._preset_ids)))
         self.preset_var.set(chosen)
@@ -3593,7 +3758,8 @@ class PlayerTypeFitDialog(tk.Toplevel):
         if model is None:
             self.lbl_key.configure(text="No weights for this preset in the game data.")
             return
-        self.lbl_key.configure(text="Key ratings for this preset: " + philosophy_key_ratings(PHILOSOPHY_WEIGHTS[value]))
+        self.lbl_key.configure(text="Key ratings for this preset: " + philosophy_key_ratings(PHILOSOPHY_WEIGHTS[value]) +
+                               ("   (weights edited in this editor; the game uses its own)" if value in PHILOSOPHY_OVERRIDES else ""))
         label = self.group_var.get()
         if label not in self._size_pops:
             self._size_pops[label] = philosophy_size_population(self.model.players, group_ppos)
@@ -3634,6 +3800,31 @@ class PlayerTypeFitDialog(tk.Toplevel):
             f"{self.tree.set(sel[0], 'name')} under this preset - Athletic {shown(g['athletic'])}, Intangibles "
             f"{shown(g['intangibles'])}, Learning {shown(g['learning'])}, Durability {shown(g['durability'])}, "
             f"Potential {shown(g['potential'])}, Size {shown(g['size'])} (approximate), Production counted as 0."))
+
+    def _open_breakdown(self):
+        """The "?" button: the weighting breakdown of the preset selected now."""
+        field, _ppos = self._groups[self.group_var.get()]
+        value = self._preset_ids.get(self.preset_var.get())
+        if value is None:
+            return
+        self._breakdown = PhilosophyBreakdownDialog(self.parent, self, self.group_var.get(), field, value, self._open_weights)
+
+    def _open_weights(self, value=None):
+        """Edit weights...: the weights of the preset selected now (or of `value`, from the breakdown)."""
+        field, _ppos = self._groups[self.group_var.get()]
+        if value is None:
+            value = self._preset_ids.get(self.preset_var.get())
+        if value is None or value not in PHILOSOPHY_MODEL:
+            return
+        PhilosophyWeightsDialog(self.parent, self, self.group_var.get(), field, value, self._weights_changed)
+
+    def _weights_changed(self):
+        """Weights were changed in the editor: redraw the list (and an open breakdown) with them."""
+        value = self._preset_ids.get(self.preset_var.get())
+        self._on_group(select_value=value)
+        dlg = getattr(self, "_breakdown", None)
+        if dlg is not None and dlg.winfo_exists():
+            dlg._refresh()
 
     def _sort_by(self, col, default_reverse=None):
         reverse = self._sort_state.get(col, False) if default_reverse is None else default_reverse
@@ -3703,6 +3894,265 @@ def read_csv_dicts(path):
 def team_nickname(tid):
     name = TEAM_NAMES.get(tid, "")
     return name.split(" (")[0] if name else ""
+
+
+class PhilosophyBreakdownDialog(tk.Toplevel):
+    """The "?" in Player Type Fit: what the game weighs for one preset, next to the position's Balanced preset. Top, the
+    seven grades the overall is built from and their weights (PEOW). Below, every rating (and the body-part health and
+    size) as its share of the overall, counting what reaches it through the Potential grade too. Edit weights... opens the
+    weights editor for the preset shown."""
+
+    def __init__(self, app, parent, group_label, field, value, on_edit=None):
+        super().__init__(parent)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Weighting breakdown")
+        self.transient(parent)
+        self.geometry("760x680")
+        self.minsize(620, 420)
+        self.field = field
+        self.balanced = philosophy_balanced_id(field)
+        self._names = {name: v for v, name in sorted(PHILOSOPHY_VALUES[field].items())}
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(12, 4))
+        ttk.Label(top, text=f"{group_label}  -  preset:").pack(side="left")
+        self.preset_var = tk.StringVar(value=PHILOSOPHY_VALUES[field].get(value, ""))
+        cmb = ttk.Combobox(top, state="readonly", width=30, textvariable=self.preset_var, values=list(self._names))
+        cmb.pack(side="left", padx=(6, 0))
+        cmb.bind("<<ComboboxSelected>>", lambda e: self._refresh())
+
+        ttk.Label(
+            self, foreground="gray", wraplength=720, justify="left",
+            text="The game turns a player's ratings into seven grades and averages them with the weights below. Production is "
+                 "in the average but counted as 0. Potential is the same average over the other grades' maximum ratings, "
+                 "so a rating counts directly and again through Potential; the second table adds both up. Learning counts "
+                 "as its own grade and also inside Intangibles. Balanced is the position's Balanced preset, for comparison.",
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        self.lbl_factors = ttk.Label(self, text="Grades and their weights", font=("", 10, "bold"))
+        self.lbl_factors.pack(anchor="w", padx=12)
+        cols = ("name", "weight", "share", "bar", "bal")
+        fframe = ttk.Frame(self)
+        fframe.pack(fill="x", padx=12, pady=(2, 8))
+        self.tree_f = ttk.Treeview(fframe, columns=cols, show="headings", height=len(PHILOSOPHY_FACTOR_ROWS), selectmode="none")
+        for c, (text, width, anchor) in zip(cols, [("Grade", 240, "w"), ("Weight", 60, "center"), ("Share", 60, "center"),
+                                                    ("", 200, "w"), ("Balanced", 70, "center")]):
+            self.tree_f.heading(c, text=text)
+            self.tree_f.column(c, width=width, anchor=anchor, stretch=(c == "bar"))
+        self.tree_f.pack(fill="x")
+
+        ttk.Label(self, text="What counts toward the overall, by rating", font=("", 10, "bold")).pack(anchor="w", padx=12)
+        iframe = ttk.Frame(self)
+        iframe.pack(fill="both", expand=True, padx=12, pady=(2, 4))
+        cols = ("name", "share", "bar", "bal", "diff")
+        self.tree_i = ttk.Treeview(iframe, columns=cols, show="headings", selectmode="none")
+        for c, (text, width, anchor) in zip(cols, [("Rating", 240, "w"), ("Share", 60, "center"), ("", 200, "w"),
+                                                    ("Balanced", 70, "center"), ("Difference", 80, "center")]):
+            self.tree_i.heading(c, text=text)
+            self.tree_i.column(c, width=width, anchor=anchor, stretch=(c == "bar"))
+        yscroll = ttk.Scrollbar(iframe, orient="vertical", command=self.tree_i.yview)
+        self.tree_i.configure(yscrollcommand=yscroll.set)
+        self.tree_i.pack(side="left", fill="both", expand=True)
+        yscroll.pack(side="right", fill="y")
+        self.lbl_note = ttk.Label(self, foreground="gray", wraplength=720, justify="left")
+        self.lbl_note.pack(anchor="w", padx=12, pady=(0, 6))
+        btn = ttk.Frame(self)
+        btn.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        if on_edit:
+            ttk.Button(btn, text="Edit weights...", command=lambda: on_edit(self._names.get(self.preset_var.get()))).pack(side="left")
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._refresh()
+
+    @staticmethod
+    def _bar(share, scale=60):
+        return "█" * max(0, round(share * scale))
+
+    def _refresh(self):
+        value = self._names.get(self.preset_var.get())
+        model = PHILOSOPHY_MODEL.get(value)
+        for tree in (self.tree_f, self.tree_i):
+            for iid in tree.get_children():
+                tree.delete(iid)
+        if model is None:
+            self.lbl_note.configure(text="No weights for this preset in the game data.")
+            return
+        mine = philosophy_breakdown(model)
+        bal_model = PHILOSOPHY_MODEL.get(self.balanced)
+        bal = philosophy_breakdown(bal_model) if bal_model and self.balanced != value else None
+        for col, label in PHILOSOPHY_FACTOR_ROWS:
+            share = mine["factors"][col]
+            self.tree_f.insert("", tk.END, values=(
+                label, f"{model['factors'][col]:g}", f"{share * 100:.0f}%", self._bar(share),
+                f"{bal['factors'][col] * 100:.0f}%" if bal else ""))
+        keys = sorted(set(mine["items"]) | (set(bal["items"]) if bal else set()), key=lambda k: -mine["items"].get(k, 0.0))
+        shown = 0
+        for key in keys:
+            share = mine["items"].get(key, 0.0)
+            other = bal["items"].get(key, 0.0) if bal else None
+            if share < 0.0005 and not other:
+                continue
+            diff = f"{(share - other) * 100:+.1f}" if other is not None else ""
+            self.tree_i.insert("", tk.END, values=(
+                philosophy_item_label(key), f"{share * 100:.1f}%", self._bar(share, 120),
+                f"{other * 100:.1f}%" if other is not None else "", diff))
+            shown += 1
+        hsw, wsw = model["size"]
+        self.lbl_note.configure(text=(
+            f"{shown} ratings count. The Size grade is built from height (weight {hsw:g}) and weight (weight {wsw:g}); the "
+            f"Durability grade from the body-part healths. Shares are percentages of the whole overall."))
+
+
+class PhilosophyWeightsDialog(tk.Toplevel):
+    """Change the weights of one preset, for the editor's own Est. OVR (the game keeps its own; see the comment above
+    philosophy_balanced_id). Every weight the game has for the preset is here: the seven grades, the athletic and skill
+    ratings, and height / weight for the Size grade. Apply keeps the changed ones in the editor's preferences."""
+
+    def __init__(self, app, parent, group_label, field, value, on_changed):
+        super().__init__(parent)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Edit weights")
+        self.transient(parent)
+        self.geometry("780x640")
+        self.minsize(640, 520)
+        self.app, self.parent, self.on_changed = app, parent, on_changed
+        self.field, self.value, self.group_label = field, value, group_label
+        self.group_ppos = next((ppos for label, f, ppos in PHILOSOPHY_GROUPS if f == field), set())
+        self.balanced = philosophy_balanced_id(field)
+        self.game = philosophy_game_weights(value)
+        self.vars = {}     # (table, column) -> StringVar
+        self.marks = {}    # (table, column) -> Label showing the game's value
+        self._effect_job = None
+
+        name = PHILOSOPHY_VALUES[field].get(value, str(value))
+        ttk.Label(self, text=f"{group_label}: {name}", font=("", 11, "bold"), padding=(12, 12, 12, 2)).pack(anchor="w")
+        ttk.Label(
+            self, wraplength=740, justify="left", foreground="gray", padding=(12, 0, 12, 6),
+            text="These are the weights the game's Evaluate Roster formulas use for this preset. Changing them changes the Est. "
+                 "OVR in this editor only: the game itself, your saves and your game files are not touched, and the game "
+                 "keeps using its own weights. A weight of 0 means the rating or grade does not count. The game's own value "
+                 "is shown beside each box.",
+        ).pack(anchor="w")
+
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        for tab, table, cols in philosophy_weight_fields():
+            if table not in self.game:
+                continue
+            frm = ttk.Frame(nb, padding=10)
+            nb.add(frm, text=tab)
+            per_col = max(1, -(-len(cols) // (3 if len(cols) > 12 else 1)))
+            for i, (col, label) in enumerate(cols):
+                var = tk.StringVar(value=str(self._current(table, col)))
+                var.trace_add("write", lambda *_a, t=table, c=col: self._changed(t, c))
+                self.vars[(table, col)] = var
+                r, block = i % per_col, i // per_col
+                ttk.Label(frm, text=label).grid(row=r, column=block * 3, sticky="w", padx=(0, 6), pady=2)
+                ttk.Entry(frm, width=5, textvariable=var, justify="center").grid(row=r, column=block * 3 + 1, pady=2)
+                mark = ttk.Label(frm, foreground="gray", width=19)
+                mark.grid(row=r, column=block * 3 + 2, sticky="w", padx=(6, 10))
+                self.marks[(table, col)] = mark
+            if table == "PEOW":
+                ttk.Label(frm, foreground="gray", wraplength=600, justify="left",
+                          text="The overall is the average of the grades weighted by these. Potential is the same average over "
+                               "the other grades' maximum ratings. Production's weight counts in the average but the grade "
+                               "counts as 0.").grid(row=len(cols) + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+        self.lbl_effect = ttk.Label(self, wraplength=740, justify="left", padding=(12, 0, 12, 2))
+        self.lbl_effect.pack(anchor="w")
+        self.lbl_status = ttk.Label(self, foreground="gray", wraplength=740, justify="left", padding=(12, 0, 12, 4))
+        self.lbl_status.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Apply", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Reset to the game's values", command=self._reset).pack(side="right", padx=(0, 8))
+        self.btn_copy = ttk.Button(btn, text="Copy Play Rec / Awareness / Learning from Balanced", command=self._copy_balanced)
+        self.btn_copy.pack(side="left")
+        if self.balanced is None or self.balanced == value:
+            self.btn_copy.configure(state="disabled")
+        self.bind("<Escape>", lambda e: self.destroy())
+        for key in self.vars:
+            self._changed(*key)
+        self._update_effect()
+
+    def _current(self, table, col):
+        """The weight in use now: the editor's change if there is one, else the game's."""
+        return PHILOSOPHY_OVERRIDES.get(self.value, {}).get(table, {}).get(col, self.game[table][col])
+
+    def _read(self, table, col):
+        text = self.vars[(table, col)].get().strip()
+        if not text.isdigit() or int(text) > PHILOSOPHY_WEIGHT_MAX:
+            return None
+        return int(text)
+
+    def _changed(self, table, col):
+        v = self._read(table, col)
+        game = self.game[table][col]
+        mark = self.marks[(table, col)]
+        if v is None:
+            mark.configure(text=f"0-{PHILOSOPHY_WEIGHT_MAX} only", foreground="#d9534f")
+        elif v != game:
+            mark.configure(text=f"game: {game}  (changed)", foreground="#d98c1f")
+        else:
+            mark.configure(text=f"game: {game}", foreground="gray")
+        if self._effect_job is not None:
+            self.after_cancel(self._effect_job)
+        self._effect_job = self.after(250, self._update_effect)
+
+    def _weights(self):
+        """{table: {column: weight}} of every box, or None if one is not a valid weight."""
+        out = {}
+        for (table, col) in self.vars:
+            v = self._read(table, col)
+            if v is None:
+                return None
+            out.setdefault(table, {})[col] = v
+        return out
+
+    def _update_effect(self):
+        self._effect_job = None
+        weights = self._weights()
+        old = PHILOSOPHY_MODEL.get(self.value)
+        if weights is None or old is None or not self.app.model.players:
+            self.lbl_effect.configure(text="")
+            return
+        res = philosophy_effect(self.app.model.players, self.group_ppos, old, philosophy_model_from(weights))
+        self.lbl_effect.configure(text="" if res is None else (
+            f"Compared with the weights in use now, the Est. OVR of the {res[0]} players at this position in the loaded save "
+            f"changes by {res[1]:.1f} on average (largest {res[2]:+.0f} / {res[3]:+.0f})."))
+
+    def _copy_balanced(self):
+        bal = philosophy_game_weights(self.balanced)
+        for table, col in PHILOSOPHY_COPY_COLUMNS:
+            if (table, col) in self.vars and table in bal:
+                self.vars[(table, col)].set(str(bal[table][col]))
+        self.lbl_status.configure(text="Copied from Balanced. Apply to use them.")
+
+    def _reset(self):
+        for (table, col), var in self.vars.items():
+            var.set(str(self.game[table][col]))
+        self.lbl_status.configure(text="Back to the game's values. Apply to use them.")
+
+    def _apply(self):
+        weights = self._weights()
+        if weights is None:
+            messagebox.showerror("Invalid weight", f"Every weight must be a whole number from 0 to {PHILOSOPHY_WEIGHT_MAX}.")
+            return
+        changed = {t: {c: w for c, w in cols.items() if w != self.game[t][c]} for t, cols in weights.items()}
+        changed = {t: cols for t, cols in changed.items() if cols}
+        overrides = {k: v for k, v in PHILOSOPHY_OVERRIDES.items() if k != self.value}
+        if changed:
+            overrides[self.value] = changed
+        save_philosophy_overrides(self.app, overrides)
+        self.lbl_status.configure(text=("Applied: this preset now uses your weights in the editor." if changed
+                                        else "Applied: this preset uses the game's weights."))
+        self.on_changed()
+        self._update_effect()
 
 
 class TeamPhilosophyDialog(tk.Toplevel):
@@ -4683,6 +5133,7 @@ class App(tk.Tk):
         self.minsize(1180, 700)
 
         self.ui_prefs = load_ui_prefs()
+        set_philosophy_overrides(self.ui_prefs.get("philosophy_overrides"))
         self.dark_mode_var = tk.BooleanVar(value=(self.ui_prefs.get("mode") == "dark"))
         # Master switch: every feature added alongside the visual facelift
         # (Motivator boost, contract dialog, staff filters, per-save team
