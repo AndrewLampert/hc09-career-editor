@@ -1698,24 +1698,28 @@ class CSVModel:
         self.max_map = build_player_max_map(self.player_headers)
 
     def staff_skills_mask(self, pnid):
-        """The special-skill mask of a person (PNid), 0 if they have none."""
+        """The special-skill mask of a person (PNid), 0 if they have none. If a save has two rows for one person (the
+        game adds a new row when it doesn't find ours), the later one is the game's."""
+        found = 0
         for r in self.pssk:
             if (r.get("PNid", "") or "").strip() == str(pnid):
                 try:
-                    return int((r.get("SPSB", "") or "0").strip(), 16)
+                    found = int((r.get("SPSB", "") or "0").strip(), 16)
                 except ValueError:
-                    return 0
-        return 0
+                    found = 0
+        return found
 
     def set_staff_skills_mask(self, pnid, mask):
         """Set a person's special-skill mask: changes their PSSK row, or adds one if they had none (the save then
         needs the append import, which save_to_db does)."""
         text = "0x%016x" % mask
-        for r in self.pssk:
+        found = False
+        for r in self.pssk:                       # every row of this person, so a duplicate can't hold an old mask
             if (r.get("PNid", "") or "").strip() == str(pnid):
                 r["SPSB"] = text
-                return
-        self.pssk.append({"SPSB": text, "PNid": str(pnid)})
+                found = True
+        if not found:
+            self.pssk.append({"SPSB": text, "PNid": str(pnid)})
 
     def player_name(self, row):
         fn = (row.get(PLAYER_FIRST_NAME_CODE, "") or "").strip()

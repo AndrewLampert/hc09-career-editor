@@ -293,6 +293,9 @@ async function cmdImport(args) {
             }
             appendedRows = dataRows.length - records.length;
             for (let i = records.length; i < dataRows.length; i++) {
+                // The spare slots hold leftover memory, not zeros (including the bits no field covers). The game's own
+                // new rows are all zero, so start from that and let the fields below fill the row.
+                table._records[i].recordBuffer.fill(0);
                 table._records[i].isPopulated = true;
             }
             table.header.currentRecords = dataRows.length;
