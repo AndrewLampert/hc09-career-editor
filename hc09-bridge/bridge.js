@@ -4,6 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
+const os = require('os');
 const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 const ASTParser = require('madden-file-tools/streams/ASTParser');
 const { Readable } = require('stream');
@@ -676,6 +678,196 @@ async function cmdShippedTableExport(args) {
     console.log(JSON.stringify({ table: first.table, records: first.records, out: first.out, exported, entryIndex: index }));
 }
 
+// ---------- Patching the game's shipped DB inside an AST archive ----------
+// The shipped DB (qkl_boot.ast entry 46, with a byte-identical copy in qkl_fe2ig.ast entry 1816 on the PS3 USA
+// release) sits in its archive as plain bytes at a fixed offset, and opening it and saving it unchanged gives back
+// exactly the same bytes. So changing field values and writing the result over the same byte range needs no change
+// to the archive's table of contents. Only the bytes that differ are written, the original entry is kept in a
+// backup directory the first time, and shipped-table-restore puts it back.
+
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+// An entry holds a table when the table's name (stored reversed in the DB's table list) occurs in its bytes; that is
+// a cheap filter before opening the candidate as a DB.
+const reversedName = (name) => name.split('').reverse().join('');
+
+// Finds the top-level entry of an AST that is a DB holding every table in tableNames, reading only the entries whose
+// first bytes say "DB" (so a 2 GB archive is not streamed through). preferredIndex is tried first.
+async function findDbEntryByToc(astPath, tableNames, preferredIndex) {
+    const tocs = await readToc(astPath);
+    const order = tocs.slice().sort((a, b) => (b.index === preferredIndex) - (a.index === preferredIndex));
+    const fd = fs.openSync(astPath, 'r');
+    try {
+        for (const toc of order) {
+            if (toc.fileSizeInt < 100000) continue;
+            const head = Buffer.alloc(2);
+            fs.readSync(fd, head, 0, 2, toc.startPositionInFile);
+            if (head[0] !== 0x44 || head[1] !== 0x42) continue;   // "DB"
+            const raw = Buffer.alloc(toc.fileSizeInt);
+            fs.readSync(fd, raw, 0, raw.length, toc.startPositionInFile);
+            if (!tableNames.every((n) => raw.indexOf(reversedName(n)) >= 0)) continue;
+            const tmpPath = path.join(os.tmpdir(), `hc09_patch_${process.pid}_${toc.index}_${Math.random().toString(36).slice(2)}.db`);
+            fs.writeFileSync(tmpPath, raw);
+            let keep = false;
+            try {
+                const helper = await openDb(tmpPath);
+                if (await entryHasTables(helper, tableNames, [], false)) {
+                    keep = true;   // the helper saves from this file, so the caller deletes it when done
+                    return { index: toc.index, start: toc.startPositionInFile, size: toc.fileSizeInt, raw, helper, tmpPath };
+                }
+            } catch (e) { /* not a usable DB; try the next entry */ }
+            finally { if (!keep) { try { fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ } } }
+        }
+    } finally {
+        fs.closeSync(fd);
+    }
+    throw new Error(`no entry of ${path.basename(astPath)} is a DB holding ${tableNames.join(', ')}`);
+}
+
+function writeIntoArchive(astPath, writes) {
+    // writes: [{ position, buf }]. Windows refuses (EBUSY / EPERM / EACCES) when the emulator has the file open.
+    let fd;
+    try {
+        fd = fs.openSync(astPath, 'r+');
+        for (const w of writes) fs.writeSync(fd, w.buf, 0, w.buf.length, w.position);
+        fs.fsyncSync(fd);
+    } catch (e) {
+        if (['EBUSY', 'EPERM', 'EACCES'].includes(e.code)) {
+            throw new Error(`Could not write to ${path.basename(astPath)} (${e.code}). Close the game / emulator first, and make sure the file is not read-only.`);
+        }
+        throw e;
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+    }
+}
+
+function changedRanges(a, b) {
+    const ranges = [];
+    let start = -1;
+    for (let i = 0; i <= a.length; i++) {
+        const differs = i < a.length && a[i] !== b[i];
+        if (differs && start < 0) start = i;
+        if (!differs && start >= 0) { ranges.push({ offset: start, length: i - start }); start = -1; }
+    }
+    // merge ranges separated by a few unchanged bytes (a CRC next to its data) into one write
+    const merged = [];
+    for (const r of ranges) {
+        const last = merged[merged.length - 1];
+        if (last && r.offset - (last.offset + last.length) <= 8) last.length = r.offset + r.length - last.offset;
+        else merged.push({ ...r });
+    }
+    return merged;
+}
+
+// --edits <json>: [{ "table": "PEIW", "key": { "GMPP": 47 }, "set": { "PRGW": 10 } }, ...]
+// --backup-dir <dir> keeps the original entry the first time (never overwrites an existing backup).
+// --dry-run reports what would change and writes nothing.
+async function cmdShippedTablePatch(args) {
+    const found = await findDbEntryByToc(args.ast, [...new Set(JSON.parse(fs.readFileSync(args.edits, 'utf8')).map((e) => e.table))],
+        args['top-index'] !== undefined ? parseInt(args['top-index'], 10) : undefined);
+    try {
+        await patchFoundEntry(args, found);
+    } finally {
+        try { fs.unlinkSync(found.tmpPath); } catch (e) { /* best effort */ }
+    }
+}
+
+async function patchFoundEntry(args, found) {
+    const astPath = args.ast;
+    const edits = JSON.parse(fs.readFileSync(args.edits, 'utf8'));
+    const dryRun = Boolean(args['dry-run']);
+    const { helper, raw } = found;
+
+    const applied = [];
+    let fieldEdits = 0;
+    for (const edit of edits) {
+        const table = helper.file[edit.table];
+        if (table.records.length === 0) await table.readRecords();
+        const record = table.records.find((r) => Object.entries(edit.key).every(([k, v]) => r.fields[k] && Number(r.fields[k].value) === Number(v)));
+        if (!record) throw new Error(`${edit.table}: no row with ${JSON.stringify(edit.key)}`);
+        const changes = [];
+        for (const [col, val] of Object.entries(edit.set)) {
+            const field = record.fields[col];
+            if (!field) throw new Error(`${edit.table} has no column ${col}`);
+            const old = field.value;
+            if (typeof old !== 'number') throw new Error(`${edit.table}.${col} is not a number field`);
+            const max = field.definition && field.definition.maxValue;
+            if (typeof max === 'number' && (val < 0 || val > max)) throw new Error(`${edit.table}.${col}: ${val} is out of range (0-${max})`);
+            if (old !== val) { field.value = val; fieldEdits++; }
+            changes.push({ column: col, from: old, to: val });
+        }
+        applied.push({ table: edit.table, key: edit.key, changes });
+    }
+
+    const tmpOut = path.join(os.tmpdir(), `hc09_patch_out_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
+    let patched;
+    try {
+        await helper.save(tmpOut);
+        patched = fs.readFileSync(tmpOut);
+        // the patched DB must open again and hold exactly the requested values
+        const check = await openDb(tmpOut);
+        for (const edit of edits) {
+            const table = check.file[edit.table];
+            await table.readRecords();
+            const record = table.records.find((r) => Object.entries(edit.key).every(([k, v]) => Number(r.fields[k].value) === Number(v)));
+            for (const [col, val] of Object.entries(edit.set)) {
+                if (!record || record.fields[col].value !== val) throw new Error(`${edit.table}.${col} did not read back as ${val} after patching`);
+            }
+        }
+    } finally {
+        try { fs.unlinkSync(tmpOut); } catch (e) { /* best effort */ }
+    }
+    if (patched.length !== raw.length) throw new Error(`patched entry is ${patched.length} bytes, expected ${raw.length}; nothing written`);
+    const ranges = changedRanges(raw, patched);
+    const changedBytes = ranges.reduce((n, r) => n + r.length, 0);
+    // a few field values plus the CRCs that cover them; anything bigger means the save path rewrote something else
+    if (changedBytes > 64 + 16 * fieldEdits) throw new Error(`${changedBytes} bytes would change for ${fieldEdits} edited values; nothing written`);
+
+    const result = { ast: astPath, index: found.index, start: found.start, size: found.size, edits: applied, fieldEdits, changedBytes, ranges, dryRun, written: false };
+    if (!dryRun && changedBytes > 0) {
+        if (args['backup-dir']) {
+            fs.mkdirSync(args['backup-dir'], { recursive: true });
+            const base = path.join(args['backup-dir'], `${path.basename(astPath)}.entry${found.index}`);
+            if (!fs.existsSync(base + '.orig')) {
+                fs.writeFileSync(base + '.orig', raw);
+                fs.writeFileSync(base + '.json', JSON.stringify({ ast: path.resolve(astPath), index: found.index, start: found.start, size: found.size, sha256: sha256(raw) }, null, 2));
+            }
+            result.backup = base + '.orig';
+        }
+        writeIntoArchive(astPath, ranges.map((r) => ({ position: found.start + r.offset, buf: patched.slice(r.offset, r.offset + r.length) })));
+        const fd = fs.openSync(astPath, 'r');
+        const back = Buffer.alloc(found.size);
+        fs.readSync(fd, back, 0, back.length, found.start);
+        fs.closeSync(fd);
+        if (Buffer.compare(back, patched) !== 0) throw new Error('the archive does not hold the patched bytes after writing - restore it with shipped-table-restore');
+        result.written = true;
+    }
+    console.log(JSON.stringify(result));
+}
+
+// --ast <path> --backup-dir <dir>: writes the entry backed up by shipped-table-patch back over the archive.
+async function cmdShippedTableRestore(args) {
+    const astPath = args.ast;
+    const dir = args['backup-dir'];
+    const prefix = `${path.basename(astPath)}.entry`;
+    const manifests = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.startsWith(prefix) && f.endsWith('.json')) : [];
+    if (!manifests.length) throw new Error(`no backup of ${path.basename(astPath)} in ${dir}`);
+    const tocs = await readToc(astPath);
+    const restored = [];
+    for (const file of manifests) {
+        const info = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+        const orig = fs.readFileSync(path.join(dir, file.replace(/\.json$/, '.orig')));
+        if (sha256(orig) !== info.sha256) throw new Error(`the backup ${file} is damaged (checksum mismatch); nothing written`);
+        const toc = tocs.find((t) => t.index === info.index);
+        if (!toc || toc.startPositionInFile !== info.start || toc.fileSizeInt !== info.size) {
+            throw new Error(`${path.basename(astPath)} does not match the backup (a different version of the file?); nothing written`);
+        }
+        writeIntoArchive(astPath, [{ position: info.start, buf: orig }]);
+        restored.push({ index: info.index, start: info.start, size: info.size });
+    }
+    console.log(JSON.stringify({ ast: astPath, restored }));
+}
+
 function parseArgs(argv) {
     const args = {};
     for (let i = 0; i < argv.length; i++) {
@@ -717,6 +909,10 @@ async function main() {
             await cmdVerifyDb(args);
         } else if (cmd === 'shipped-table-export') {
             await cmdShippedTableExport(args);
+        } else if (cmd === 'shipped-table-patch') {
+            await cmdShippedTablePatch(args);
+        } else if (cmd === 'shipped-table-restore') {
+            await cmdShippedTableRestore(args);
         } else {
             console.error('Usage:');
             console.error('  node bridge.js inspect --db <path>');
@@ -728,6 +924,8 @@ async function main() {
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             console.error('  node bridge.js portrait-list --archive <path>');
             console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> [--top-index <N>] [--require-fields A,B] [--require-rows] (--table <NAME> --out <csv> | --tables A,B --out-dir <dir>)');
+            console.error('  node bridge.js shipped-table-patch --ast <path> --edits <json> [--top-index <N>] [--backup-dir <dir>] [--dry-run]');
+            console.error('  node bridge.js shipped-table-restore --ast <path> --backup-dir <dir>');
             process.exit(1);
         }
     } catch (err) {
