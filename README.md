@@ -29,7 +29,9 @@ export/import through HC09Editor required.
   **Special skills...**: the staff member's special skills (Improved Tackling, Draft Intuition,
   Off Season Rehab, ...) as tick boxes, with the game's names and descriptions and only the skills
   the game offers that role (a head coach 44, a coordinator 28 or 23, a trainer 4, ...), and
-  **Max Special Skills**, which gives the selected person all of them.
+  **Max Special Skills**, which gives the selected person all of them. The Coach tab also has
+  **Max All Coaches**: one click maxes every coach shown (My Team: your whole staff) - skills,
+  development, skill points and all their special skills.
 - **Playbooks** - browse every playbook with real play, set and formation names; find
   which playbooks contain a play; change a team's offensive or defensive playbook; and
   **add plays** to your team's playbook by copying a play, a whole set or a whole

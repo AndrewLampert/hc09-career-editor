@@ -6149,7 +6149,7 @@ class App(tk.Tk):
         self.lbl_playbook_hit.configure(text=f"In: {shown}" if names else "In no playbook in this save")
 
     # ---------- Staff Tabs (Trainer / Coach / GM) ----------
-    def _build_staff_team_filter(self, parent):
+    def _build_staff_team_filter(self, parent, row_extra=None):
         """Shared 'My Team' / 'All Teams' toggle for the Trainer/Coach/GM
         tabs - these tables have 300+ league-wide rows, which is what made
         those tabs slow to render/scroll. One shared setting across all
@@ -6178,6 +6178,8 @@ class App(tk.Tk):
             lay, text="Horizontal", variable=self.staff_layout_var, value="horizontal",
             command=self.on_staff_layout_changed,
         ).pack(side="left", padx=(6, 0))
+        if row_extra:
+            row_extra(lay)
         ttk.Label(lay, text="(vertical: click a name at the top to select it; double-click a section heading to collapse or expand it)", foreground="gray").pack(side="left", padx=(16, 0))
 
     def _build_trainer_tab(self):
@@ -6248,7 +6250,8 @@ class App(tk.Tk):
         self.ent_coach_search.pack(side="left")
         ttk.Button(top, text="Find", command=lambda: self.refresh_coach()).pack(side="left", padx=(6, 4))
         ttk.Button(top, text="Clear", command=lambda: (self.coach_search_var.set(""), self.refresh_coach())).pack(side="left")
-        self._build_staff_team_filter(top)
+        self._build_staff_team_filter(
+            top, row_extra=lambda lay: ttk.Button(lay, text="Max All Coaches", command=self.on_max_all_coaches).pack(side="left", padx=(16, 0)))
 
         # Help text reflects what's actually confirmed in-game (verified via direct testing).
         help_text = (
@@ -7717,13 +7720,45 @@ class App(tk.Tk):
             return None
         if idx < 0 or idx >= len(staff_list):
             return None
-        row = staff_list[idx]
+        self._max_staff_row_fields(staff_list[idx], field_names)
+        return iid
+
+    def _max_staff_row_fields(self, row, field_names):
+        """Set a staff row's skill fields to their maximums."""
         headers = set(row.keys())
         for field in field_names:
             if field in headers:
                 _, hi = STAFF_NUMERIC_FIELDS.get(field, (0, 0))
                 row[field] = str(hi)
-        return iid
+
+    def on_max_all_coaches(self):
+        """Max out every coach the Coach tab is showing (My Team: the whole staff): the confirmed skills and
+        development (as Max Selected Coach's Stats), skill points, and every special skill the game offers the role."""
+        rows = self._filter_rows_by_staff_team(list(enumerate(self.model.coaches)))
+        if not rows:
+            messagebox.showinfo("No coaches shown", "No coach rows - check the My Team / All Teams filter.")
+            return
+        everyone = self.staff_filter_var.get() != "my_team" or not self.selected_team_id.get().strip()
+        if everyone and not messagebox.askyesno(
+                "Max all coaches", f"The Coach tab is showing all teams. Max all {len(rows)} coaches in the league?"):
+            return
+        with_skills = bool(self.model.pssk_headers)
+        for idx, row in rows:
+            self._max_staff_row_fields(row, COACH_MAXABLE_SKILL_FIELDS)
+            self._max_out_coach_development(idx)
+            if "SKPT" in row:
+                row["SKPT"] = "131071"
+            pnid = (row.get("PNid", "") or "").strip()
+            if with_skills and pnid:
+                role = STAFF_COACH_ROLE.get((row.get("COPS", "") or "").strip(), "HC")
+                self.model.set_staff_skills_mask(
+                    pnid, self.model.staff_skills_mask(pnid) | sum(1 << n for n in STAFF_ROLE_SKILLS.get(role, ())))
+        self.mark_dirty()
+        self.refresh_coach()
+        messagebox.showinfo(
+            "Max all coaches",
+            f"Maxed {len(rows)} coaches: play calling, strategy, chemistry, performance, development, skill points"
+            f"{' and all the special skills the game offers each role' if with_skills else ''}. Save to File to keep it.")
 
     def _reselect(self, tree, iid):
         if iid and tree.exists(iid):
