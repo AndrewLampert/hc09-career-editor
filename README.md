@@ -46,11 +46,11 @@ export/import through HC09Editor required.
   player to see his seven grades. It is an estimate: within 1 point of the Evaluate Roster screen
   for 51 of the 55 readings checked and never more than 3 off (cornerbacks, safeties, defensive
   tackles); Size is approximated; other positions are unchecked on the screen. The **?** next
-  to the preset list breaks down what the selected preset weights, beside Balanced. *Fix weak
-  DT / DE types...* is the one thing in this window that changes anything: it copies Play
-  Recognition, Awareness and Learning weights from Balanced into the One Gap Penetrator DT and
-  Undersized Speed Rusher DE types in the game's own files (`qkl_boot.ast` and `qkl_fe2ig.ast`,
-  a few bytes each, original backed up, restorable; close the game first),
+  to the preset list breaks down what the selected preset weights, beside Balanced, and
+  *Edit weights...* lets you change any of those weights for the editor's own estimate (for
+  example copying Play Recognition, Awareness and Learning from Balanced into the One Gap DT
+  and Speed Rusher DE types, which the game barely weighs those ratings in). The game, your saves and
+  your game files are not changed),
   the recent-saves list,
   and *Options* (modern UI, dark mode).
 
