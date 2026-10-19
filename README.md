@@ -40,6 +40,13 @@ export/import through HC09Editor required.
   at New Career Playbook Select); the coordinators' are listed beside it. Offense and Defense
   are shown one at a time. Playbooks 1-10 (your custom playbooks) and the plays you made in the
   game are named from your profile save, found next to your career and only read.
+  **Set personnel...** lists the game's own sets with their personnel (11, 10, 00, 4-3-4, ...) and
+  changes a set's slot positions, e.g. a fifth receiver into a tight end, one set or many with a
+  bulk rule, with player names from your team's depth chart if a save is loaded. Unlike everything
+  else here it **changes the game's own files** (`qkl_boot.ast` and `qkl_fe2ig.ast`, a few bytes per
+  slot, in every copy that holds the set): the original of each entry is backed up first in
+  `Documents\hc09-game-file-backup`, *Reset* and *Restore all* put it back, and the game must be
+  closed. It applies to every save and game mode. See [docs/hc09_play_data.md](docs/hc09_play_data.md).
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
   (rebuilds each player's overall under one of the game's team position presets,
   such as Cover 2 or Man Coverage CB, with the game's own formulas, and ranks them; select a

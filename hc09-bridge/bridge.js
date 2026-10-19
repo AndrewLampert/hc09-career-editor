@@ -4,6 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
+const os = require('os');
 const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 const ASTParser = require('madden-file-tools/streams/ASTParser');
 const { Readable } = require('stream');
@@ -676,6 +678,215 @@ async function cmdShippedTableExport(args) {
     console.log(JSON.stringify({ table: first.table, records: first.records, out: first.out, exported, entryIndex: index }));
 }
 
+// ---------- Play data inside the game's archives (sets, formations, personnel) ----------
+// The play databases are DB entries stored as plain bytes in qkl_boot.ast and qkl_fe2ig.ast. Several entries hold the same
+// sets (the master in qkl_boot.ast, a compact copy next to it, and smaller copies in qkl_fe2ig.ast), and the game was
+// confirmed to read at least one of them: a same-size edit of a set's SETP rows (a slot's position EPos and depth DPos) moved a
+// tight end into a receiver's spot. So the tool edits every copy in place, writing only the bytes that change, and keeps the
+// original entry in a backup directory the first time an entry is touched. Opening an entry with the DB library and saving it
+// unchanged gives back the same bytes, which is checked before every write.
+
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+function mergeRanges(a, b) {
+    const ranges = [];
+    let start = -1;
+    for (let i = 0; i <= a.length; i++) {
+        const differs = i < a.length && a[i] !== b[i];
+        if (differs && start < 0) start = i;
+        if (!differs && start >= 0) { ranges.push({ offset: start, length: i - start }); start = -1; }
+    }
+    const merged = [];
+    for (const r of ranges) {
+        const last = merged[merged.length - 1];
+        if (last && r.offset - (last.offset + last.length) <= 8) last.length = r.offset + r.length - last.offset;
+        else merged.push({ ...r });
+    }
+    return merged;
+}
+
+async function openEntryBuffer(buf) {
+    const tmp = path.join(os.tmpdir(), `hc09_entry_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
+    fs.writeFileSync(tmp, buf);
+    const helper = await openDb(tmp);
+    return { helper, tmp };
+}
+
+function readEntryAt(astPath, start, size) {
+    const fd = fs.openSync(astPath, 'r');
+    try {
+        const buf = Buffer.alloc(size);
+        fs.readSync(fd, buf, 0, size, start);
+        return buf;
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+// Lists the DB entries of the archives that hold play sets: a table SETP with rows and the columns SETL, poso, EPos, DPos.
+// Entries with the same tables but no rows (the blank career template, schema-only copies) are skipped. Writes, for each entry,
+// its SETP rows as CSV, and (when present and filled) SETL, FORM, PBAI, SPKF into --out-dir.
+async function cmdPlaySetsScan(args) {
+    const outDir = args['out-dir'];
+    fs.mkdirSync(outDir, { recursive: true });
+    const copies = [];
+    for (const astPath of String(args.asts).split(',').map((s) => s.trim()).filter(Boolean)) {
+        const tocs = await readToc(astPath);
+        const fd = fs.openSync(astPath, 'r');
+        try {
+            for (const toc of tocs) {
+                if (toc.fileSizeInt < 1000 || toc.fileSizeInt > 40e6) continue;
+                const head = Buffer.alloc(2);
+                fs.readSync(fd, head, 0, 2, toc.startPositionInFile);
+                if (head[0] !== 0x44 || head[1] !== 0x42) continue;   // "DB"
+                const raw = Buffer.alloc(toc.fileSizeInt);
+                fs.readSync(fd, raw, 0, raw.length, toc.startPositionInFile);
+                if (raw.indexOf('PTES') < 0) continue;                // the table name SETP, stored reversed
+                let opened;
+                try { opened = await openEntryBuffer(raw); } catch (e) { continue; }
+                try {
+                    const helper = opened.helper;
+                    if (!helper.file.tables.some((t) => t.name === 'SETP')) continue;
+                    const setp = helper.file.SETP;
+                    const fields = setp.fieldDefinitions.map((f) => f.name);
+                    if (!['SETL', 'poso', 'EPos', 'DPos'].every((f) => fields.includes(f))) continue;
+                    await setp.readRecords();
+                    if (setp.records.length === 0) continue;
+                    const base = `${path.basename(astPath, '.ast')}_${toc.index}`;
+                    const tables = {};
+                    for (const name of ['SETP', 'SETL', 'FORM', 'PBAI', 'SPKF']) {
+                        if (!helper.file.tables.some((t) => t.name === name)) continue;
+                        const table = helper.file[name];
+                        await table.readRecords();
+                        if (table.records.length === 0) continue;
+                        const headers = table.fieldDefinitions.map((f) => f.name);
+                        const rows = table.records.map((r) => { const o = {}; for (const h of headers) o[h] = r.fields[h] ? r.fields[h].value : ''; return o; });
+                        writeCsv(path.join(outDir, `${name.toLowerCase()}_${base}.csv`), headers, rows);
+                        tables[name] = rows.length;
+                    }
+                    copies.push({ ast: astPath, file: path.basename(astPath), index: toc.index, start: toc.startPositionInFile, size: toc.fileSizeInt, base, fields, rows: setp.records.length, tables });
+                } finally {
+                    try { fs.unlinkSync(opened.tmp); } catch (e) { /* best effort */ }
+                }
+            }
+        } finally {
+            fs.closeSync(fd);
+        }
+    }
+    console.log(JSON.stringify({ copies, outDir }));
+}
+
+function writeIntoArchiveAt(astPath, writes) {
+    // Windows refuses (EBUSY / EPERM / EACCES) when the emulator has the file open.
+    let fd;
+    try {
+        fd = fs.openSync(astPath, 'r+');
+        for (const w of writes) fs.writeSync(fd, w.buf, 0, w.buf.length, w.position);
+        fs.fsyncSync(fd);
+    } catch (e) {
+        if (['EBUSY', 'EPERM', 'EACCES'].includes(e.code)) {
+            throw new Error(`Could not write to ${path.basename(astPath)} (${e.code}). Close the game / emulator first, and make sure the file is not read-only.`);
+        }
+        throw e;
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+    }
+}
+
+function checkEntryPlace(toc, target) {
+    if (!toc || toc.startPositionInFile !== target.start || toc.fileSizeInt !== target.size) {
+        throw new Error(`${path.basename(target.ast)} entry ${target.index} is not where it was scanned (a different version of the file?); nothing written`);
+    }
+}
+
+async function patchEntry(target, mode, backupDir) {
+    const tocs = await readToc(target.ast);
+    checkEntryPlace(tocs.find((t) => t.index === target.index), target);
+    const raw = readEntryAt(target.ast, target.start, target.size);
+    const { helper, tmp } = await openEntryBuffer(raw);
+    const out = path.join(os.tmpdir(), `hc09_entry_out_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
+    try {
+        await helper.save(out);
+        if (Buffer.compare(fs.readFileSync(out), raw) !== 0) {
+            throw new Error(`${path.basename(target.ast)} #${target.index}: saving the entry unchanged does not reproduce it byte for byte; nothing written`);
+        }
+        const done = [];
+        for (const e of target.edits) {
+            const table = helper.file[e.table];
+            if (table.records.length === 0) await table.readRecords();
+            const hits = table.records.filter((r) => Object.entries(e.match).every(([k, v]) => Number(r.fields[k].value) === Number(v)));
+            if (hits.length !== 1) throw new Error(`${e.table} ${JSON.stringify(e.match)}: ${hits.length} rows match (expected 1); nothing written`);
+            const rec = hits[0];
+            for (const [k, v] of Object.entries(e.expect || {})) {
+                if (Number(rec.fields[k].value) !== Number(v)) throw new Error(`${e.table} ${JSON.stringify(e.match)} ${k} is ${rec.fields[k].value}, expected ${v}; nothing written`);
+            }
+            const change = {};
+            for (const [k, v] of Object.entries(e.set)) { change[k] = [rec.fields[k].value, v]; rec.fields[k].value = v; }
+            done.push({ table: e.table, match: e.match, change });
+        }
+        await helper.save(out);
+        const patched = fs.readFileSync(out);
+        if (patched.length !== raw.length) throw new Error('the patched entry has a different length; nothing written');
+        const check = await openEntryBuffer(patched);
+        try {
+            for (const e of target.edits) {
+                const table = check.helper.file[e.table];
+                await table.readRecords();
+                const rec = table.records.find((r) => Object.entries(e.match).every(([k, v]) => Number(r.fields[k].value) === Number(v)));
+                for (const [k, v] of Object.entries(e.set)) {
+                    if (Number(rec.fields[k].value) !== Number(v)) throw new Error(`${e.table}.${k} did not read back as ${v}; nothing written`);
+                }
+            }
+        } finally { try { fs.unlinkSync(check.tmp); } catch (x) { /* best effort */ } }
+        const ranges = mergeRanges(raw, patched);
+        const changed = ranges.reduce((n, r) => n + r.length, 0);
+        const nValues = target.edits.reduce((n, e) => n + Object.keys(e.set).length, 0);
+        if (changed > 64 + 16 * nValues) throw new Error(`${changed} bytes would change for ${nValues} values; nothing written`);
+        const result = { file: path.basename(target.ast), index: target.index, done, changedBytes: changed, written: false };
+        if (mode === 'apply' && changed > 0) {
+            fs.mkdirSync(backupDir, { recursive: true });
+            const base = path.join(backupDir, `${path.basename(target.ast)}.entry${target.index}`);
+            if (!fs.existsSync(base + '.orig')) {
+                fs.writeFileSync(base + '.orig', raw);
+                fs.writeFileSync(base + '.json', JSON.stringify({ ast: path.resolve(target.ast), index: target.index, start: target.start, size: target.size, sha256: sha256(raw) }, null, 2));
+            }
+            writeIntoArchiveAt(target.ast, ranges.map((r) => ({ position: target.start + r.offset, buf: patched.slice(r.offset, r.offset + r.length) })));
+            if (Buffer.compare(readEntryAt(target.ast, target.start, target.size), patched) !== 0) {
+                throw new Error('the archive does not hold the patched bytes after writing; restore it from the backup');
+            }
+            result.written = true;
+        }
+        return result;
+    } finally {
+        for (const f of [tmp, out]) { try { fs.unlinkSync(f); } catch (x) { /* best effort */ } }
+    }
+}
+
+async function restoreEntry(target, backupDir) {
+    const base = path.join(backupDir, `${path.basename(target.ast)}.entry${target.index}`);
+    if (!fs.existsSync(base + '.json')) return { file: path.basename(target.ast), index: target.index, restored: false, reason: 'no backup' };
+    const info = JSON.parse(fs.readFileSync(base + '.json', 'utf8'));
+    const orig = fs.readFileSync(base + '.orig');
+    if (sha256(orig) !== info.sha256) throw new Error(`${path.basename(base)}.orig is damaged (checksum mismatch); nothing written`);
+    const tocs = await readToc(target.ast);
+    checkEntryPlace(tocs.find((t) => t.index === info.index), { ast: target.ast, index: info.index, start: info.start, size: info.size });
+    writeIntoArchiveAt(target.ast, [{ position: info.start, buf: orig }]);
+    const same = Buffer.compare(readEntryAt(target.ast, info.start, info.size), orig) === 0;
+    return { file: path.basename(target.ast), index: target.index, restored: true, identical: same };
+}
+
+// entry-patch <apply|dry|restore> --config file.json
+// config: { backupDir, targets: [ { ast, index, start, size, edits: [ { table, match, expect, set } ] } ] }
+async function cmdEntryPatch(args) {
+    const mode = args._mode;
+    const cfg = JSON.parse(fs.readFileSync(args.config, 'utf8'));
+    const results = [];
+    // check every entry before writing any of them
+    if (mode !== 'restore') for (const t of cfg.targets) await patchEntry(t, 'dry', cfg.backupDir);
+    for (const t of cfg.targets) results.push(mode === 'restore' ? await restoreEntry(t, cfg.backupDir) : await patchEntry(t, mode, cfg.backupDir));
+    console.log(JSON.stringify({ mode, results }));
+}
+
 function parseArgs(argv) {
     const args = {};
     for (let i = 0; i < argv.length; i++) {
@@ -717,6 +928,12 @@ async function main() {
             await cmdVerifyDb(args);
         } else if (cmd === 'shipped-table-export') {
             await cmdShippedTableExport(args);
+        } else if (cmd === 'play-sets-scan') {
+            await cmdPlaySetsScan(args);
+        } else if (cmd === 'entry-patch') {
+            args._mode = rest.find((a) => !a.startsWith('--'));
+            if (!['apply', 'dry', 'restore'].includes(args._mode)) throw new Error('entry-patch needs apply, dry or restore as its first argument');
+            await cmdEntryPatch(args);
         } else {
             console.error('Usage:');
             console.error('  node bridge.js inspect --db <path>');
@@ -728,6 +945,8 @@ async function main() {
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             console.error('  node bridge.js portrait-list --archive <path>');
             console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> [--top-index <N>] [--require-fields A,B] [--require-rows] (--table <NAME> --out <csv> | --tables A,B --out-dir <dir>)');
+            console.error('  node bridge.js play-sets-scan --asts <qkl_boot.ast>,<qkl_fe2ig.ast> --out-dir <dir>');
+            console.error('  node bridge.js entry-patch <apply|dry|restore> --config <json>');
             process.exit(1);
         }
     } catch (err) {

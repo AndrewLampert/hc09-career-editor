@@ -4369,6 +4369,821 @@ class PhilosophyWeightsDialog(tk.Toplevel):
         self.destroy()
 
 
+# -----------------------------
+# Set personnel: the position and depth of each of a set's 11 slots, edited in the game's own play databases.
+#
+# The sets (formation alignments) live in DB entries stored as plain bytes in qkl_boot.ast and qkl_fe2ig.ast, in several copies
+# (the master in qkl_boot.ast, a compact copy next to it, smaller ones in qkl_fe2ig.ast). A set has 11 rows in table SETP, one per
+# slot: SETL (set), poso (slot 0-10), EPos (the position, the player table's PPOS codes: 0 QB, 1 HB, 2 FB, 3 WR, 4 TE, 5-9 OL,
+# 10-18 defense), DPos (depth, 1 = first string: WR3 is EPos 3 / DPos 3), plus the alignment on the field and, in the master,
+# opnm / odep, which repeat EPos / DPos. The play assignments belong to the slot, so changing a slot's position keeps its route.
+# Checked in the game: a tight end put in a receiver's slot of a set lines up there. Which of the copies the game reads is not
+# known, so every copy that holds the set is edited. Only same-size, in-place edits are made (a few bytes per slot), the original
+# of each entry is kept the first time it is touched, and Restore puts it back. SPKF / SPKG (the Quick Sub packages such as
+# "TE Slot", which override single slots of a set) are not changed.
+# -----------------------------
+PERSONNEL_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-game-file-backup")
+PERSONNEL_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "personnel")
+PERSONNEL_POSITIONS = {0: "QB", 1: "HB", 2: "FB", 3: "WR", 4: "TE", 5: "LT", 6: "LG", 7: "C", 8: "RG", 9: "RT",
+                       10: "LE", 11: "RE", 12: "DT", 13: "LOLB", 14: "MLB", 15: "ROLB", 16: "CB", 17: "FS", 18: "SS"}
+PERSONNEL_OFFENSE_EDITABLE = (1, 2, 3, 4)          # HB FB WR TE: the QB and the line are not changed
+PERSONNEL_DEFENSE_EDITABLE = tuple(range(10, 19))  # every defensive position
+
+
+def rpcs3_running():
+    """True if rpcs3.exe is running (the game files cannot be written reliably then)."""
+    try:
+        out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "rpcs3" in out.lower()
+
+
+def personnel_side(epos_list):
+    """"offense" if a QB is among the slots, "defense" if every slot is a defensive position, else "other" (special teams)."""
+    if 0 in epos_list:
+        return "offense"
+    if epos_list and all(10 <= e <= 18 for e in epos_list):
+        return "defense"
+    return "other"
+
+
+def personnel_code(side, epos_list):
+    """The set's personnel: offense "RB TE" digits and receivers, e.g. "11 (3WR)"; defense DL-LB-DB, e.g. "4-3-4"."""
+    if side == "offense":
+        rb = sum(1 for e in epos_list if e in (1, 2))
+        te, wr = epos_list.count(4), epos_list.count(3)
+        return f"{rb}{te} ({wr}WR)"
+    if side == "defense":
+        dl = sum(1 for e in epos_list if e in (10, 11, 12))
+        lb = sum(1 for e in epos_list if e in (13, 14, 15))
+        db = sum(1 for e in epos_list if e in (16, 17, 18))
+        return f"{dl}-{lb}-{db}"
+    return "-"
+
+
+def slot_label(epos, dpos):
+    """A slot's position and depth as football people say it: WR3, TE1, CB2; the line and the quarterback without a number."""
+    name = PERSONNEL_POSITIONS.get(epos, str(epos))
+    return f"{name}{dpos}" if epos in (1, 2, 3, 4) or 10 <= epos <= 18 else name
+
+
+def slot_place(x, y):
+    """A short description of where a slot lines up from its alignment (the quarterback is at x 182, the line at y 22)."""
+    if x is None or y is None:
+        return ""
+    dx = x - 182
+    side = "left" if dx < -25 else ("right" if dx > 25 else "middle")
+    if y >= 60:
+        return f"backfield, {side}" if side != "middle" else "backfield"
+    wide = abs(dx) >= 120
+    return f"{side} {'wide' if wide else 'inside'}, {'on the line' if y <= 26 else 'off the line'}" if side != "middle" else (
+        "middle, on the line" if y <= 26 else "middle, off the line")
+
+
+class PersonnelData:
+    """The play sets found in the game's archives, their slots in every copy, and the originals from the backups."""
+
+    def __init__(self, copies, rows, stock_rows, set_names, form_names, playbook_use, playbook_names):
+        self.copies = copies                  # [{ast, file, index, start, size, base, fields, rows}]
+        self.rows = rows                      # {copy key: {(setl, poso): {column: int}}}
+        self.stock_rows = stock_rows          # same, from the backup of the entry (or the entry itself if never changed)
+        self.set_names = set_names            # {setl: name}
+        self.form_names = form_names          # {form id: name}
+        self.set_form = {}                    # {setl: form id}
+        self.playbook_use = playbook_use      # {setl: set of playbook ids (BOKL)}
+        self.playbook_names = playbook_names  # {playbook id: (name, "offense"/"defense")}
+        self.keys = [self.key(c) for c in copies]
+        self.set_copies = {}
+        for c in copies:
+            for (setl, _poso) in self.rows[self.key(c)]:
+                lst = self.set_copies.setdefault(setl, [])
+                if self.key(c) not in lst:
+                    lst.append(self.key(c))
+        # the copy a set is shown from: the master (has opnm), else the copy with the most rows
+        order = sorted(copies, key=lambda c: (0 if "opnm" in c["fields"] else 1, -c["rows"]))
+        self.primary = {}
+        for setl, keys in self.set_copies.items():
+            for c in order:
+                if self.key(c) in keys:
+                    self.primary[setl] = self.key(c)
+                    break
+        self.by_key = {self.key(c): c for c in copies}
+
+    @staticmethod
+    def key(copy):
+        return (copy["file"], copy["index"])
+
+    def set_ids(self):
+        return sorted(self.set_copies)
+
+    def slots(self, setl, stock=False):
+        """The set's slots from the copy it is shown from, ordered by slot: [{poso, epos, dpos, x, y, sgt}]."""
+        k = self.primary[setl]
+        src = (self.stock_rows if stock else self.rows)[k]
+        out = []
+        for (s, poso), r in sorted(src.items(), key=lambda kv: kv[0][1]):
+            if s != setl:
+                continue
+            out.append({"poso": poso, "epos": r["EPos"], "dpos": r["DPos"], "x": r.get("fmtx", r.get("x___")), "y": r.get("fmty", r.get("y___")),
+                        "sgt": r.get("SGT_")})
+        return out
+
+    def side(self, setl):
+        return personnel_side([s["epos"] for s in self.slots(setl)])
+
+    def code(self, setl, slots=None):
+        slots = slots if slots is not None else self.slots(setl)
+        return personnel_code(personnel_side([s["epos"] for s in slots]), [s["epos"] for s in slots])
+
+    def is_changed(self, setl):
+        return any(self.rows[k].get((setl, p)) is not None and self.stock_rows[k].get((setl, p)) is not None and
+                   (self.rows[k][(setl, p)]["EPos"], self.rows[k][(setl, p)]["DPos"]) != (self.stock_rows[k][(setl, p)]["EPos"], self.stock_rows[k][(setl, p)]["DPos"])
+                   for k in self.set_copies[setl] for p in range(11))
+
+    def disagreements(self, setl):
+        """Slots where a copy of the set does not hold what the copy it is shown from holds: [(copy key, poso)]."""
+        mine = self.primary[setl]
+        out = []
+        for k in self.set_copies[setl]:
+            if k == mine:
+                continue
+            for p in range(11):
+                a, b = self.rows[mine].get((setl, p)), self.rows[k].get((setl, p))
+                if a and b and (a["EPos"], a["DPos"]) != (b["EPos"], b["DPos"]):
+                    out.append((k, p))
+        return out
+
+    def playbooks_of(self, setl):
+        return sorted(self.playbook_names.get(b, (f"playbook {b}", ""))[0] for b in self.playbook_use.get(setl, ()))
+
+    def editable(self, slot, side):
+        return slot["epos"] in (PERSONNEL_OFFENSE_EDITABLE if side == "offense" else PERSONNEL_DEFENSE_EDITABLE if side == "defense" else ())
+
+    def plan_change(self, setl, new_epos):
+        """What changing slots' positions does to a set. new_epos: {poso: new EPos} for the slots to change. A slot moved to
+        another position goes last in that position's depth; the slots left behind keep their order, renumbered from 1 if a gap
+        opened. Returns {"slots": the new slots, "changes": {poso: (EPos, DPos)} of every slot that differs, "renumbered": bool,
+        "warnings": [str]}."""
+        cur = self.slots(setl)
+        positions = {s["poso"]: new_epos.get(s["poso"], s["epos"]) for s in cur}
+        moved = [s["poso"] for s in cur if positions[s["poso"]] != s["epos"]]
+        new = {}
+        renumbered = False
+        for epos in sorted(set(positions.values())):
+            stay = sorted([s for s in cur if positions[s["poso"]] == epos and s["poso"] not in moved], key=lambda s: (s["dpos"], s["poso"]))
+            arrive = sorted([s for s in cur if positions[s["poso"]] == epos and s["poso"] in moved], key=lambda s: s["poso"])
+            for depth, s in enumerate(stay + arrive, start=1):
+                new[s["poso"]] = (epos, depth)
+                if s["poso"] not in moved and depth != s["dpos"]:
+                    renumbered = True
+        changes = {p: v for p, v in new.items() if v != next((s["epos"], s["dpos"]) for s in cur if s["poso"] == p)}
+        slots = [{**s, "epos": new[s["poso"]][0], "dpos": new[s["poso"]][1]} for s in cur]
+        warnings = []
+        if renumbered:
+            warnings.append("The other players at the position(s) moved from were renumbered, so a lower-depth player now takes the slot "
+                            "a higher-depth one had.")
+        bad = self.disagreements(setl)
+        if bad:
+            where = ", ".join(sorted({f"{k[0]} #{k[1]}" for k, _p in bad}))
+            warnings.append(f"The copies in {where} already differ from the one shown for this set; each copy is changed from its own values.")
+        return {"slots": slots, "changes": changes, "renumbered": renumbered, "warnings": warnings}
+
+    def _edit(self, copy, setl, poso, epos, dpos):
+        row = self.rows[self.key(copy)].get((setl, poso))
+        if row is None or (row["EPos"], row["DPos"]) == (epos, dpos):
+            return None
+        edit = {"table": "SETP", "match": {"SETL": setl, "poso": poso}, "expect": {"EPos": row["EPos"], "DPos": row["DPos"]},
+                "set": {"EPos": epos, "DPos": dpos}}
+        if "opnm" in copy["fields"]:
+            edit["expect"].update({"opnm": row.get("opnm", row["EPos"]), "odep": row.get("odep", row["DPos"])})
+            edit["set"].update({"opnm": epos, "odep": dpos})
+        return edit
+
+    def edits_for(self, changes_by_set):
+        """Bridge targets for {setl: {poso: (EPos, DPos)}}: every copy that holds the set gets the same new values for those slots,
+        each checked against that copy's own current values."""
+        targets = {}
+        for setl, changes in changes_by_set.items():
+            for k in self.set_copies[setl]:
+                copy = self.by_key[k]
+                for poso, (epos, dpos) in sorted(changes.items()):
+                    e = self._edit(copy, setl, poso, epos, dpos)
+                    if e:
+                        targets.setdefault(k, []).append(e)
+        return self._targets(targets)
+
+    def reset_edits_for(self, setls):
+        """Bridge targets that put each copy's slots of these sets back to that copy's own stock values."""
+        targets = {}
+        for setl in setls:
+            for k in self.set_copies[setl]:
+                copy = self.by_key[k]
+                for (s, poso), stock in sorted(self.stock_rows[k].items(), key=lambda kv: kv[0][1]):
+                    if s != setl:
+                        continue
+                    e = self._edit(copy, setl, poso, stock["EPos"], stock["DPos"])
+                    if e:
+                        targets.setdefault(k, []).append(e)
+        return self._targets(targets)
+
+    def _targets(self, by_key):
+        return [{"ast": self.by_key[k]["ast"], "index": k[1], "start": self.by_key[k]["start"], "size": self.by_key[k]["size"], "edits": edits}
+                for k, edits in by_key.items() if edits]
+
+    def changed_sets(self):
+        return [s for s in self.set_ids() if self.is_changed(s)]
+
+
+def _int_row(row):
+    out = {}
+    for k, v in row.items():
+        try:
+            out[k] = int(v)
+        except (TypeError, ValueError):
+            out[k] = v
+    return out
+
+
+def load_personnel_data(model, archives, backup_dir=None, cache_dir=None):
+    """Scan the archives (the bridge's play-sets-scan), read each copy's SETP and the stock rows from the backups. Slow part
+    of opening the personnel tool (reads the archives' tables of contents and every play database); run on a worker thread."""
+    backup_dir = backup_dir or PERSONNEL_BACKUP_DIR
+    cache_dir = cache_dir or PERSONNEL_CACHE_DIR
+    shutil.rmtree(cache_dir, ignore_errors=True)
+    scan = model.run_bridge(["play-sets-scan", "--asts", ",".join(archives), "--out-dir", cache_dir])
+    copies = scan["copies"]
+    rows, stock_rows = {}, {}
+    set_names, form_names, playbook_use = {}, {}, {}
+    master = None
+    for c in copies:
+        csv_rows = read_csv_dicts(os.path.join(cache_dir, f"setp_{c['base']}.csv"))
+        rows[(c["file"], c["index"])] = {(int(r["SETL"]), int(r["poso"])): _int_row(r) for r in csv_rows}
+        if "opnm" in c["fields"] and (master is None or c["rows"] > master["rows"]):
+            master = c
+        for r in read_csv_dicts(os.path.join(cache_dir, f"form_{c['base']}.csv")):
+            form_names.setdefault(int(r["FORM"]), r["name"])
+        for r in read_csv_dicts(os.path.join(cache_dir, f"setl_{c['base']}.csv")):
+            set_names.setdefault(int(r["SETL"]), r["name"])
+    # the sets' formation ids and playbook use come from the master
+    set_form = {}
+    if master is not None:
+        for r in read_csv_dicts(os.path.join(cache_dir, f"setl_{master['base']}.csv")):
+            set_form[int(r["SETL"])] = int(r["FORM"])
+        for r in read_csv_dicts(os.path.join(cache_dir, f"pbai_{master['base']}.csv")):
+            playbook_use.setdefault(int(r["SETL"]), set()).add(int(r["BOKL"]))
+    for c in copies:
+        k = (c["file"], c["index"])
+        orig = os.path.join(backup_dir, f"{c['file']}.entry{c['index']}.orig")
+        if os.path.isfile(orig):
+            tmp = tempfile.mkdtemp(prefix="hc09_stock_")
+            try:
+                model.run_bridge(["export", "--db", orig, "--out", tmp, "--tables", "SETP"])
+                stock_rows[k] = {(int(r["SETL"]), int(r["poso"])): _int_row(r) for r in read_csv_dicts(os.path.join(tmp, "setp.csv"))}
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            stock_rows[k] = rows[k]
+    playbook_names = {}
+    for r in read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv")):
+        pbgi = safe_int(r.get("PBGI", ""))
+        if pbgi is not None:
+            playbook_names[pbgi] = ((r.get("BNAM") or "").strip() or f"playbook {pbgi}", "offense" if (r.get("BOFF") or "").strip() == "1" else "defense")
+    data = PersonnelData(copies, rows, stock_rows, set_names, form_names, playbook_use, playbook_names)
+    data.set_form = set_form
+    return data
+
+
+def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
+    """Run bridge entry-patch on prepared targets (PersonnelData.edits_for / reset_edits_for); raises on any failure, in which
+    case nothing was written (every entry is checked before the first write)."""
+    if not targets:
+        return {"results": []}
+    cfg = os.path.join(tempfile.gettempdir(), f"hc09_personnel_{os.getpid()}.json")
+    with open(cfg, "w", encoding="utf-8") as f:
+        json.dump({"backupDir": backup_dir or PERSONNEL_BACKUP_DIR, "targets": targets}, f)
+    try:
+        return model.run_bridge(["entry-patch", mode, "--config", cfg])
+    finally:
+        try:
+            os.remove(cfg)
+        except OSError:
+            pass
+
+
+def restore_personnel_files(model, data, backup_dir=None):
+    """Write every backed-up entry back (all sets to stock). Returns the bridge's result."""
+    cfg = os.path.join(tempfile.gettempdir(), f"hc09_personnel_restore_{os.getpid()}.json")
+    targets = [{"ast": c["ast"], "index": c["index"], "start": c["start"], "size": c["size"], "edits": []} for c in data.copies]
+    with open(cfg, "w", encoding="utf-8") as f:
+        json.dump({"backupDir": backup_dir or PERSONNEL_BACKUP_DIR, "targets": targets}, f)
+    try:
+        return model.run_bridge(["entry-patch", "restore", "--config", cfg])
+    finally:
+        try:
+            os.remove(cfg)
+        except OSError:
+            pass
+
+
+class PersonnelDialog(tk.Toplevel):
+    """Set personnel: list the game's offensive (or defensive) sets with their personnel, pick one, change the position of its
+    skill slots, and write the change into every database copy that holds the set (see PersonnelData). Reset puts a set back,
+    Restore all puts every game file entry back from the backups. The game must be closed to write."""
+
+    def __init__(self, app, data):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Set personnel")
+        self.transient(app)
+        self.geometry(f"{min(1400, self.winfo_screenwidth() - 40)}x{min(760, self.winfo_screenheight() - 70)}")
+        self.minsize(1000, 520)
+        self.app, self.data = app, data
+        self.setl = None
+        self.slot_vars = {}      # poso -> StringVar (the position chosen)
+        self.slot_widgets = []
+        self.player_labels = {}  # poso -> Label showing who lines up in the slot (when names are on)
+        self._depth = None       # {(team id, PPOS, depth index): (name, overall)} once names are asked for
+
+        ttk.Label(
+            self, wraplength=1130, justify="left", foreground="gray", padding=(12, 10, 12, 4),
+            text="These are the game's own sets: the alignments a formation can use. Each has 11 slots; a slot's position decides "
+                 "which player of your depth chart lines up there, and the play's route belongs to the slot. Changing a receiver "
+                 "slot to a tight end, say, keeps the route and puts a different player in it. This edits the game's files "
+                 "(every copy that holds the set), for every save and every game mode. The original is backed up the first time and "
+                 "can be restored. Close the game and the emulator before you apply.",
+        ).pack(anchor="w")
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(2, 4))
+        ttk.Label(top, text="Show:").pack(side="left")
+        self.side_var = tk.StringVar(value="Offense")
+        cmb = ttk.Combobox(top, state="readonly", width=9, textvariable=self.side_var, values=["Offense", "Defense"])
+        cmb.pack(side="left", padx=(4, 12))
+        cmb.bind("<<ComboboxSelected>>", lambda e: self._side_changed())
+        ttk.Label(top, text="Personnel:").pack(side="left")
+        self.pers_var = tk.StringVar()
+        self.cmb_pers = ttk.Combobox(top, state="readonly", width=22, textvariable=self.pers_var)
+        self.cmb_pers.pack(side="left", padx=(4, 12))
+        self.cmb_pers.bind("<<ComboboxSelected>>", lambda e: self._fill())
+        ttk.Label(top, text="Playbook:").pack(side="left")
+        self.book_var = tk.StringVar()
+        self.cmb_book = ttk.Combobox(top, state="readonly", width=34, textvariable=self.book_var)
+        self.cmb_book.pack(side="left", padx=(4, 12))
+        self.cmb_book.bind("<<ComboboxSelected>>", lambda e: self._fill())
+        ttk.Label(top, text="Find:").pack(side="left")
+        self.find_var = tk.StringVar()
+        ent = ttk.Entry(top, width=16, textvariable=self.find_var)
+        ent.pack(side="left", padx=(4, 8))
+        self.find_var.trace_add("write", lambda *_a: self._fill())
+        self.changed_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Changed only", variable=self.changed_var, command=self._fill).pack(side="left")
+        self.names_var = tk.BooleanVar(value=False)
+        self.chk_names = ttk.Checkbutton(top, text="Show player names for", variable=self.names_var, command=self._names_toggled)
+        self.chk_names.pack(side="left", padx=(14, 4))
+        self._teams = [(tid, team_nickname(tid)) for tid, _ in SIGN_DEST_TEAMS]
+        self.team_var = tk.StringVar()
+        self.cmb_team = ttk.Combobox(top, state="readonly", width=14, textvariable=self.team_var, values=[n for _t, n in self._teams])
+        self.cmb_team.pack(side="left")
+        self.cmb_team.bind("<<ComboboxSelected>>", lambda e: self._names_toggled())
+        mine = (getattr(app, "selected_team_id", None).get() if getattr(app, "selected_team_id", None) else "") or ""
+        self.team_var.set(next((n for t, n in self._teams if t == mine), self._teams[0][1] if self._teams else ""))
+        self.lbl_names = ttk.Label(top, foreground="gray")
+        self.lbl_names.pack(side="left", padx=(6, 0))
+        if not (app.model.db_path and app.model.players):
+            self.chk_names.configure(state="disabled")
+            self.cmb_team.configure(state="disabled")
+            self.lbl_names.configure(text="(load a save to see who lines up)")
+
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="both", expand=True)
+        cols = ("set", "form", "pers", "books", "status")
+        self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
+        for c, (text, width, anchor) in zip(cols, [("Set", 190, "w"), ("Formation", 110, "w"), ("Personnel", 100, "center"),
+                                                    ("Playbooks", 70, "center"), ("", 70, "center")]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor=anchor, stretch=(c == "set"))
+        ys = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=ys.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        ys.pack(side="right", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._select())
+
+        right = ttk.Frame(main)
+        right.pack(side="left", fill="both", padx=(12, 0))
+        self.lbl_title = ttk.Label(right, font=("", 11, "bold"))
+        self.lbl_title.pack(anchor="w")
+        self.lbl_books = ttk.Label(right, foreground="gray", wraplength=520, justify="left")
+        self.lbl_books.pack(anchor="w", pady=(0, 6))
+        self.slot_frame = ttk.Frame(right)
+        self.slot_frame.pack(anchor="w")
+        self.lbl_after = ttk.Label(right, wraplength=520, justify="left", font=("", 10, "bold"))
+        self.lbl_after.pack(anchor="w", pady=(8, 2))
+        self.lbl_warn = ttk.Label(right, wraplength=520, justify="left", foreground="#d98c1f")
+        self.lbl_warn.pack(anchor="w")
+        row = ttk.Frame(right)
+        row.pack(anchor="w", pady=(8, 0))
+        self.btn_apply = ttk.Button(row, text="Apply to the game files", style="Accent.TButton", command=self._apply_set)
+        self.btn_apply.pack(side="left")
+        self.btn_reset = ttk.Button(row, text="Reset this set to stock", command=self._reset_set)
+        self.btn_reset.pack(side="left", padx=(8, 0))
+
+        bottom = ttk.Frame(self)
+        bottom.pack(fill="x", padx=12, pady=(4, 12))
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(bottom, text="Restore all to stock...", command=self._restore_all).pack(side="right", padx=(0, 8))
+        ttk.Button(bottom, text="Bulk change...", command=self._bulk).pack(side="right", padx=(0, 8))
+        self.lbl_status = ttk.Label(bottom, foreground="gray")
+        self.lbl_status.pack(side="left")
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._side_changed()
+
+    # ---- list
+    def _side(self):
+        return "offense" if self.side_var.get() == "Offense" else "defense"
+
+    def _sets_of_side(self):
+        return [s for s in self.data.set_ids() if self.data.side(s) == self._side()]
+
+    def _side_changed(self):
+        side = self._side()
+        counts = Counter(self.data.code(s) for s in self._sets_of_side())
+        self._pers_values = {"Any personnel": None}
+        for code, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            self._pers_values[f"{code}  -  {n} sets"] = code
+        self.cmb_pers.configure(values=list(self._pers_values))
+        self.pers_var.set("Any personnel")
+        books = {}
+        for s in self._sets_of_side():
+            for b in self.data.playbook_use.get(s, ()):
+                name, kind = self.data.playbook_names.get(b, (f"playbook {b}", ""))
+                if not kind or kind == side:
+                    books[name] = b
+        self._book_values = {"Any playbook": None, **{n: b for n, b in sorted(books.items())}}
+        self.cmb_book.configure(values=list(self._book_values))
+        self.book_var.set("Any playbook")
+        self._fill()
+
+    def visible_sets(self):
+        want_code = self._pers_values.get(self.pers_var.get())
+        want_book = self._book_values.get(self.book_var.get())
+        text = self.find_var.get().strip().lower()
+        out = []
+        for s in self._sets_of_side():
+            if want_code and self.data.code(s) != want_code:
+                continue
+            if want_book is not None and want_book not in self.data.playbook_use.get(s, ()):
+                continue
+            name = self.data.set_names.get(s, f"set {s}")
+            form = self.data.form_names.get(self.data.set_form.get(s), "")
+            if text and text not in name.lower() and text not in form.lower():
+                continue
+            if self.changed_var.get() and not self.data.is_changed(s):
+                continue
+            out.append(s)
+        return out
+
+    def _fill(self, keep=None):
+        keep = keep if keep is not None else self.setl
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        shown = self.visible_sets()
+        for s in sorted(shown, key=lambda s: (self.data.set_form.get(s, 0), self.data.set_names.get(s, ""), s)):
+            self.tree.insert("", tk.END, iid=str(s), values=(
+                self.data.set_names.get(s, f"set {s}"), self.data.form_names.get(self.data.set_form.get(s), self.data.set_form.get(s, "")),
+                self.data.code(s), len(self.data.playbook_use.get(s, ())), "changed" if self.data.is_changed(s) else ""))
+        changed = len(self.data.changed_sets())
+        self.lbl_status.configure(text=f"{len(shown)} sets shown, {changed} changed from stock in the game files. "
+                                       f"Backups: {self.app._personnel_backup_dir()}")
+        if keep is not None and self.tree.exists(str(keep)):
+            self.tree.selection_set(str(keep))
+            self.tree.see(str(keep))
+        else:
+            self.setl = None
+            self._show_set()
+
+    # ---- player names (from the loaded save's depth chart)
+    def _team_id(self):
+        return next((t for t, n in self._teams if n == self.team_var.get()), "")
+
+    def _names_toggled(self):
+        if self.names_var.get():
+            try:
+                self._depth = self.app.depth_chart_players()
+            except Exception as e:
+                messagebox.showerror("Player names", str(e))
+                self.names_var.set(False)
+                self._depth = None
+            else:
+                self.lbl_names.configure(text="(from the saved depth chart)")
+        else:
+            self.lbl_names.configure(text="")
+        self._show_set()
+
+    def _player_text(self, epos, dpos):
+        """Who lines up in a slot of this position and depth for the chosen team: "Name (overall)", or a note if the depth chart has nobody."""
+        if not self.names_var.get() or self._depth is None:
+            return ""
+        hit = self._depth.get((self._team_id(), epos, dpos - 1))
+        if hit is None:
+            return f"nobody listed at {PERSONNEL_POSITIONS.get(epos, epos)}{dpos}"
+        return f"{hit[0]} ({hit[1]})" if hit[1] else hit[0]
+
+    def _duplicate_players(self, slots):
+        """Warnings for any player the depth chart puts in two slots of the set (he can be on the field once)."""
+        if not self.names_var.get() or self._depth is None:
+            return []
+        seen, out = {}, []
+        for sl in slots:
+            hit = self._depth.get((self._team_id(), sl["epos"], sl["dpos"] - 1))
+            if hit is None:
+                continue
+            label = slot_label(sl["epos"], sl["dpos"])
+            if hit[2] in seen:
+                out.append(f"{hit[0]} is listed for both {seen[hit[2]]} and {label}; he can only play one of them, so the other slot gets another player.")
+            else:
+                seen[hit[2]] = label
+        return out
+
+    # ---- one set
+    def _select(self):
+        sel = self.tree.selection()
+        self.setl = int(sel[0]) if sel else None
+        self._show_set()
+
+    def _show_set(self):
+        for w in self.slot_widgets:
+            w.destroy()
+        self.slot_widgets, self.slot_vars, self.player_labels = [], {}, {}
+        self.lbl_after.configure(text="")
+        self.lbl_warn.configure(text="")
+        if self.setl is None:
+            self.lbl_title.configure(text="Pick a set on the left.")
+            self.lbl_books.configure(text="")
+            self.btn_apply.configure(state="disabled")
+            self.btn_reset.configure(state="disabled")
+            return
+        d, s = self.data, self.setl
+        side = d.side(s)
+        self.lbl_title.configure(text=f"{d.set_names.get(s, f'set {s}')}   ({d.form_names.get(d.set_form.get(s), '?')}, set {s})")
+        books = d.playbooks_of(s)
+        self.lbl_books.configure(text="In: " + (", ".join(books[:8]) + (f" and {len(books) - 8} more" if len(books) > 8 else "") if books else "no playbook"))
+        slots, stock = d.slots(s), {x["poso"]: x for x in d.slots(s, stock=True)}
+        for col, text in enumerate(("Slot", "Lines up", "Now", "Player" if self.names_var.get() else "", "Stock", "Change to")):
+            lbl = ttk.Label(self.slot_frame, text=text, font=("", 9, "bold"))
+            lbl.grid(row=0, column=col, sticky="w", padx=(0, 10), pady=(0, 3))
+            self.slot_widgets.append(lbl)
+        names = [PERSONNEL_POSITIONS[e] for e in (PERSONNEL_OFFENSE_EDITABLE if side == "offense" else PERSONNEL_DEFENSE_EDITABLE)]
+        for i, sl in enumerate(slots, start=1):
+            st = stock.get(sl["poso"], sl)
+            was = slot_label(st["epos"], st["dpos"])
+            moved = (st["epos"], st["dpos"]) != (sl["epos"], sl["dpos"])
+            stock_player = self._player_text(st["epos"], st["dpos"]) if moved else ""
+            cells = [ttk.Label(self.slot_frame, text=str(sl["poso"] + 1)),
+                     ttk.Label(self.slot_frame, text=slot_place(sl["x"], sl["y"]), foreground="gray"),
+                     ttk.Label(self.slot_frame, text=slot_label(sl["epos"], sl["dpos"]), font=("", 9, "bold")),
+                     ttk.Label(self.slot_frame, text=self._player_text(sl["epos"], sl["dpos"])),
+                     ttk.Label(self.slot_frame, text=(f"{was}  {stock_player}".strip() if moved else ""), foreground="#d98c1f")]
+            for col, w in enumerate(cells):
+                w.grid(row=i, column=col, sticky="w", padx=(0, 10), pady=1)
+                self.slot_widgets.append(w)
+            self.player_labels[sl["poso"]] = cells[3]
+            if d.editable(sl, side):
+                var = tk.StringVar(value=PERSONNEL_POSITIONS[sl["epos"]])
+                var.trace_add("write", lambda *_a: self._preview())
+                cb = ttk.Combobox(self.slot_frame, state="readonly", width=7, textvariable=var, values=names)
+                cb.grid(row=i, column=5, sticky="w", pady=1)
+                self.slot_vars[sl["poso"]] = var
+                self.slot_widgets.append(cb)
+        self.btn_reset.configure(state="normal" if d.is_changed(s) else "disabled")
+        self._preview()
+        if not self._chosen_changes():
+            self.lbl_warn.configure(text="\n".join(self._duplicate_players(slots)))
+
+    def _chosen_changes(self):
+        """{poso: new EPos} for the slots whose chosen position differs from the position they have now."""
+        inv = {v: k for k, v in PERSONNEL_POSITIONS.items()}
+        cur = {x["poso"]: x["epos"] for x in self.data.slots(self.setl)}
+        return {p: inv[v.get()] for p, v in self.slot_vars.items() if inv[v.get()] != cur[p]}
+
+    def _preview(self):
+        if self.setl is None:
+            return
+        chosen = self._chosen_changes()
+        now = {x["poso"]: x for x in self.data.slots(self.setl)}
+        if not chosen:
+            self.lbl_after.configure(text="No change chosen.")
+            self.lbl_warn.configure(text="")
+            self.btn_apply.configure(state="disabled")
+            for poso, lbl in self.player_labels.items():
+                lbl.configure(text=self._player_text(now[poso]["epos"], now[poso]["dpos"]), foreground="")
+            self.lbl_warn.configure(text="\n".join(self._duplicate_players(list(now.values()))))
+            return
+        plan = self.data.plan_change(self.setl, chosen)
+        if self.names_var.get():
+            for poso, lbl in self.player_labels.items():
+                cur = self._player_text(now[poso]["epos"], now[poso]["dpos"])
+                if poso in plan["changes"]:
+                    lbl.configure(text=f"{cur}  >  {self._player_text(*plan['changes'][poso])}", foreground="#d98c1f")
+                else:
+                    lbl.configure(text=cur, foreground="")
+        before, after = self.data.code(self.setl), self.data.code(self.setl, plan["slots"])
+        moves = ", ".join(f"slot {p + 1}: {slot_label(*next((x['epos'], x['dpos']) for x in self.data.slots(self.setl) if x['poso'] == p))} to {slot_label(*v)}"
+                          for p, v in sorted(plan["changes"].items()))
+        self.lbl_after.configure(text=f"{before}  to  {after}.   {moves}")
+        self.lbl_warn.configure(text="\n".join(plan["warnings"] + self._duplicate_players(plan["slots"])))
+        self.btn_apply.configure(state="normal")
+
+    # ---- writing
+    def _check_closed(self):
+        if rpcs3_running():
+            messagebox.showerror("Close the emulator", "RPCS3 is running. Close it first: the game files can't be written reliably while it has them open.")
+            return False
+        return True
+
+    def _run(self, targets, what):
+        if not targets:
+            messagebox.showinfo("Nothing to change", "The game files already hold this.")
+            return False
+        if not self._check_closed():
+            return False
+        n_rows = sum(len(t["edits"]) for t in targets)
+        names = ", ".join(sorted({f"{os.path.basename(t['ast'])} #{t['index']}" for t in targets}))
+        if not messagebox.askyesno(what, f"This writes {n_rows} slot rows into {len(targets)} database copies ({names}) in the game's files. "
+                                          "The original of each is backed up first (once). The game and the emulator are closed?"):
+            return False
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
+        except Exception as e:
+            messagebox.showerror(what, str(e))
+            return False
+        finally:
+            self.config(cursor="")
+        return True
+
+    def _reload(self, keep=None):
+        try:
+            self.data = self.app.reload_personnel_data()
+        except Exception as e:
+            messagebox.showerror("Set personnel", str(e))
+            return
+        self._fill(keep=keep)
+
+    def _apply_set(self):
+        chosen = self._chosen_changes()
+        if self.setl is None or not chosen:
+            return
+        plan = self.data.plan_change(self.setl, chosen)
+        if self._run(self.data.edits_for({self.setl: plan["changes"]}), "Apply to the game files"):
+            messagebox.showinfo("Applied", "Done. Start the game again to use it.")
+            self._reload(keep=self.setl)
+
+    def _reset_set(self):
+        if self.setl is None:
+            return
+        if self._run(self.data.reset_edits_for([self.setl]), "Reset to stock"):
+            messagebox.showinfo("Reset", "This set is back to stock. Start the game again to use it.")
+            self._reload(keep=self.setl)
+
+    def _restore_all(self):
+        if not self._check_closed():
+            return
+        if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
+                                                          "The game and the emulator are closed?"):
+            return
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
+        except Exception as e:
+            messagebox.showerror("Restore all", str(e))
+            return
+        finally:
+            self.config(cursor="")
+        done = [r for r in res.get("results", []) if r.get("restored")]
+        messagebox.showinfo("Restored", f"{len(done)} database copies restored from the backups.")
+        self._reload(keep=self.setl)
+
+    def _bulk(self):
+        PersonnelBulkDialog(self.app, self)
+
+
+class PersonnelBulkDialog(tk.Toplevel):
+    """One rule for many sets: in the sets shown in the list now that have at least N of one position and at most M of another,
+    change the last slots of the first position to the second (e.g. every set with 4 or more WR and no TE: the 5th, then 4th,
+    receiver becomes a TE1)."""
+
+    def __init__(self, app, owner):
+        super().__init__(owner)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Bulk change")
+        self.transient(owner)
+        self.geometry(f"860x{min(640, self.winfo_screenheight() - 90)}")
+        self.minsize(720, 460)
+        self.app, self.owner = app, owner
+        self.data = owner.data
+        side = owner._side()
+        self.side = side
+        names = [PERSONNEL_POSITIONS[e] for e in (PERSONNEL_OFFENSE_EDITABLE if side == "offense" else PERSONNEL_DEFENSE_EDITABLE)]
+        ttk.Label(
+            self, wraplength=820, justify="left", foreground="gray", padding=(12, 10, 12, 4),
+            text="Applies to the sets shown in the list now (set the Personnel and Playbook filters first). In each set that has at least "
+                 "the number of the first position and at most the number of the second, the chosen number of slots at the first position "
+                 "(the highest depth first) change to the second. Example: At least 4 WR, at most 0 TE, change 1 WR to TE turns every 00 set "
+                 "(5 receivers) into 01 and every 10 set into 11. Nothing is written until you press Apply.",
+        ).pack(anchor="w")
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=12, pady=(2, 6))
+        self.vars = {"from": tk.StringVar(value="WR" if side == "offense" else "LOLB"), "to": tk.StringVar(value="TE" if side == "offense" else "CB"),
+                     "min": tk.StringVar(value="4" if side == "offense" else "1"), "max": tk.StringVar(value="0"), "n": tk.StringVar(value="1")}
+        ttk.Label(form, text="In sets with at least").pack(side="left")
+        ttk.Spinbox(form, from_=0, to=11, width=3, textvariable=self.vars["min"], command=self._preview).pack(side="left", padx=4)
+        cb = ttk.Combobox(form, state="readonly", width=6, textvariable=self.vars["from"], values=names)
+        cb.pack(side="left")
+        ttk.Label(form, text="and at most").pack(side="left", padx=(8, 0))
+        ttk.Spinbox(form, from_=0, to=11, width=3, textvariable=self.vars["max"], command=self._preview).pack(side="left", padx=4)
+        cb2 = ttk.Combobox(form, state="readonly", width=6, textvariable=self.vars["to"], values=names)
+        cb2.pack(side="left")
+        ttk.Label(form, text=", change").pack(side="left")
+        ttk.Spinbox(form, from_=1, to=5, width=3, textvariable=self.vars["n"], command=self._preview).pack(side="left", padx=4)
+        ttk.Label(form, text="slot(s) of the first to the second").pack(side="left")
+        for v in self.vars.values():
+            v.trace_add("write", lambda *_a: self._preview())
+
+        cols = ("set", "form", "now", "after", "what")
+        self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="extended")
+        for c, (text, width, anchor) in zip(cols, [("Set", 180, "w"), ("Formation", 110, "w"), ("Now", 90, "center"), ("After", 90, "center"), ("Change", 300, "w")]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor=anchor, stretch=(c in ("set", "what")))
+        self.tree.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        self.lbl_info = ttk.Label(self, foreground="gray", wraplength=820, justify="left", padding=(12, 0, 12, 4))
+        self.lbl_info.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_apply = ttk.Button(btn, text="Apply the selected sets to the game files", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Select all", command=lambda: self.tree.selection_set(self.tree.get_children())).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._plans = {}
+        self._preview()
+
+    def _numbers(self):
+        try:
+            return {k: int(v.get()) for k, v in self.vars.items() if k in ("min", "max", "n")}
+        except ValueError:
+            return None
+
+    def _preview(self):
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        self._plans = {}
+        nums = self._numbers()
+        if nums is None:
+            self.lbl_info.configure(text="Use whole numbers.")
+            return
+        inv = {v: k for k, v in PERSONNEL_POSITIONS.items()}
+        from_e, to_e = inv[self.vars["from"].get()], inv[self.vars["to"].get()]
+        if from_e == to_e:
+            self.lbl_info.configure(text="Pick two different positions.")
+            return
+        for s in self.owner.visible_sets():
+            slots = self.data.slots(s)
+            n_from = sum(1 for x in slots if x["epos"] == from_e)
+            n_to = sum(1 for x in slots if x["epos"] == to_e)
+            if n_from < nums["min"] or n_to > nums["max"] or n_from < nums["n"]:
+                continue
+            pick = sorted([x for x in slots if x["epos"] == from_e], key=lambda x: (-x["dpos"], -x["poso"]))[:nums["n"]]
+            plan = self.data.plan_change(s, {x["poso"]: to_e for x in pick})
+            if not plan["changes"]:
+                continue
+            self._plans[s] = plan
+            what = ", ".join(f"slot {x['poso'] + 1} {slot_label(x['epos'], x['dpos'])} to {slot_label(*plan['changes'][x['poso']])}" for x in pick)
+            self.tree.insert("", tk.END, iid=str(s), values=(self.data.set_names.get(s, f"set {s}"), self.data.form_names.get(self.data.set_form.get(s), ""),
+                                                             self.data.code(s), self.data.code(s, plan["slots"]), what))
+        self.tree.selection_set(self.tree.get_children())
+        self.lbl_info.configure(text=f"{len(self._plans)} sets match. Select the ones to change.")
+
+    def _apply(self):
+        chosen = [int(i) for i in self.tree.selection()]
+        if not chosen:
+            return
+        changes = {s: self._plans[s]["changes"] for s in chosen}
+        owner = self.owner
+        if owner._run(self.data.edits_for(changes), "Apply the bulk change"):
+            messagebox.showinfo("Applied", f"{len(chosen)} sets changed. Start the game again to use them.")
+            owner._reload(keep=owner.setl)
+            self.destroy()
+
+
 class TeamPhilosophyDialog(tk.Toplevel):
     """Edit a team's philosophy (schemes, playbook control, position philosophies) by
     name, on a row of the TPHS table. Only fields the row has are shown (and a tab
@@ -6251,6 +7066,7 @@ class App(tk.Tk):
         ttk.Label(top, text="Playbooks").pack(side="left")
         ttk.Button(top, text="Load / Refresh", command=lambda: self.refresh_playbooks(force=True)).pack(side="left", padx=8)
         ttk.Button(top, text="Profile save...", command=self.on_pick_profile).pack(side="left")
+        ttk.Button(top, text="Set personnel...", command=self.on_open_personnel).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Help", command=self._toggle_pb_help).pack(side="left", padx=(8, 0))
         self._pb_top_frame = top
         self.lbl_playbook_status = ttk.Label(top, text="Open this tab after loading a save.", foreground="gray")
@@ -8131,6 +8947,71 @@ class App(tk.Tk):
             f"Player: {name}", refresh_callback=self.refresh_stats_for_player,
             subject_kind="player",
         )
+
+    # ---- Set personnel (the positions in each set, edited in the game's own files; see PersonnelData)
+    def _personnel_backup_dir(self):
+        return self.ui_prefs.get("personnel_backup_dir") or PERSONNEL_BACKUP_DIR
+
+    def _personnel_archives(self):
+        """The game archives that hold play sets: qkl_boot.ast, and qkl_fe2ig.ast when it is found."""
+        boot = self._find_boot_ast("Set personnel", "play sets, formations and playbook names")
+        if not boot:
+            return []
+        out = [boot]
+        fe2ig = self.get_game_ast_path()
+        if fe2ig and os.path.abspath(fe2ig) != os.path.abspath(boot):
+            out.append(fe2ig)
+        return out
+
+    def depth_chart_players(self):
+        """{(team id, PPOS, depth index): (name, overall, player id)} from the loaded save's depth chart (table DCHT, read from the save file):
+        depth index 0 is the starter, so a slot's DPos n is index n-1. Raises RuntimeError if no save is loaded."""
+        path = self.model.db_path
+        if not path or not self.model.players:
+            raise RuntimeError("Load a save first: player names come from its depth chart.")
+        stamp = (path, os.path.getmtime(path))
+        cached = getattr(self, "_depth_cache", None)
+        if cached and cached[0] == stamp:
+            return cached[1]
+        tmp = tempfile.mkdtemp(prefix="hc09_dcht_")
+        try:
+            self.model.run_bridge(["export", "--db", path, "--out", tmp, "--tables", "DCHT"])
+            rows = read_csv_dicts(os.path.join(tmp, "dcht.csv"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        by_pgid = {(r.get("PGID", "") or "").strip(): r for r in self.model.players}
+        out = {}
+        for r in rows:
+            player = by_pgid.get((r.get("PGID", "") or "").strip())
+            ppos, ddep = safe_int(r.get("PPOS", "")), safe_int(r.get("ddep", ""))
+            if player is None or ppos is None or ddep is None:
+                continue
+            out[((r.get("TGID", "") or "").strip(), ppos, ddep)] = (self.model.player_name(player), (player.get("POVR", "") or "").strip(),
+                                                                   (r.get("PGID", "") or "").strip())
+        self._depth_cache = (stamp, out)
+        return out
+
+    def reload_personnel_data(self):
+        """Read the play sets from the game archives again (after a write); slow, may run off the main thread."""
+        return load_personnel_data(self.model, self._personnel_archives(), self._personnel_backup_dir())
+
+    def on_open_personnel(self):
+        archives = self._personnel_archives()
+        if not archives:
+            return
+        boot = archives[0]
+
+        def work():
+            if not self._playbook_names_cached():
+                self._extract_playbook_names(boot)       # names for the playbook filter
+            return load_personnel_data(self.model, archives, self._personnel_backup_dir())
+
+        def done(data):
+            self.ui_prefs["boot_ast_path"] = boot
+            save_ui_prefs(self.ui_prefs)
+            PersonnelDialog(self, data)
+
+        self.run_in_thread_with_busy("Reading the game's play sets...", work, done, error_title="Set personnel")
 
     def on_open_player_type_fit(self):
         if not self.model.players:
