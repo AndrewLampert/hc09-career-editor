@@ -729,6 +729,9 @@ function readEntryAt(astPath, start, size) {
 async function cmdPlaySetsScan(args) {
     const outDir = args['out-dir'];
     fs.mkdirSync(outDir, { recursive: true });
+    // --tables A,B: also (or instead) export these tables of each entry that has them filled (default: the ones the personnel tool uses)
+    const wantedTables = args.tables ? ['SETP', ...String(args.tables).split(',').map((t) => t.trim()).filter((t) => t && t !== 'SETP')]
+        : ['SETP', 'SETL', 'FORM', 'PBAI', 'SPKF'];
     const copies = [];
     for (const astPath of String(args.asts).split(',').map((s) => s.trim()).filter(Boolean)) {
         const tocs = await readToc(astPath);
@@ -754,7 +757,7 @@ async function cmdPlaySetsScan(args) {
                     if (setp.records.length === 0) continue;
                     const base = `${path.basename(astPath, '.ast')}_${toc.index}`;
                     const tables = {};
-                    for (const name of ['SETP', 'SETL', 'FORM', 'PBAI', 'SPKF']) {
+                    for (const name of wantedTables) {
                         if (!helper.file.tables.some((t) => t.name === name)) continue;
                         const table = helper.file[name];
                         await table.readRecords();
@@ -945,7 +948,7 @@ async function main() {
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
             console.error('  node bridge.js portrait-list --archive <path>');
             console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> [--top-index <N>] [--require-fields A,B] [--require-rows] (--table <NAME> --out <csv> | --tables A,B --out-dir <dir>)');
-            console.error('  node bridge.js play-sets-scan --asts <qkl_boot.ast>,<qkl_fe2ig.ast> --out-dir <dir>');
+            console.error('  node bridge.js play-sets-scan --asts <qkl_boot.ast>,<qkl_fe2ig.ast> --out-dir <dir> [--tables SETL,PLYS,...]');
             console.error('  node bridge.js entry-patch <apply|dry|restore> --config <json>');
             process.exit(1);
         }

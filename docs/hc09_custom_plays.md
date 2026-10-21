@@ -55,6 +55,8 @@ The game archive (`qkl_boot.ast`) has these same tables but **empty**, so there 
 
 A sensible order: work out what each column means from the existing plays and from small in-game experiments; write a checker for the rules, like the playbook one that was verified on all 98 playbooks; start by **cloning and slightly editing an existing custom play** rather than building one from nothing; and always back up and run `verify-db` after writing. Writing the profile is a new kind of risk, since so far the editor only reads it.
 
+**Update:** the tables are not empty everywhere. The game's master play database (`qkl_boot.ast` entry 40, see [hc09_play_data.md](hc09_play_data.md)) holds all 3,099 stock plays with their sets, assignments and route art, so the stock plays can be read and the editor's **Play designer** (prototype) builds a custom play from one of them in copies of the profile and career, see [hc09_play_creator.md](hc09_play_creator.md). The profile holds link rows too (`PGPL` 29 for the 14 custom plays), not only the career. Still untested in the game.
+
 ## Idea for later: sharing and swapping custom playbooks
 
 Not started. Three levels, easiest first:

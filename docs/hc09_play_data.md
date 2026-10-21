@@ -27,8 +27,12 @@ A set has 11 rows in `SETP`, one per slot:
 | `EPos` | the slot's position, the player table's `PPOS` codes: 0 QB, 1 HB, 2 FB, 3 WR, 4 TE, 5 to 9 the line (LT LG C RG RT), defense 10 LE, 11 RE, 12 DT, 13 LOLB, 14 MLB, 15 ROLB, 16 CB, 17 FS, 18 SS |
 | `DPos` | the depth: 1 is first string, so WR3 is `EPos` 3 with `DPos` 3, and the player is the depth chart's entry at index `DPos` - 1 for that position |
 | `SGT_` | the kind of spot (1 QB, 15 to 19 the skill spots, 4 the line); the play assignments belong to it |
-| `fmtx`, `fmty` (master) / `x___`, `y___` | where the slot lines up (the quarterback is at x 182, the line at y 22) |
+| `fmtx`, `fmty` (master `SETP`) | the slot's place in the **formation picture** (the quarterback and center at x 182, the line at y 22) |
+| `artx`, `arty` (master `SETP`) | the slot's place in the **play diagram** (the "art"): x about half of `fmtx` (`artx` = 0.46 x `fmtx` + 5.5, correlation 0.99; the center at x 90, the line at y 68), y not a fixed scale of `fmty` (correlation 0.69). The route art's offsets are measured from here |
+| `x___`, `y___` (`SETG`, and `SETP` in entry 42) | where the slot lines up **on the field**: floats in yards from the center and the ball (stored as the raw 32 bits), for each alignment group, so the pre-snap motion alignments have their own. Both `SETG`'s `x___` / `y___` and `fx__` / `fy__` are there; the entry 42 copy holds the normal group |
 | `opnm`, `odep` (master only) | repeat `EPos` and `DPos` in all 2,640 rows |
+
+Worked example, set 333 ("4WR Trio", Singleback): the quarterback is at `fmt` (182, 46), `art` (90, 77) and on the field 0.0 yd across and 1.4 yd behind the center (under center); the halfback directly behind him at `fmt` (182, 99), `art` (90, 95), 7.0 yd back; the tackles and guards at 3.33 and 1.67 yd either side of the center (`fmtx` 123, 152, 182, 211, 240); a wide receiver at 17.5 yd is `fmtx` 331 / `artx` 162, so the two pictures are squeezed for the wide spots and the yard values are the true spacing. Which columns the game reads for the field was not separated in a game test (the personnel test changed `EPos` only).
 
 The plays' routes and assignments (`PLYS`) belong to the slot, not to the position. Changing slot 6 from WR3 to TE1 keeps its route and puts a different player in it.
 
@@ -39,6 +43,8 @@ Offensive sets by personnel (running backs and tight ends, then receivers): 11 (
 ## What was checked in the game
 
 Set 32 ("5WR", Shotgun, three receivers on the right, no back) had its fifth receiver (slot 2) changed from WR5 to TE1 in the four copies that hold it (boot 40 and 42, fe2ig 1675 and 1676). In a quick game as the Cowboys the shotgun showed #82, Jason Witten, in the inner right slot where Miles Austin (#19, their WR5) would line up, with no running back, receivers #81 and #17 beside him on the right and #83 and Patrick Crayton on the left. So same-size edits to these entries reach RPCS3 (unlike the preset weights in the shipped database, which the game ignored, see `hc09_position_presets.md`). Which of the four copies the game reads was not separated, so the tool edits every copy that holds a set.
+
+A report that is **not reproduced**: after bulk personnel changes (turning 20 sets into 11, 00 into 01 and / or 21 into 21) the game crashed while simulating "To Regular Season" on a fresh save and profile started from the PS3; it could not be made to happen again. A plausible cause would be a play whose assignments or roles expect the position that used to stand in a slot (the routes and roles live in `PLYS` and are not changed with the position), but that is a guess. If a crash appears after a bulk change, **Restore all to stock** puts the originals back; try bulk changes on a copy of the game files first and say which rule was applied.
 
 ## The tool
 
@@ -51,4 +57,4 @@ Set 32 ("5WR", Shotgun, three receivers on the right, no back) had its fifth rec
 - **Bulk change...** applies one rule to the sets shown: in sets with at least N of a position and at most M of another, change the last slots of the first position (highest depth first) to the second. At least 4 WR, at most 0 TE, change 1 WR to TE turns every 10 set into 11 and every 00 set into 01.
 - Before the first write to an entry its original is saved, with a checksum, in `Documents\hc09-game-file-backup` (`<archive>.entry<index>.orig` and `.json`); the backup is never overwritten. Stock for the list is read from those backups. The tool refuses to write while RPCS3 is running, checks every entry before it writes any, checks that an unchanged entry saves back byte for byte, and reads each write back. Tested on copies of both archives: change, reset and restore-all gave byte-identical files.
 
-Not done: routes and assignments, names, alignment (`SETG`, `fmtx` / `fmty`), creating sets or plays (that would need the archive's entries to grow), the quarterback and line slots, the Quick Sub packages.
+Not done here: names, alignment (`SETG`, `fmtx` / `fmty`) in the game's files, creating sets or plays in the game's files (that would need the archive's entries to grow), the quarterback and line slots, the Quick Sub packages. Routes and assignments are read, drawn and used for custom plays in copies of the saves by the **Play designer** (prototype), see `hc09_play_creator.md`.

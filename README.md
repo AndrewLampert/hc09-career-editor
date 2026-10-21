@@ -47,6 +47,13 @@ export/import through HC09Editor required.
   slot, in every copy that holds the set): the original of each entry is backed up first in
   `Documents\hc09-game-file-backup`, *Reset* and *Restore all* put it back, and the game must be
   closed. It applies to every save and game mode. See [docs/hc09_play_data.md](docs/hc09_play_data.md).
+  **Play designer...** (a prototype) shows every play of the game (offense, defense, special teams)
+  with where each player lines up and what he does, drawn from the game's own route art: blocks,
+  routes with arrowheads, defensive zones, and the **option plays** (Triple Option, Speed Option, ...)
+  the in-game Create-A-Play does not offer. Any slot can be given any of the game's assignments, and
+  **Make custom play...** writes the result as a custom play into *copies* of your profile and career
+  saves (nothing of yours is touched). The game has not been tried with these files yet, so treat it
+  as an experiment, with backups. See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
   (rebuilds each player's overall under one of the game's team position presets,
   such as Cover 2 or Man Coverage CB, with the game's own formulas, and ranks them; select a
@@ -80,7 +87,8 @@ NFL Head Coach 09 (and various Madden/NCAA titles of the same era) store career
 data in a `TDB`-format binary database. This project has two pieces:
 
 - **`guiHC09.py`** — the Tkinter GUI where you actually browse/edit players, trades,
-  contracts, staff, playbooks, and the salary cap.
+  contracts, staff, playbooks, and the salary cap (with `hc09_plays.py` beside it, which
+  reads the game's plays for the play designer).
 - **`hc09-bridge/`** — a small headless Node.js CLI that reads/writes that binary
   format via [`madden-file-tools`](https://www.npmjs.com/package/madden-file-tools)
   (the same library used by [bep713/hc09-editor](https://github.com/bep713/hc09-editor)).
