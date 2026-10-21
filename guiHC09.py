@@ -5616,7 +5616,7 @@ class CustomPlayDialog(tk.Toplevel):
         ttk.Label(self, text=f"A custom play made from {d['play']['name']}", font=("", 11, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=680, justify="left", foreground="gray", padding=(14, 0, 14, 8),
                   text="This writes the play into COPIES of your profile save and your career save, in a folder you choose, and leaves your own saves alone. To try it in "
-                       "the game, close RPCS3 and copy the two files over a TEST profile and career (keep backups); the play is then in the playbook you pick, under "
+                       "the game, close RPCS3, back up your whole BLUS30128-PROFILE-... folder (every career shares it, and it holds all your custom plays) and the career, then copy the two files over them; the play is then in the playbook you pick, under "
                        "\"Created Plays\". If the game rejects it or shows something odd, tell me what it did; that is what this prototype is for.").pack(anchor="w")
         form = ttk.Frame(self)
         form.pack(fill="x", padx=14)
@@ -9478,6 +9478,9 @@ class App(tk.Tk):
         return PlayLibrary(tabs)
 
     def on_open_play_designer(self):
+        if PlayLibrary is None:
+            messagebox.showerror("Play designer", "The play designer needs hc09_plays.py, which should be next to guiHC09.py, and it was not found.")
+            return
         archives = self._personnel_archives()
         if not archives:
             return
@@ -9579,7 +9582,7 @@ class App(tk.Tk):
                 raise RuntimeError(f"The structure check of {p} failed: {ok.get('issues')}")
         summary.update({"profile": out_profile, "career": out_career})
         summary["message"] = (f"Made the custom play \"{name}\" (from {summary['from']}, set {summary['setl']}, play {summary['plyl']}) in playbook {bokl}.\n\n"
-                              f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, keep backups of a TEST profile and career, copy these two "
+                              f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder (every career shares it) and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
         with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
             f.write(summary["message"] + "\n")
