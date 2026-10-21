@@ -5205,10 +5205,21 @@ class SavesDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Saves")
         self.transient(app)
-        self.geometry("760x560")
+        self.geometry("760x640")
         self.minsize(640, 460)
         self.app = app
         self.saves = []
+
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=12, pady=(8, 12))
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        self.reopen_var = tk.BooleanVar(value=app.ui_prefs.get("reopen_last", False))
+        ttk.Checkbutton(self, text="Reopen my last save when the editor starts", variable=self.reopen_var,
+                        command=self._reopen_toggled).pack(side="bottom", anchor="w", padx=12)
+        self.recent_frame = ttk.Frame(self)
+        self.recent_frame.pack(side="bottom", fill="x", padx=12)
+        ttk.Label(self, text="Recent saves (X removes an entry from the Recent list)", padding=(12, 0, 12, 2)).pack(side="bottom", anchor="w")
+        ttk.Separator(self, orient="horizontal").pack(side="bottom", fill="x", padx=12, pady=(2, 6))
 
         ttk.Label(self, text="Career saves found on this computer", font=("", 11, "bold"), padding=(12, 12, 12, 2)).pack(anchor="w")
         self.lbl_note = ttk.Label(self, foreground="gray", wraplength=720, justify="left", padding=(12, 0, 12, 6))
@@ -5233,16 +5244,6 @@ class SavesDialog(tk.Toplevel):
         ttk.Button(row, text="Look in another folder...", command=self._add_folder).pack(side="left", padx=(8, 0))
         ttk.Button(row, text="Search this computer", command=lambda: self._refresh(search=True)).pack(side="left", padx=(8, 0))
 
-        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=12, pady=(2, 6))
-        ttk.Label(self, text="Recent saves (X removes an entry from the Recent list)", padding=(12, 0, 12, 2)).pack(anchor="w")
-        self.recent_frame = ttk.Frame(self)
-        self.recent_frame.pack(fill="x", padx=12)
-        self.reopen_var = tk.BooleanVar(value=app.ui_prefs.get("reopen_last", False))
-        ttk.Checkbutton(self, text="Reopen my last save when the editor starts", variable=self.reopen_var,
-                        command=self._reopen_toggled).pack(anchor="w", padx=12, pady=(8, 0))
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=12, pady=(8, 12))
-        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
         self.bind("<Escape>", lambda e: self.destroy())
         self._refresh()
         self._rebuild_recent()
