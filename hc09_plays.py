@@ -34,18 +34,26 @@ POSITIONS = {0: "QB", 1: "HB", 2: "FB", 3: "WR", 4: "TE", 5: "LT", 6: "LG", 7: "
              10: "LE", 11: "RE", 12: "DT", 13: "LOLB", 14: "MLB", 15: "ROLB", 16: "CB", 17: "FS", 18: "SS"}
 CREATED_FORMATION = 8190          # "Created Plays": the formation the game files its custom plays under
 OPTION_CODES = (36, 37, 42, 43)   # step codes found (almost) only in option plays: 42 and 43 in 100% of their uses, 36 and 37 in 96%
-# What a step code does, where it could be told from the plays that use it. These are read from the data, not from the game's code: "likely".
-STEP_HINTS = {
-    23: "deep zone", 22: "curl / flat zone", 24: "hook zone", 41: "pass rush", 14: "pass block (offensive linemen: 88% of its uses are in pass plays)",
-    15: "run block (linemen: 91% of its uses are in run plays; receivers use it to block downfield)", 25: "wait",
-    8: "run a leg of the route", 9: "cut (turn)", 10: "end of route, look for the ball", 19: "man coverage", 2: "end, then free", 255: "end of list",
-    42: "option read (option plays only)", 43: "option pitch path (option plays only)", 36: "option (option plays only)", 37: "option (option plays only)",
+# What a step code does, read from the data (no documentation of it was found): which positions use it, whether the play is a pass or a run, what the play is
+# called (a code found in every "trap" and "sweep" and nowhere else is a pull) and what comes before and after it. The code numbers overlap between the offense
+# and the defense tables, but a code means the same in both where both use it (the 138 lists in both tables are identical), so a code missing from one table
+# is read from the other. A "?" at the end marks a reading that fits the data but is not certain; a code that is not here shows as "step N".
+# value: a phrase, or {"QB": phrase for the quarterback, "": phrase for anyone else}
+STEP_TERMS = {
+    "offense": {
+        1: "carry the ball", 2: "then pursue (?)", 3: {"QB": "drop back", "": "release path (?)"}, 5: "carry out the fake (?)", 7: "read and throw",
+        11: "pitch (?)", 12: "option start (?)", 13: "run through the hole (?)", 14: "pass block", 15: "run block", 18: "lead path (?)", 25: "wait",
+        16: "kick (?)", 29: "punt (?)", 26: "go to the mesh point (?)", 32: "take the pitch (?)", 33: "pull (?)", 36: "option route read (?)", 37: "option route break (?)",
+        38: "take the snap and turn (?)", 39: "hand off (?)", 40: "play-action fake (?)", 42: "option read", 43: "option pitch route (?)",
+        45: "pre-snap motion", 46: "go at the snap (?)",
+    },
+    "defense": {
+        2: "then pursue (?)", 3: "line slant / stunt (?)", 19: "man coverage", 20: "flat zone", 21: "hook zone", 22: "curl zone", 23: "deep zone",
+        24: "wait and read (?)", 25: "wait", 26: "blitz path (?)", 34: "spy the quarterback", 41: "pass rush",
+    },
 }
-# The words the editor shows for a step: only the codes whose job could be told from the plays that use them (positions, pass or run play, where in the
-# list); every other code is shown as "step N".
-STEP_WORDS = {14: "pass block", 15: "run block", 41: "pass rush", 23: "deep zone", 22: "curl / flat zone", 24: "hook zone", 25: "wait", 19: "man coverage",
-              2: "then free", 42: "option read", 43: "pitch path", 36: "option step", 37: "option step", 7: "read and throw", 1: "carry the ball"}
-ROUTE_CODES = (8, 9, 10)
+ROUTE_TERMS = {8: "route leg", 9: "cut", 10: "look for the ball", 35: "curve in the route (?)"}
+ROUTE_CODES = (8, 9, 10, 35)      # a run of these steps reads as one route (35 sits between route legs and in the backs' flare, swing and drag routes)
 
 
 def signed(value, bits):
@@ -84,7 +92,18 @@ def decode_art(row):
     return pts
 
 
-def steps_in_words(steps):
+def step_term(table, code, epos=None):
+    """The words for a step code on a table ("offense" or "defense"), for a player at EPos epos (0 is the quarterback; None if not known), or None if the code is
+    not understood."""
+    term = STEP_TERMS[table].get(code)
+    if term is None:
+        term = STEP_TERMS["defense" if table == "offense" else "offense"].get(code)
+    if isinstance(term, dict):
+        return term["QB"] if epos == 0 else (term[""] if epos is not None else f"{term['QB']} / {term['']}")
+    return term
+
+
+def steps_in_words(steps, table="offense", epos=None):
     """A step list in plain words, "route: 2 legs, 1 cut, then look for the ball > run block"; codes that are not understood show as "step N"."""
     steps = [s for s in steps if s[0] != 255]
     out, i = [], 0
@@ -94,12 +113,14 @@ def steps_in_words(steps):
             while j < len(steps) and steps[j][0] in ROUTE_CODES:
                 j += 1
             codes = [c for c, *_ in steps[i:j]]
-            legs, cuts = codes.count(8), codes.count(9)
-            text = (f"route: {legs} leg{'s' if legs != 1 else ''}" + (f", {cuts} cut{'s' if cuts != 1 else ''}" if cuts else "") if legs else "route end")
+            legs, cuts, curves = codes.count(8), codes.count(9), codes.count(35)
+            parts = ([f"{legs} leg{'s' if legs != 1 else ''}"] if legs else []) + ([f"{cuts} cut{'s' if cuts != 1 else ''}"] if cuts else []) + \
+                    ([f"{curves} curve{'s' if curves != 1 else ''} (?)"] if curves else [])
+            text = ("route: " + ", ".join(parts)) if legs or curves else "route end"
             out.append(text + (", then look for the ball" if 10 in codes else ""))
             i = j
         else:
-            out.append(STEP_WORDS.get(steps[i][0], f"step {steps[i][0]}"))
+            out.append(step_term(table, steps[i][0], epos) or f"step {steps[i][0]}")
             i += 1
     runs = []                         # the same phrase twice in a row reads "x2"
     for text in out:
@@ -108,6 +129,16 @@ def steps_in_words(steps):
         else:
             runs.append([text, 1])
     return " > ".join(t + (f" x{n}" if n > 1 else "") for t, n in runs) or "nothing"
+
+
+def step_meanings(steps, table="offense", epos=None):
+    """["14 = pass block", ...] for the understood codes of a step list, each once, route steps included."""
+    out = []
+    for code in dict.fromkeys(c for c, *_ in steps if c != 255):
+        word = ROUTE_TERMS.get(code) if code in ROUTE_CODES else step_term(table, code, epos)
+        if word:
+            out.append(f"{code} = {word}")
+    return out
 
 
 def step_text(steps):

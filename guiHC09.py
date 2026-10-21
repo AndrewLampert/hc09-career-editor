@@ -41,7 +41,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, career_link_rows, decode_art, step_text, steps_in_words, STEP_HINTS, read_csv)
+    from hc09_plays import (PlayLibrary, build_custom_play, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -5342,7 +5342,7 @@ class SavesDialog(tk.Toplevel):
         save_ui_prefs(self.app.ui_prefs)
 
 
-PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 24: ("#e0c040", 12, 7)}   # step code of the slot -> (colour, half width, half height)
+PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 20: ("#d96ad0", 14, 6), 21: ("#e0c040", 12, 7)}   # zone step code (deep, curl, flat, hook) -> (colour, half width, half height)
 
 
 class PlayCanvas(tk.Canvas):
@@ -5368,7 +5368,7 @@ class PlayCanvas(tk.Canvas):
             self.create_line(*self._p(0, y), *self._p(180, y), fill="#d0d6d0", dash=(4, 4))
         step_of = {s["poso"]: {c for c, *_ in s["steps"]} for s in slots}
         for z in d["zones"]:
-            code = next((c for c in (23, 22, 24) if c in step_of.get(z["poso"], ())), 23)
+            code = next((c for c in (23, 22, 20, 21) if c in step_of.get(z["poso"], ())), 23)
             colour, hw, hh = PLAY_ZONE_STYLE[code]
             x, y = self._p(z["x"], z["y"])
             self.create_oval(x - hw * self.SCALE, y - hh * self.SCALE, x + hw * self.SCALE, y + hh * self.SCALE, outline=colour, fill=colour, stipple="gray50", width=2)
@@ -5476,7 +5476,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_reset_slot = ttk.Button(row, text="Reset slot", command=self._reset_slot)
         self.btn_reset_slot.pack(side="left", padx=(8, 0))
         ttk.Button(row, text="Reset play", command=self._reset_play).pack(side="left", padx=(8, 0))
-        self.lbl_slot = ttk.Label(right, wraplength=360, justify="left", foreground="gray", padding=(0, 8, 0, 0))
+        self.lbl_slot = ttk.Label(right, wraplength=330, justify="left", foreground="gray", padding=(0, 8, 0, 0))
         self.lbl_slot.pack(anchor="w")
 
         bottom = ttk.Frame(self)
@@ -5551,7 +5551,7 @@ class PlayDesignerDialog(tk.Toplevel):
         for iid in self.slots.get_children():
             self.slots.delete(iid)
         for sl in slots:
-            self.slots.insert("", tk.END, iid=str(sl["poso"]), values=(sl["label"], steps_in_words(sl["steps"]), sl["artl"]), tags=("changed",) if sl["poso"] in self.overrides else ())
+            self.slots.insert("", tk.END, iid=str(sl["poso"]), values=(sl["label"], steps_in_words(sl["steps"], self.detail["table"], sl["epos"]), sl["artl"]), tags=("changed",) if sl["poso"] in self.overrides else ())
         if keep and self.slots.exists(keep[0]):
             self.slots.selection_set(keep[0])
         p = d["play"]
@@ -5578,10 +5578,7 @@ class PlayDesignerDialog(tk.Toplevel):
             self.lbl_slot.configure(text="Select a slot to change what it does.")
             return
         sl = next(s for s in self._slots_now() if s["poso"] == int(sel[0]))
-        hints = []
-        for c, *_ in sl["steps"]:
-            if c in STEP_HINTS and STEP_HINTS[c] not in hints:
-                hints.append(f"{c} = {STEP_HINTS[c]}")
+        hints = step_meanings(sl["steps"], self.detail["table"], sl["epos"])
         self.lbl_slot.configure(text=f"{sl['label']}: assignment {sl['psal']}, drawn with art {sl['artl']}, role code {sl['plrr']}.\nThe game's steps: {sl['text']}\n" + ("; ".join(hints) + "." if hints else "") +
                                 "\n(The numbers in brackets are the game's own and are not decoded yet; only some step codes are understood.)")
 
@@ -5665,7 +5662,7 @@ class AssignmentPickerDialog(tk.Toplevel):
         left.pack(side="left", fill="both", expand=True)
         cols = ("psal", "words", "steps", "uses", "plays", "kind")
         self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
-        for c, (text, width, anchor) in zip(cols, [("Id", 44, "e"), ("In words", 230, "w"), ("The game's steps (code and numbers)", 230, "w"), ("Slots", 46, "e"), ("Plays", 46, "e"), ("", 96, "w")]):
+        for c, (text, width, anchor) in zip(cols, [("Id", 44, "e"), ("In words", 300, "w"), ("The game's steps", 150, "w"), ("Slots", 46, "e"), ("Plays", 46, "e"), ("", 80, "w")]):
             self.tree.heading(c, text=text)
             self.tree.column(c, width=width, anchor=anchor, stretch=(c == "words"))
         ys = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
@@ -5677,7 +5674,7 @@ class AssignmentPickerDialog(tk.Toplevel):
         right.pack(side="left", padx=(12, 0))
         self.canvas = PlayCanvas(right)
         self.canvas.pack()
-        self.lbl = ttk.Label(right, wraplength=560, justify="left", padding=(0, 6, 0, 0))
+        self.lbl = ttk.Label(right, wraplength=440, justify="left", padding=(0, 6, 0, 0))
         self.lbl.pack(anchor="w")
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", padx=12, pady=(4, 12))
@@ -5687,6 +5684,10 @@ class AssignmentPickerDialog(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         self._entries = {}
         self._fill()
+
+    def _epos(self, e):
+        """The position that uses an assignment most (None for one no stock play uses), to read the codes that differ for the quarterback."""
+        return e["epos"].most_common(1)[0][0] if e["epos"] else (self.slot["epos"] if self.slot else None)
 
     def _kind(self, e):
         parts = []
@@ -5714,7 +5715,7 @@ class AssignmentPickerDialog(tk.Toplevel):
             if text and text not in e["text"]:
                 continue
             self._entries[e["psal"]] = e
-            self.tree.insert("", tk.END, iid=str(e["psal"]), values=(e["psal"], steps_in_words(e["steps"]), e["text"], e["uses"], e["plays"], self._kind(e)))
+            self.tree.insert("", tk.END, iid=str(e["psal"]), values=(e["psal"], steps_in_words(e["steps"], self.side, self._epos(e)), e["text"], e["uses"], e["plays"], self._kind(e)))
             n += 1
             if n >= 2500:
                 break
@@ -5736,8 +5737,8 @@ class AssignmentPickerDialog(tk.Toplevel):
         fake = {"poso": 0, "label": self.slot["label"] if self.slot else "", "epos": self.slot["epos"] if self.slot else (3 if self.side == "offense" else 16), "x": start[0], "y": start[1],
                 "steps": e["steps"], "art": self.lib.art_of(self.side, art)}
         self.canvas.draw_play([fake], self.side, self.lib)
-        hints = [f"{c} = {STEP_HINTS[c]}" for c in dict.fromkeys(c for c, *_ in e["steps"]) if c in STEP_HINTS]
-        self.lbl.configure(text=f"Assignment {psal}: {steps_in_words(e['steps'])}\nThe game's steps: {e['text']}\n" + ("; ".join(hints) + "\n" if hints else "") +
+        hints = step_meanings(e["steps"], self.side, self._epos(e))
+        self.lbl.configure(text=f"Assignment {psal}: {steps_in_words(e['steps'], self.side, self._epos(e))}\nThe game's steps: {e['text']}\n" + ("; ".join(hints) + "\n" if hints else "") +
                                 (f"Drawn with art {art}, role code {plrr}." if art is not None else "No stock play pairs this with a drawing, so there is no picture for it here "
                                  "(the in-game editor does; load a profile in Make custom play to use its pairing)."))
         self.btn_use.configure(state="normal" if self.slot is not None and art is not None else "disabled")

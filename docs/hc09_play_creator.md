@@ -28,32 +28,48 @@ The two step-list tables number their lists separately but share ids: **138 ids 
 
 ### Step codes
 
-Read from the data (which plays use which code), not from the game's code, so **likely**:
+No documentation of these was found (the web has none), so every reading below comes from the data: which positions use a code, whether the play is a pass or a run (it has a `PLPD` or a `PLRD` row), what the play is called (a code found in every "trap" and "sweep" play and nowhere else is a pull), what comes before and after it, and how its numbers are spread. **Sure** means the pattern is clear; **likely** means it fits everything seen but is a reading; **?** is a guess that fits. `hc09_plays.STEP_TERMS` holds them, and the designer shows them in words with a "(?)" after the guesses. The numbers inside a step (`val1` to `val3`) are not decoded, apart from the few remarks below.
 
-| Code | Reading |
-|---|---|
-| 8 | run a route leg |
-| 9 | cut (turn) |
-| 10 | end of route, look for the ball (96% of its uses are in pass plays) |
-| 5, 11, 12, 38, 39, 40 and others | quarterback steps in run plays and play action, not identified |
-| 14 | **pass block**: offensive linemen, 88% of its uses are in pass plays |
-| 15 | **run block**: linemen in run plays (91% of its uses); receivers use it to block downfield |
-| 25 | wait (`val1` the time; also the first step of kickoff coverage) |
-| 19 | man coverage (defense; `val1` runs 1 to 5, probably the receiver) |
-| 3, 18, 13, 26 | movement along a path (3 mostly in pass plays, 18 and 26 in run plays); not decoded |
-| 7 | quarterback: read and throw (100% pass plays, always last) |
-| 1 | carry the ball (last step of the back or quarterback in run plays) |
-| 2 | end of an assignment, then the player is free (last on defense) |
-| 22 | curl / flat zone (defense); 23 deep zone; 24 hook zone |
-| 41 | pass rush |
-| **36, 37, 42, 43** | **option steps**: 42 and 43 are in 100% of their uses in option plays, 36 and 37 in 96%; 42 is the read, 43 the pitch path |
-| 255 | end of list |
+The 138 step lists that are in both tables are identical, so the vocabulary is shared by offense and defense; where a code means something different for the quarterback it says so.
+
+| Code | Words | How sure, and why |
+|---|---|---|
+| 8, 9, 10 | route leg, cut, look for the ball (a route ends with 10) | sure: receivers and backs, 78 to 100% pass plays, 10 always last; `val1` of 8 runs 0 to 248 (a go route is 240) |
+| 35 | a curve in a route | ?: between route legs, or first or after a pass block, for backs and tight ends in flare, swing, drag, cross, "sluggo" and "protect" plays; `val3` 1 or 2 (a side) |
+| 14 | pass block | sure: linemen, 88% of its uses are in pass plays |
+| 15 | run block | sure: linemen in run plays (91% of its uses); receivers use it to block downfield |
+| 33 | pull | ?: guards and the center in trap, sweep, power, toss and "boss" plays only |
+| 18 | lead path (then usually a run block) | ?: blockers and fullbacks in run plays, names with lead, wham, plunge, split |
+| 3 | quarterback: drop back; others: release path | sure for the quarterback (then 7, in "slants", "stick", "flood" ...); ? for backs, who follow it with a pass block |
+| 7 | read and throw | sure: quarterbacks, 100% pass plays, always last |
+| 38, 39, 5 | take the snap and turn, hand off, carry out the fake | likely: the quarterback's first steps in every dive, counter, draw, trap and zone play, in that order |
+| 40 | play-action fake | likely: after 38 and before 7 in boot, waggle and rollout plays |
+| 11 | pitch | ?: the quarterback in toss, sweep, pitch and power plays, before 5 |
+| 26, 13, 1 | go to the mesh point, run through the hole, carry the ball | likely: a back's steps in a run play, in that order (`PLRD` names the hole); 1 is also the quarterback keeping it |
+| 32 | take the pitch | ?: the back in toss, pitch and sweep plays, between 26 and 1 |
+| 25 | wait | sure: the first step of kickoff coverage and delayed routes, `val1` the time |
+| **12, 42, 43** | option start, **option read**, option pitch route | 42 and 43 are in 100% of their uses in option plays (sure); 12 is the quarterback's first step in them (?) |
+| **36, 37** | option route read, option route break | ?: receivers and backs in option routes ("slot option", "X option"), 36 then 37 |
+| 45, 46 | **pre-snap motion**, then go at the snap | sure for 45: all 103 plays that contain it have the motion flag set (`PBPL.motn`); 46 always follows it |
+| 16, 29 | kick, punt | ?: the kicker's and the punter's first steps |
+| 2 | then pursue | ?: last step of most defensive and kick-coverage assignments |
+| 41 | pass rush | sure |
+| 19 | man coverage | sure: "man", "double", "bracket", "under" plays; `val1` 1 to 5, probably the receiver |
+| 20, 21, 22, 23 | flat, hook, curl, deep zone | likely: "flat" plays, the hook zones of the middle linebacker, the outside linebackers' curls, "cover" plays (`val1` is the zone number) |
+| 24 | wait and read | ?: first step of 1,323 defensive assignments, always followed by a zone, a rush, a blitz path or man coverage; `val1` takes 15 values from 0 to 100 (a delay) |
+| 26 (defense) | blitz path | ?: 41 follows it in 481 of its uses, and 107 of the 346 plays that use it are named blitz |
+| 3 (defense) | line slant / stunt | ?: linemen in "slant", "pinch", "fire" plays |
+| 34 | spy the quarterback | sure: all 38 plays with "spy" in the name |
+| 255 | end of list | sure |
+| 4, 27, 28, 30, 31, 44 | not understood | used in 40 or fewer step lists (offense 4: 3 lists, defense 44: 6) |
+
+Coverage: **99.5% of the offensive and 98.8% of the defensive steps** of the game's step lists get a word, and 1,119 of 1,138 offensive and 390 of 403 defensive lists are read in full; many of the readings are guesses and show a "(?)". The solid part of the table (routes, blocks, zones, rush, man coverage, options, motion) is solid; the quarterback and run-play back sequences are consistent but not proven in the game.
 
 261 offensive plays contain these codes (46 distinct names: Triple Option, Triple Option Rev / Cntr / Pass, Tri(-) Option Pass, Option Pass, Speed Option, Jet Option, QB Slot Option, Power Option, Shovel Option, Quick Option, TE / HB / FB / WR options ...), in 61 step lists. **None of them is among the 138 shared lists and none is in the profile's custom plays**: the in-game editor is reported not to offer option plays, and the game's own plays prove the engine supports them, so they can be assigned in a custom play from the designer.
 
 ### The art
 
-Art columns are signed integers of different widths (`ART_BITS` in `hc09_plays.py`, from the table definition); the bridge exports them as raw unsigned numbers, so they are sign-extended when read (an `ay` of 251 in 8 bits is -5). `(ax, ay)` are absolute offsets from the player's art position (`artx`, `arty`); the route is the position followed by each used record (`sp` not 0). `at` 1 is an arrowhead. On defense a record with `ct` 3 is a **zone** (an oval with a line to it): code 23 deep (blue), 22 curl / flat (pink), 24 hook (yellow). Checked against the in-game diagrams: *Pass Deep* gives four deep zones at the top, two curl / flat and a hook; *Slants* WR1 goes up the field and then in (offsets `(0,-24) (0,-26) (-18,-40)`).
+Art columns are signed integers of different widths (`ART_BITS` in `hc09_plays.py`, from the table definition); the bridge exports them as raw unsigned numbers, so they are sign-extended when read (an `ay` of 251 in 8 bits is -5). `(ax, ay)` are absolute offsets from the player's art position (`artx`, `arty`); the route is the position followed by each used record (`sp` not 0). `at` 1 is an arrowhead. On defense a record with `ct` 3 is a **zone** (an oval with a line to it): code 23 deep (blue), 22 curl and 20 flat (pink), 21 hook (yellow). Checked against the in-game diagrams: *Pass Deep* gives four deep zones at the top, two curl / flat and a hook; *Slants* WR1 goes up the field and then in (offsets `(0,-24) (0,-26) (-18,-40)`).
 
 ## The designer (Playbooks tab, Play designer...)
 
