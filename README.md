@@ -125,6 +125,19 @@ python guiHC09.py
 
 Try changes on a copy of your save first. **Reload from File** discards unsaved edits.
 
+## Updates
+
+A few seconds after it starts, the editor asks GitHub (read-only, one request, at most once an hour,
+silent if you are offline) whether your copy is behind the `main` branch, and if so shows a banner
+above the tabs: **What's new...** lists what changed, **Skip this version** hides it until there is
+something newer, **Dismiss** hides it for now. If your copy is a git clone on `main` with no changes
+of your own, the *What's new* window also offers **Update now** (a `git pull --ff-only`, then a
+restart); otherwise it tells you how to update (`git pull`, or download the zip again; run
+`npm install` in `hc09-bridge` if `package.json` changed). A zip download is recognised by comparing
+its files with the ones on GitHub, a clone by the commit it is on, so nobody has to bump a version
+number. **Options... > Check for a newer version when the editor starts** turns the check off, and
+**Check for updates now** asks immediately. The check is in `hc09_update.py`.
+
 ## Format notes / known limitations
 
 - The TDB format pre-allocates a fixed number of record "slots" per table
