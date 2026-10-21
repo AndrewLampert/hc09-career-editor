@@ -26,6 +26,8 @@ BRANCH = "main"
 API = "https://api.github.com"
 PAGE = f"https://github.com/{REPO}"
 TRACKED_FILES = ("guiHC09.py", "hc09_update.py", "hc09-bridge/bridge.js", "hc09-bridge/package.json")
+# A copy without a git folder is compared file by file: these, and every Python module beside guiHC09.py that the repository has (the editor is
+# split into modules such as hc09_plays.py, and a change in any of them is an update).
 CHECK_EVERY = 3600          # seconds between checks (the editor remembers the last answer in between)
 
 
@@ -33,6 +35,12 @@ def blob_sha(data):
     """The git blob hash of file content, line endings taken as LF (how the repository stores them)."""
     data = data.replace(b"\r\n", b"\n")
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def tracked_files(remote_paths):
+    """The files whose difference means an update: TRACKED_FILES plus the repository's top-level Python modules."""
+    modules = {p for p in remote_paths if "/" not in p and p.endswith(".py")}
+    return tuple(sorted(modules | set(TRACKED_FILES)))
 
 
 def local_blob_shas(root, files=TRACKED_FILES):
@@ -162,8 +170,9 @@ def _check_clone(root, head, fetch, repo, branch):
 def _check_files(root, fetch, repo, branch):
     tree = fetch(f"{API}/repos/{repo}/git/trees/{branch}?recursive=1")
     remote = {e["path"]: e["sha"] for e in tree.get("tree", []) if e.get("type") == "blob"}
-    local = local_blob_shas(root)
-    differ = [p for p in TRACKED_FILES if local.get(p) is not None and p in remote and local[p] != remote[p]]
+    tracked = tracked_files(remote)
+    local = local_blob_shas(root, tracked)
+    differ = [p for p in tracked if local.get(p) is not None and p in remote and local[p] != remote[p]]
     if not differ:
         return {"status": "current", "why": "files match"}
     latest = hashlib.sha1("".join(remote[p] for p in sorted(differ)).encode()).hexdigest()
