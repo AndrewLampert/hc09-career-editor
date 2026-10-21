@@ -40,6 +40,8 @@ Offensive sets by personnel (running backs and tight ends, then receivers): 11 (
 
 Set 32 ("5WR", Shotgun, three receivers on the right, no back) had its fifth receiver (slot 2) changed from WR5 to TE1 in the four copies that hold it (boot 40 and 42, fe2ig 1675 and 1676). In a quick game as the Cowboys the shotgun showed #82, Jason Witten, in the inner right slot where Miles Austin (#19, their WR5) would line up, with no running back, receivers #81 and #17 beside him on the right and #83 and Patrick Crayton on the left. So same-size edits to these entries reach RPCS3 (unlike the preset weights in the shipped database, which the game ignored, see `hc09_position_presets.md`). Which of the four copies the game reads was not separated, so the tool edits every copy that holds a set.
 
+A report that is **not reproduced**: after bulk personnel changes (turning 20 sets into 11, 00 into 01 and / or 21 into 21) the game crashed while simulating "To Regular Season" on a fresh save and profile started from the PS3; it could not be made to happen again. A plausible cause would be a play whose assignments or roles expect the position that used to stand in a slot (the routes and roles live in `PLYS` and are not changed with the position), but that is a guess. If a crash appears after a bulk change, **Restore all to stock** puts the originals back; try bulk changes on a copy of the game files first and say which rule was applied.
+
 ## The tool
 
 **Playbooks tab, Set personnel...** (needs `qkl_boot.ast`; `qkl_fe2ig.ast` is used when found; a save is only needed for player names).
