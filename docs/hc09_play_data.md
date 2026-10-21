@@ -27,8 +27,12 @@ A set has 11 rows in `SETP`, one per slot:
 | `EPos` | the slot's position, the player table's `PPOS` codes: 0 QB, 1 HB, 2 FB, 3 WR, 4 TE, 5 to 9 the line (LT LG C RG RT), defense 10 LE, 11 RE, 12 DT, 13 LOLB, 14 MLB, 15 ROLB, 16 CB, 17 FS, 18 SS |
 | `DPos` | the depth: 1 is first string, so WR3 is `EPos` 3 with `DPos` 3, and the player is the depth chart's entry at index `DPos` - 1 for that position |
 | `SGT_` | the kind of spot (1 QB, 15 to 19 the skill spots, 4 the line); the play assignments belong to it |
-| `fmtx`, `fmty` (master) / `x___`, `y___` | where the slot lines up (the quarterback is at x 182, the line at y 22) |
+| `fmtx`, `fmty` (master `SETP`) | the slot's place in the **formation picture** (the quarterback and center at x 182, the line at y 22) |
+| `artx`, `arty` (master `SETP`) | the slot's place in the **play diagram** (the "art"): x about half of `fmtx` (`artx` = 0.46 x `fmtx` + 5.5, correlation 0.99; the center at x 90, the line at y 68), y not a fixed scale of `fmty` (correlation 0.69). The route art's offsets are measured from here |
+| `x___`, `y___` (`SETG`, and `SETP` in entry 42) | where the slot lines up **on the field**: floats in yards from the center and the ball (stored as the raw 32 bits), for each alignment group, so the pre-snap motion alignments have their own. Both `SETG`'s `x___` / `y___` and `fx__` / `fy__` are there; the entry 42 copy holds the normal group |
 | `opnm`, `odep` (master only) | repeat `EPos` and `DPos` in all 2,640 rows |
+
+Worked example, set 333 ("4WR Trio", Singleback): the quarterback is at `fmt` (182, 46), `art` (90, 77) and on the field 0.0 yd across and 1.4 yd behind the center (under center); the halfback directly behind him at `fmt` (182, 99), `art` (90, 95), 7.0 yd back; the tackles and guards at 3.33 and 1.67 yd either side of the center (`fmtx` 123, 152, 182, 211, 240); a wide receiver at 17.5 yd is `fmtx` 331 / `artx` 162, so the two pictures are squeezed for the wide spots and the yard values are the true spacing. Which columns the game reads for the field was not separated in a game test (the personnel test changed `EPos` only).
 
 The plays' routes and assignments (`PLYS`) belong to the slot, not to the position. Changing slot 6 from WR3 to TE1 keeps its route and puts a different player in it.
 

@@ -34,9 +34,16 @@ Read from the data (which plays use which code), not from the game's code, so **
 |---|---|
 | 8 | run a route leg |
 | 9 | cut (turn) |
-| 10 | end of route |
-| 12, 18, 25, 26 and others | not identified |
-| 14 | run block; 15 block |
+| 10 | end of route, look for the ball (96% of its uses are in pass plays) |
+| 5, 11, 12, 38, 39, 40 and others | quarterback steps in run plays and play action, not identified |
+| 14 | **pass block**: offensive linemen, 88% of its uses are in pass plays |
+| 15 | **run block**: linemen in run plays (91% of its uses); receivers use it to block downfield |
+| 25 | wait (`val1` the time; also the first step of kickoff coverage) |
+| 19 | man coverage (defense; `val1` runs 1 to 5, probably the receiver) |
+| 3, 18, 13, 26 | movement along a path (3 mostly in pass plays, 18 and 26 in run plays); not decoded |
+| 7 | quarterback: read and throw (100% pass plays, always last) |
+| 1 | carry the ball (last step of the back or quarterback in run plays) |
+| 2 | end of an assignment, then the player is free (last on defense) |
 | 22 | curl / flat zone (defense); 23 deep zone; 24 hook zone |
 | 41 | pass rush |
 | **36, 37, 42, 43** | **option steps**: 42 and 43 are in 100% of their uses in option plays, 36 and 37 in 96%; 42 is the read, 43 the pitch path |
@@ -50,7 +57,7 @@ Art columns are signed integers of different widths (`ART_BITS` in `hc09_plays.p
 
 ## The designer (Playbooks tab, Play designer...)
 
-- Lists every play (Offense, Defense or Special teams), filtered by playbook, name or formation, option plays only; draws the alignment and the routes or zones, lists each slot's step list in the game's own numbers with a hint for the codes above.
+- Lists every play (Offense, Defense or Special teams), filtered by playbook, name or formation, option plays only; draws the alignment and the routes or zones, lists each slot's assignment in plain words ("route: 2 legs, 1 cut, then look for the ball", "pass block", "deep zone"; a code that is not understood shows as "step N"), with the game's own numbers underneath.
 - **Change this slot...** opens the assignment library: every step list of that side, by kind of player, option reads only, only the lists no stock play uses, steps containing a text. A step list is drawn with the art the stock plays use with it most (or, for the lists no stock play uses, the pairing found in your profile's custom plays); a list with no known art cannot be used for a slot.
 - **Make custom play...** (offense, for now) writes the play, with the changed slots, into **copies** of a profile save and a career save in a folder you choose; your own saves are never touched. Rows (`hc09_plays.build_custom_play`): `PBPL` and `SETL` in formation 8190 ("Created Plays", `SITT` 2 / 0), 11 `SETP` (the stock set's slots with its diagram coordinates in both `fmtx` / `artx` and `fmty` / `arty`), the stock set's `SGFF` groups with their `SETG` rows, 11 `PLYS`, and the `PLPD` / `PLRD` / `PLCM` row of the stock play; ids come after the profile's own (`SETL` 66 and `PLYL` 28 are next in the test profile). Every `PSAL` / `ARTL` is one of the game's own. The play is put into the chosen custom playbook 1 to 10 by `PGPL`, `PGSS`, `PGSL` rows (and a `PGFM` row if that playbook has no "Created Plays" formation yet), written to **both** saves: the profile holds them too (its 14 custom plays are linked by 29 `PGPL` rows, next to the playbooks' stock plays), so both are copied. The files are written with the bridge's append import (zero-filled slots), `verify-db` must pass on both.
 - Nothing in this tool changes the game's archives.

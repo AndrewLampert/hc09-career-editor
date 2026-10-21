@@ -36,10 +36,16 @@ CREATED_FORMATION = 8190          # "Created Plays": the formation the game file
 OPTION_CODES = (36, 37, 42, 43)   # step codes found (almost) only in option plays: 42 and 43 in 100% of their uses, 36 and 37 in 96%
 # What a step code does, where it could be told from the plays that use it. These are read from the data, not from the game's code: "likely".
 STEP_HINTS = {
-    23: "deep zone", 22: "curl / flat zone", 24: "hook zone", 41: "pass rush", 15: "block", 14: "run block (likely)",
-    8: "run a route leg", 9: "cut (turn)", 10: "end of route (likely)", 255: "end of list",
+    23: "deep zone", 22: "curl / flat zone", 24: "hook zone", 41: "pass rush", 14: "pass block (offensive linemen: 88% of its uses are in pass plays)",
+    15: "run block (linemen: 91% of its uses are in run plays; receivers use it to block downfield)", 25: "wait",
+    8: "run a leg of the route", 9: "cut (turn)", 10: "end of route, look for the ball", 19: "man coverage", 2: "end, then free", 255: "end of list",
     42: "option read (option plays only)", 43: "option pitch path (option plays only)", 36: "option (option plays only)", 37: "option (option plays only)",
 }
+# The words the editor shows for a step: only the codes whose job could be told from the plays that use them (positions, pass or run play, where in the
+# list); every other code is shown as "step N".
+STEP_WORDS = {14: "pass block", 15: "run block", 41: "pass rush", 23: "deep zone", 22: "curl / flat zone", 24: "hook zone", 25: "wait", 19: "man coverage",
+              2: "then free", 42: "option read", 43: "pitch path", 36: "option step", 37: "option step", 7: "read and throw", 1: "carry the ball"}
+ROUTE_CODES = (8, 9, 10)
 
 
 def signed(value, bits):
@@ -76,6 +82,32 @@ def decode_art(row):
         pts.append({"tag": tag, "sp": sp, "ls": int(row["ls" + tag]), "at": int(row["at" + tag]), "ct": int(row["ct" + tag]), "lt": int(row["lt" + tag]),
                     "au": signed(row["au" + tag], bau), "av": signed(row["av" + tag], bav), "ax": signed(row["ax" + tag], bax), "ay": signed(row["ay" + tag], bay)})
     return pts
+
+
+def steps_in_words(steps):
+    """A step list in plain words, "route: 2 legs, 1 cut, then look for the ball > run block"; codes that are not understood show as "step N"."""
+    steps = [s for s in steps if s[0] != 255]
+    out, i = [], 0
+    while i < len(steps):
+        if steps[i][0] in ROUTE_CODES:
+            j = i
+            while j < len(steps) and steps[j][0] in ROUTE_CODES:
+                j += 1
+            codes = [c for c, *_ in steps[i:j]]
+            legs, cuts = codes.count(8), codes.count(9)
+            text = (f"route: {legs} leg{'s' if legs != 1 else ''}" + (f", {cuts} cut{'s' if cuts != 1 else ''}" if cuts else "") if legs else "route end")
+            out.append(text + (", then look for the ball" if 10 in codes else ""))
+            i = j
+        else:
+            out.append(STEP_WORDS.get(steps[i][0], f"step {steps[i][0]}"))
+            i += 1
+    runs = []                         # the same phrase twice in a row reads "x2"
+    for text in out:
+        if runs and runs[-1][0] == text:
+            runs[-1][1] += 1
+        else:
+            runs.append([text, 1])
+    return " > ".join(t + (f" x{n}" if n > 1 else "") for t, n in runs) or "nothing"
 
 
 def step_text(steps):
