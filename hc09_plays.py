@@ -17,8 +17,9 @@ Standard library only (no Tk), so it can be tested on its own. The data is expor
 
 A custom play (what the in-game Create-A-Play writes to the profile save) is a PBPL row and a SETL row in the formation 8190 ("Created Plays"), 11 SETP,
 SETG and PLYS rows, a SGFF row per alignment group, and the PLPD / PLRD / PLCM row of its type; every PSAL and ARTL in its PLYS rows is one of the game's
-own (the in-game editor offers 138 of the 1,403 step lists; the stock plays use the others, including the option reads). In the career, the play is linked
-into a custom playbook by PGPL, PGSS, PGSL and PGFM rows. build_custom_play() and career_link_rows() make those rows.
+own. The offense (PSLO) and defense (PSLD) tables number their step lists separately but overlap: 138 ids (2182 to 2343) are in both with identical lists and no
+stock play uses them (the profile's custom plays use 22 of them, with art that varies per use); everything is therefore keyed by side. In the career, the play is
+linked into a custom playbook by PGPL, PGSS, PGSL and PGFM rows. build_custom_play() and career_link_rows() make those rows.
 """
 import collections
 import csv
@@ -100,6 +101,7 @@ class PlayLibrary:
             epos = [x["epos"] for x in s["slots"]]
             s["side"] = "offense" if 0 in epos else ("defense" if epos and all(10 <= e <= 18 for e in epos) else "other")
         self.form_names = {int(r["FORM"]): r["name"] for r in t["FORM"]}
+        self.form_names.setdefault(CREATED_FORMATION, "Created Plays")
         self.plays = {}
         for r in t["PBPL"]:
             self.plays[int(r["PLYL"])] = {"plyl": int(r["PLYL"]), "setl": int(r["SETL"]), "name": r["name"], "plyt": int(r["PLYT"]), "plf": int(r["PLF_"]), "risk": int(r["risk"]),
@@ -107,19 +109,20 @@ class PlayLibrary:
         self.slot_rows = collections.defaultdict(dict)
         for r in t["PLYS"]:
             self.slot_rows[int(r["PLYL"])][int(r["poso"])] = {"psal": int(r["PSAL"]), "artl": int(r["ARTL"]), "plrr": int(r["PLRR"])}
-        self.steps, self.step_side = {}, {}
+        self.steps = {"offense": {}, "defense": {}}          # side -> {PSAL: [(code, val1, val2, val3), ...]}: the two tables share id numbers
         for side, rows in (("offense", t["PSLO"]), ("defense", t["PSLD"])):
             by = collections.defaultdict(list)
             for r in rows:
                 by[int(r["PSAL"])].append((int(r["step"]), int(r["code"]), int(r["val1"]), int(r["val2"]), int(r["val3"])))
             for psal, lst in by.items():
-                self.steps[psal] = [x[1:] for x in sorted(lst)]
-                self.step_side[psal] = side
-        self.art_rows, self.art_side = {}, {}
+                self.steps[side][psal] = [x[1:] for x in sorted(lst)]
+        self.art_rows = {"offense": {}, "defense": {}}       # side -> {ARTL: row}
         for side, rows in (("offense", t["ARTO"]), ("defense", t["ARTD"])):
             for r in rows:
-                self.art_rows[int(r["ARTL"])] = r
-                self.art_side[int(r["ARTL"])] = side
+                self.art_rows[side][int(r["ARTL"])] = r
+        self.shared_ids = {psal for psal, lst in self.steps["offense"].items() if self.steps["defense"].get(psal) == lst}
+        for s in self.sets.values():
+            s["table"] = self._table_of(s)
         self.passing = {int(r["PLYL"]): r for r in t["PLPD"]}
         self.running = collections.defaultdict(list)
         for r in t["PLRD"]:
@@ -130,7 +133,38 @@ class PlayLibrary:
             self.books_of_play[int(r["PBPL"])].add(int(r["BOKL"]))
         self._usage = None
 
+    def _table_of(self, s):
+        """Which assignment tables a set's plays use, "offense" (PSLO, ARTO) or "defense" (PSLD, ARTD): the side for offensive and defensive sets; for the special-teams
+        sets (kicking, returning, blocking), whichever table most of their plays' step lists are only in."""
+        if s["side"] in ("offense", "defense"):
+            return s["side"]
+        votes = collections.Counter()
+        for plyl, p in self.plays.items():
+            if p["setl"] != s["setl"]:
+                continue
+            for row in self.slot_rows.get(plyl, {}).values():
+                in_o, in_d = row["psal"] in self.steps["offense"], row["psal"] in self.steps["defense"]
+                if in_o != in_d:
+                    votes["offense" if in_o else "defense"] += 1
+        return votes.most_common(1)[0][0] if votes else "offense"
+
     # ---- plays
+    @staticmethod
+    def side_key(side):
+        """The table ("offense" or "defense") a side's step lists and art are in; pass a set's "table" for the special-teams sets."""
+        return "defense" if side == "defense" else "offense"
+
+    def steps_of(self, side, psal):
+        return self.steps[self.side_key(side)].get(psal, [])
+
+    def art_of(self, side, artl):
+        """The decoded art points of an ARTL id on a side ([] for an id with no art)."""
+        row = self.art_rows[self.side_key(side)].get(artl)
+        return decode_art(row) if row is not None else []
+
+    def play_table(self, plyl):
+        return self.sets[self.plays[plyl]["setl"]]["table"] if self.plays[plyl]["setl"] in self.sets else "offense"
+
     def play_side(self, plyl):
         return self.sets[self.plays[plyl]["setl"]]["side"] if self.plays[plyl]["setl"] in self.sets else "other"
 
@@ -145,7 +179,8 @@ class PlayLibrary:
         return sorted(out, key=lambda r: (r["name"].lower(), r["plyl"]))
 
     def play_is_option(self, plyl):
-        return any(c in OPTION_CODES for poso in self.slot_rows.get(plyl, {}).values() for c, *_ in self.steps.get(poso["psal"], ()))
+        table = self.play_table(plyl)
+        return any(c in OPTION_CODES for poso in self.slot_rows.get(plyl, {}).values() for c, *_ in self.steps_of(table, poso["psal"]))
 
     def detail(self, plyl):
         """A play with its slots: [{poso, epos, dpos, label, x, y, psal, artl, plrr, steps, text, art}] and the play's own columns."""
@@ -156,11 +191,11 @@ class PlayLibrary:
             row = self.slot_rows.get(plyl, {}).get(sl["poso"])
             if row is None:
                 continue
-            steps = self.steps.get(row["psal"], [])
-            art = decode_art(self.art_rows[row["artl"]]) if row["artl"] in self.art_rows else []
+            steps = self.steps_of(s["table"], row["psal"])
+            art = self.art_of(s["table"], row["artl"])
             slots.append({**sl, "label": POSITIONS.get(sl["epos"], str(sl["epos"])) + (str(sl["dpos"]) if sl["epos"] in (1, 2, 3, 4) or 10 <= sl["epos"] <= 18 else ""),
                           "psal": row["psal"], "artl": row["artl"], "plrr": row["plrr"], "steps": steps, "text": step_text(steps), "art": art})
-        return {"play": p, "set": s, "slots": slots, "side": s["side"], "passing": self.passing.get(plyl), "running": self.running.get(plyl, []), "combo": self.combos.get(plyl),
+        return {"play": p, "set": s, "slots": slots, "side": s["side"], "table": s["table"], "passing": self.passing.get(plyl), "running": self.running.get(plyl, []), "combo": self.combos.get(plyl),
                 "option": any(c in OPTION_CODES for sl in slots for c, *_ in sl["steps"])}
 
     def drawing(self, slots, side):
@@ -186,7 +221,7 @@ class PlayLibrary:
 
     # ---- assignments
     def usage(self):
-        """{PSAL: {"uses": slots using it, "plays": set of plays, "epos": Counter of the positions using it, "artl": Counter of the art it is drawn with,
+        """{(side, PSAL): {"uses": slots using it, "plays": set of plays, "epos": Counter of the positions using it, "artl": Counter of the art it is drawn with,
         "plrr": Counter of the role codes}} over the stock plays."""
         if self._usage is None:
             u = {}
@@ -194,9 +229,10 @@ class PlayLibrary:
                 s = self.sets.get(self.plays.get(plyl, {}).get("setl"))
                 if s is None:
                     continue
+                side = s["table"]
                 epos = {x["poso"]: x["epos"] for x in s["slots"]}
                 for poso, row in slots.items():
-                    e = u.setdefault(row["psal"], {"uses": 0, "plays": set(), "epos": collections.Counter(), "artl": collections.Counter(), "plrr": collections.Counter()})
+                    e = u.setdefault((side, row["psal"]), {"uses": 0, "plays": set(), "epos": collections.Counter(), "artl": collections.Counter(), "plrr": collections.Counter()})
                     e["uses"] += 1
                     e["plays"].add(plyl)
                     e["epos"][epos.get(poso, -1)] += 1
@@ -206,16 +242,16 @@ class PlayLibrary:
         return self._usage
 
     def library(self, side=None):
-        """Every step list of the game as an entry {psal, side, steps, text, uses, plays, epos, artl, plrr, option, cap_only (no stock play uses it)}, ordered by id."""
+        """Every step list of a side as an entry {psal, side, steps, text, uses, plays, epos, artl, plrr, option, unused (no stock play of that side uses it),
+        shared (the same list is in both the offense and the defense table)}, ordered by id."""
         u = self.usage()
+        side = self.side_key(side)
         out = []
-        for psal, steps in self.steps.items():
-            if side and self.step_side[psal] != side:
-                continue
-            e = u.get(psal)
-            out.append({"psal": psal, "side": self.step_side[psal], "steps": steps, "text": step_text(steps), "uses": e["uses"] if e else 0, "plays": len(e["plays"]) if e else 0,
+        for psal, steps in self.steps[side].items():
+            e = u.get((side, psal))
+            out.append({"psal": psal, "side": side, "steps": steps, "text": step_text(steps), "uses": e["uses"] if e else 0, "plays": len(e["plays"]) if e else 0,
                         "epos": e["epos"] if e else collections.Counter(), "artl": e["artl"] if e else collections.Counter(), "plrr": e["plrr"] if e else collections.Counter(),
-                        "option": any(c in OPTION_CODES for c, *_ in steps), "cap_only": e is None})
+                        "option": any(c in OPTION_CODES for c, *_ in steps), "unused": e is None, "shared": psal in self.shared_ids})
         return sorted(out, key=lambda r: r["psal"])
 
     def entry_art(self, entry):
@@ -268,8 +304,8 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None):
                                  "fy__": g["fy__"], "anm_": g["anm_"], "dir_": g["dir_"], "fanm": g["fanm"], "fdir": g["fdir"]})
     for sl in d["slots"]:
         psal, artl, plrr = overrides.get(sl["poso"], (sl["psal"], sl["artl"], sl["plrr"]))
-        if psal not in lib.steps:
-            raise ValueError(f"Step list {psal} is not one of the game's.")
+        if psal not in lib.steps[d["table"]]:
+            raise ValueError(f"Step list {psal} is not one of the game's {d['table']} step lists.")
         rows["PLYS"].append({"PSAL": psal, "ARTL": artl, "PLYL": new_plyl, "PLRR": plrr, "poso": sl["poso"]})
     for table, src in (("PLPD", lib.passing.get(base_plyl)), ("PLCM", lib.combos.get(base_plyl))):
         if src is not None:

@@ -38,6 +38,11 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
+    from hc09_plays import (PlayLibrary, build_custom_play, career_link_rows, decode_art, step_text, STEP_HINTS, read_csv)
+except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
+    PlayLibrary = None
+
+try:
     from PIL import Image, ImageTk
     PIL_AVAILABLE = True
 except ImportError:
@@ -5184,6 +5189,505 @@ class PersonnelBulkDialog(tk.Toplevel):
             self.destroy()
 
 
+PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 24: ("#e0c040", 12, 7)}   # step code of the slot -> (colour, half width, half height)
+
+
+class PlayCanvas(tk.Canvas):
+    """Draws a play in the diagram's units: players as circles, offensive routes as lines with arrowheads, defensive zones as ovals (blue deep, pink
+    curl / flat, yellow hook) with a line to them. Units come from the play data: x runs about 0 to 180 (the quarterback near 90), y about 0 to 128."""
+
+    SCALE = 2.6
+    PAD = 12
+
+    def __init__(self, parent, **kw):
+        super().__init__(parent, width=int(180 * self.SCALE + 2 * self.PAD), height=int(128 * self.SCALE + 2 * self.PAD), highlightthickness=0, background="#2f5d34", **kw)
+
+    def _p(self, x, y):
+        return self.PAD + x * self.SCALE, self.PAD + y * self.SCALE
+
+    def draw_play(self, slots, side, lib, changed=()):
+        self.delete("all")
+        d = lib.drawing(slots, side)
+        # the line of scrimmage: where the linemen stand
+        line_y = [p["y"] for p in d["players"] if (5 <= p["epos"] <= 9 and side == "offense") or (p["epos"] in (10, 11, 12) and side == "defense")]
+        if line_y:
+            y = sum(line_y) / len(line_y)
+            self.create_line(*self._p(0, y), *self._p(180, y), fill="#d0d6d0", dash=(4, 4))
+        step_of = {s["poso"]: {c for c, *_ in s["steps"]} for s in slots}
+        for z in d["zones"]:
+            code = next((c for c in (23, 22, 24) if c in step_of.get(z["poso"], ())), 23)
+            colour, hw, hh = PLAY_ZONE_STYLE[code]
+            x, y = self._p(z["x"], z["y"])
+            self.create_oval(x - hw * self.SCALE, y - hh * self.SCALE, x + hw * self.SCALE, y + hh * self.SCALE, outline=colour, fill=colour, stipple="gray50", width=2)
+        for ln in d["lines"]:
+            pts = [c for p in ln["points"] for c in self._p(*p)]
+            colour = "#ff9f40" if ln["poso"] in changed else ("#f5d442" if side == "offense" else "#e8e8e8")
+            self.create_line(*pts, fill=colour, width=3 if ln["ct"] != 3 else 2, dash=(5, 3) if ln["lt"] else None, arrow=tk.LAST if ln["arrow"] else None, smooth=False)
+        for p in d["players"]:
+            x, y = self._p(p["x"], p["y"])
+            colour = "#6aa8ff" if p["epos"] < 10 else "#ff7a7a"
+            self.create_oval(x - 7, y - 7, x + 7, y + 7, fill=colour, outline="#ff9f40" if p["poso"] in changed else "white", width=2 if p["poso"] in changed else 1)
+            self.create_text(x, y + 16, text=p["label"], fill="white", font=("", 8))
+
+
+class PlayDesignerDialog(tk.Toplevel):
+    """Play designer (a prototype of the in-game Create-A-Play): browse every play of the game, see its alignment and routes, change what any slot does to any of the
+    game's assignments (including the option reads the in-game editor does not offer), and make a custom play of it in copies of your profile and career saves.
+    Nothing is written to the game's files or to your saves here."""
+
+    def __init__(self, app, lib):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Play designer (prototype)")
+        self.transient(app)
+        self.geometry(f"{min(1250, self.winfo_screenwidth() - 30)}x{min(700, self.winfo_screenheight() - 110)}")
+        self.minsize(1000, 560)
+        self.app, self.lib = app, lib
+        self.plyl = None
+        self.detail = None
+        self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
+        self.books = {}
+        try:
+            for r in read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv")):
+                pbgi = safe_int(r.get("PBGI", ""))
+                if pbgi is not None:
+                    self.books[pbgi] = ((r.get("BNAM") or "").strip() or f"playbook {pbgi}", "offense" if (r.get("BOFF") or "").strip() == "1" else "defense")
+        except Exception:
+            pass
+
+        ttk.Label(
+            self, wraplength=1180, justify="left", foreground="gray", padding=(12, 10, 12, 4),
+            text="Pick a play to see where its players line up and what each does. Change a slot to any assignment the game has (offense and defense each have over a "
+                 "thousand, including the option reads the in-game Create-A-Play does not list) and see the route. This is a prototype: the picture comes from the game's "
+                 "route art, and nothing here is tested in the game yet. Make custom play... writes the play into COPIES of your profile and career saves, never the originals.",
+        ).pack(anchor="w")
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(2, 4))
+        ttk.Label(top, text="Show:").pack(side="left")
+        self.side_var = tk.StringVar(value="Offense")
+        cmb = ttk.Combobox(top, state="readonly", width=13, textvariable=self.side_var, values=["Offense", "Defense", "Special teams"])
+        cmb.pack(side="left", padx=(4, 12))
+        cmb.bind("<<ComboboxSelected>>", lambda e: self._side_changed())
+        ttk.Label(top, text="Playbook:").pack(side="left")
+        self.book_var = tk.StringVar()
+        self.cmb_book = ttk.Combobox(top, state="readonly", width=32, textvariable=self.book_var)
+        self.cmb_book.pack(side="left", padx=(4, 12))
+        self.cmb_book.bind("<<ComboboxSelected>>", lambda e: self._fill())
+        ttk.Label(top, text="Find:").pack(side="left")
+        self.find_var = tk.StringVar()
+        ttk.Entry(top, width=18, textvariable=self.find_var).pack(side="left", padx=(4, 8))
+        self.find_var.trace_add("write", lambda *_a: self._fill())
+        self.opt_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Option plays only", variable=self.opt_var, command=self._fill).pack(side="left")
+        self.lbl_count = ttk.Label(top, foreground="gray")
+        self.lbl_count.pack(side="left", padx=(12, 0))
+
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="y")
+        cols = ("name", "form", "set", "opt")
+        self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse", height=20)
+        for c, (text, width, anchor) in zip(cols, [("Play", 150, "w"), ("Formation", 80, "w"), ("Set", 90, "w"), ("Opt", 32, "center")]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor=anchor, stretch=False)
+        ys = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=ys.set)
+        self.tree.pack(side="left", fill="y")
+        ys.pack(side="left", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._select())
+
+        mid = ttk.Frame(main)
+        mid.pack(side="left", padx=10)
+        self.canvas = PlayCanvas(mid)
+        self.canvas.pack()
+        self.lbl_info = ttk.Label(mid, wraplength=470, justify="left", padding=(0, 6, 0, 0))
+        self.lbl_info.pack(anchor="w")
+
+        right = ttk.Frame(main)
+        right.pack(side="left", fill="both", expand=True)
+        scols = ("slot", "what", "art")
+        self.slots = ttk.Treeview(right, columns=scols, show="headings", selectmode="browse", height=12)
+        for c, (text, width, anchor) in zip(scols, [("Slot", 50, "w"), ("What it does (the game's step list)", 250, "w"), ("Art", 44, "center")]):
+            self.slots.heading(c, text=text)
+            self.slots.column(c, width=width, anchor=anchor, stretch=(c == "what"))
+        self.slots.pack(fill="x")
+        self.slots.tag_configure("changed", foreground="#d98c1f")
+        self.slots.bind("<<TreeviewSelect>>", lambda e: self._slot_selected())
+        row = ttk.Frame(right)
+        row.pack(fill="x", pady=(6, 0))
+        self.btn_change = ttk.Button(row, text="Change this slot...", command=self._change_slot)
+        self.btn_change.pack(side="left")
+        self.btn_reset_slot = ttk.Button(row, text="Reset slot", command=self._reset_slot)
+        self.btn_reset_slot.pack(side="left", padx=(8, 0))
+        ttk.Button(row, text="Reset play", command=self._reset_play).pack(side="left", padx=(8, 0))
+        self.lbl_slot = ttk.Label(right, wraplength=360, justify="left", foreground="gray", padding=(0, 8, 0, 0))
+        self.lbl_slot.pack(anchor="w")
+
+        bottom = ttk.Frame(self)
+        bottom.pack(fill="x", padx=12, pady=(4, 12))
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(bottom, text="Make custom play...", style="Accent.TButton", command=self._make_custom).pack(side="right", padx=(0, 8))
+        ttk.Button(bottom, text="Assignment library...", command=lambda: AssignmentPickerDialog(self.app, self, None, None)).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._side_changed()
+
+    # ---- list
+    def _side(self):
+        return {"Offense": "offense", "Defense": "defense"}.get(self.side_var.get(), "other")
+
+    def _side_changed(self):
+        side = self._side()
+        names = {}
+        for r in self.lib.play_list(side):
+            for b in self.lib.books_of_play.get(r["plyl"], ()):
+                nm, kind = self.books.get(b, (f"playbook {b}", ""))
+                if not kind or kind == side or side == "other":
+                    names[nm] = b
+        self._book_values = {"Any playbook": None, **{n: b for n, b in sorted(names.items())}}
+        self.cmb_book.configure(values=list(self._book_values))
+        self.book_var.set("Any playbook")
+        self._fill()
+
+    def _fill(self):
+        want_book = self._book_values.get(self.book_var.get())
+        text = self.find_var.get().strip().lower()
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        shown = 0
+        for r in self.lib.play_list(self._side()):
+            if want_book is not None and want_book not in self.lib.books_of_play.get(r["plyl"], ()):
+                continue
+            if self.opt_var.get() and not r["option"]:
+                continue
+            if text and text not in r["name"].lower() and text not in r["set"].lower() and text not in r["form"].lower():
+                continue
+            self.tree.insert("", tk.END, iid=str(r["plyl"]), values=(r["name"], r["form"], r["set"], "yes" if r["option"] else ""))
+            shown += 1
+        self.lbl_count.configure(text=f"{shown} plays")
+
+    # ---- one play
+    def _select(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        self.plyl = int(sel[0])
+        self.detail = self.lib.detail(self.plyl)
+        self.overrides = {}
+        self._show()
+
+    def _slots_now(self):
+        """The play's slots with the changes made here applied."""
+        out = []
+        for sl in self.detail["slots"]:
+            if sl["poso"] in self.overrides:
+                psal, artl, plrr = self.overrides[sl["poso"]]
+                steps = self.lib.steps_of(self.detail["table"], psal)
+                art = self.lib.art_of(self.detail["table"], artl)
+                sl = {**sl, "psal": psal, "artl": artl, "plrr": plrr, "steps": steps, "text": step_text(steps), "art": art}
+            out.append(sl)
+        return out
+
+    def _show(self):
+        d = self.detail
+        slots = self._slots_now()
+        self.canvas.draw_play(slots, d["table"], self.lib, changed=set(self.overrides))
+        keep = self.slots.selection()
+        for iid in self.slots.get_children():
+            self.slots.delete(iid)
+        for sl in slots:
+            self.slots.insert("", tk.END, iid=str(sl["poso"]), values=(sl["label"], sl["text"], sl["artl"]), tags=("changed",) if sl["poso"] in self.overrides else ())
+        if keep and self.slots.exists(keep[0]):
+            self.slots.selection_set(keep[0])
+        p = d["play"]
+        extras = []
+        if d["passing"]:
+            pr = d["passing"]
+            extras.append("reads: " + ", ".join(f"slot {int(pr[f'rcv{i}']) + 1} {pr[f'per{i}']}%" for i in range(1, 6) if int(pr[f"per{i}"])))
+        if d["running"]:
+            extras.append("run hole " + ", ".join(r["hole"] for r in d["running"]))
+        if d["combo"]:
+            extras.append("has a play combination (option decision)")
+        books = sorted(self.books.get(b, (f"playbook {b}", ""))[0] for b in self.lib.books_of_play.get(self.plyl, ()))
+        self.lbl_info.configure(text=f"{p['name']}  -  {self.lib.form_names.get(d['set']['form'], '')} / {d['set']['name']}, play type {p['plyt']}{', motion' if p['motn'] else ''}"
+                                     f"{', OPTION' if d['option'] else ''}.   " + ("; ".join(extras) + ". " if extras else "") +
+                                     (f"In {len(books)} playbooks." if books else ""))
+        self._slot_selected()
+
+    def _slot_selected(self):
+        sel = self.slots.selection()
+        ok = bool(sel) and self.detail is not None
+        self.btn_change.configure(state="normal" if ok else "disabled")
+        self.btn_reset_slot.configure(state="normal" if ok and sel[0] and int(sel[0]) in self.overrides else "disabled")
+        if not ok:
+            self.lbl_slot.configure(text="Select a slot to change what it does.")
+            return
+        sl = next(s for s in self._slots_now() if s["poso"] == int(sel[0]))
+        hints = []
+        for c, *_ in sl["steps"]:
+            if c in STEP_HINTS and STEP_HINTS[c] not in hints:
+                hints.append(f"{c} = {STEP_HINTS[c]}")
+        self.lbl_slot.configure(text=f"{sl['label']}: step list {sl['psal']}, art {sl['artl']}, role code {sl['plrr']}.\n{sl['text']}\n" + ("; ".join(hints) + "." if hints else ""))
+
+    def _change_slot(self):
+        sel = self.slots.selection()
+        if not sel or self.detail is None:
+            return
+        poso = int(sel[0])
+        sl = next(s for s in self._slots_now() if s["poso"] == poso)
+        AssignmentPickerDialog(self.app, self, sl, lambda choice: self._apply_choice(poso, choice))
+
+    def _apply_choice(self, poso, choice):
+        self.overrides[poso] = choice
+        self._show()
+
+    def _reset_slot(self):
+        sel = self.slots.selection()
+        if sel and int(sel[0]) in self.overrides:
+            del self.overrides[int(sel[0])]
+            self._show()
+
+    def _reset_play(self):
+        self.overrides = {}
+        if self.detail is not None:
+            self._show()
+
+    def _make_custom(self):
+        if self.detail is None:
+            messagebox.showinfo("Make custom play", "Pick a play first.")
+            return
+        if self.detail["side"] != "offense":
+            messagebox.showinfo("Make custom play", "Custom plays are offensive here for now: pick an offensive play.")
+            return
+        CustomPlayDialog(self.app, self)
+
+
+class AssignmentPickerDialog(tk.Toplevel):
+    """The game's assignments (step lists) as a list with a picture of each route: filter by what kind of player, by option reads, and by whether any stock play
+    uses it; pick one for a slot (Use for this slot), or just browse (opened from the library button)."""
+
+    CLASSES = {"Any player": None, "Quarterback": {0}, "Running back": {1, 2}, "Receiver / tight end": {3, 4}, "Offensive line": {5, 6, 7, 8, 9},
+               "Defensive line": {10, 11, 12}, "Linebacker": {13, 14, 15}, "Defensive back": {16, 17, 18}}
+
+    def __init__(self, app, designer, slot, on_pick):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Assignment library" if slot is None else f"Change slot: {slot['label']}")
+        self.transient(designer)
+        self.geometry(f"{min(1180, self.winfo_screenwidth() - 30)}x{min(700, self.winfo_screenheight() - 70)}")
+        self.minsize(900, 500)
+        self.app, self.designer, self.slot, self.on_pick = app, designer, slot, on_pick
+        self.lib = designer.lib
+        self.side = designer.detail["table"] if designer.detail else ("defense" if designer._side() == "defense" else "offense")
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(12, 4))
+        ttk.Label(top, text="For:").pack(side="left")
+        self.cls_var = tk.StringVar(value="Any player")
+        classes = [k for k, v in self.CLASSES.items() if v is None or (self.side == "offense") == all(e < 10 for e in v)]
+        cmb = ttk.Combobox(top, state="readonly", width=20, textvariable=self.cls_var, values=classes)
+        cmb.pack(side="left", padx=(4, 12))
+        cmb.bind("<<ComboboxSelected>>", lambda e: self._fill())
+        if slot is not None:
+            for name, group in self.CLASSES.items():
+                if group and slot["epos"] in group and name in classes:
+                    self.cls_var.set(name)
+        self.opt_var = tk.BooleanVar(value=False)
+        self.cap_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Option reads only", variable=self.opt_var, command=self._fill).pack(side="left")
+        ttk.Checkbutton(top, text="Only ones no stock play uses", variable=self.cap_var, command=self._fill).pack(side="left", padx=(12, 0))
+        ttk.Label(top, text="Steps contain:").pack(side="left", padx=(16, 0))
+        self.find_var = tk.StringVar()
+        ttk.Entry(top, width=10, textvariable=self.find_var).pack(side="left", padx=(4, 0))
+        self.find_var.trace_add("write", lambda *_a: self._fill())
+        self.lbl_count = ttk.Label(top, foreground="gray")
+        self.lbl_count.pack(side="left", padx=(12, 0))
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="both", expand=True)
+        cols = ("psal", "steps", "uses", "plays", "kind")
+        self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
+        for c, (text, width, anchor) in zip(cols, [("Id", 52, "e"), ("Steps (code and its numbers)", 430, "w"), ("Slots", 52, "e"), ("Plays", 52, "e"), ("", 130, "w")]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor=anchor, stretch=(c == "steps"))
+        ys = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=ys.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        ys.pack(side="left", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._preview())
+        right = ttk.Frame(main)
+        right.pack(side="left", padx=(12, 0))
+        self.canvas = PlayCanvas(right)
+        self.canvas.pack()
+        self.lbl = ttk.Label(right, wraplength=560, justify="left", padding=(0, 6, 0, 0))
+        self.lbl.pack(anchor="w")
+        bottom = ttk.Frame(self)
+        bottom.pack(fill="x", padx=12, pady=(4, 12))
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        self.btn_use = ttk.Button(bottom, text="Use for this slot", style="Accent.TButton", command=self._use, state="disabled" if slot is None else "normal")
+        self.btn_use.pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._entries = {}
+        self._fill()
+
+    def _kind(self, e):
+        parts = []
+        if e["option"]:
+            parts.append("OPTION")
+        if e["unused"]:
+            parts.append("no stock play" + (", shared" if e["shared"] else ""))
+        return ", ".join(parts)
+
+    def _fill(self):
+        group = self.CLASSES.get(self.cls_var.get())
+        text = self.find_var.get().strip()
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        self._entries = {}
+        n = 0
+        for e in self.lib.library(self.side):
+            if group is not None:
+                if e["epos"] and not any(p in group for p in e["epos"]):
+                    continue
+            if self.opt_var.get() and not e["option"]:
+                continue
+            if self.cap_var.get() and not e["unused"]:
+                continue
+            if text and text not in e["text"]:
+                continue
+            self._entries[e["psal"]] = e
+            self.tree.insert("", tk.END, iid=str(e["psal"]), values=(e["psal"], e["text"], e["uses"], e["plays"], self._kind(e)))
+            n += 1
+            if n >= 2500:
+                break
+        self.lbl_count.configure(text=f"{n} assignments" + (" (first 2500)" if n >= 2500 else ""))
+
+    def _choice(self, e):
+        art = self.lib.entry_art(e)
+        if art is None:
+            art = self.designer.app.play_pair_hint(e["psal"]) if hasattr(self.designer.app, "play_pair_hint") else None
+        return e["psal"], art, self.lib.entry_role(e)
+
+    def _preview(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        e = self._entries[int(sel[0])]
+        psal, art, plrr = self._choice(e)
+        start = (self.slot["x"], self.slot["y"]) if self.slot else (90, 90)
+        fake = {"poso": 0, "label": self.slot["label"] if self.slot else "", "epos": self.slot["epos"] if self.slot else (3 if self.side == "offense" else 16), "x": start[0], "y": start[1],
+                "steps": e["steps"], "art": self.lib.art_of(self.side, art)}
+        self.canvas.draw_play([fake], self.side, self.lib)
+        hints = [f"{c} = {STEP_HINTS[c]}" for c in dict.fromkeys(c for c, *_ in e["steps"]) if c in STEP_HINTS]
+        self.lbl.configure(text=f"Step list {psal}: {e['text']}\n" + ("; ".join(hints) + "\n" if hints else "") +
+                                (f"Drawn with art {art}, role code {plrr}." if art is not None else "No stock play pairs this with a drawing, so there is no picture for it here "
+                                 "(the in-game editor does; load a profile in Make custom play to use its pairing)."))
+        self.btn_use.configure(state="normal" if self.slot is not None and art is not None else "disabled")
+
+    def _use(self):
+        sel = self.tree.selection()
+        if not sel or self.on_pick is None:
+            return
+        psal, art, plrr = self._choice(self._entries[int(sel[0])])
+        if art is None:
+            return
+        self.on_pick((psal, art, plrr))
+        self.destroy()
+
+
+class CustomPlayDialog(tk.Toplevel):
+    """Make custom play: the play shown in the designer, with the slots you changed, becomes a custom play in COPIES of a profile save and a career save (the
+    originals are never touched). Experimental: the rows follow the plays the in-game Create-A-Play wrote, but nothing has been tried in the game yet."""
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Make custom play")
+        self.transient(designer)
+        self.geometry("720x560")
+        self.app, self.designer = app, designer
+        d = designer.detail
+        ttk.Label(self, text=f"A custom play made from {d['play']['name']}", font=("", 11, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=680, justify="left", foreground="gray", padding=(14, 0, 14, 8),
+                  text="This writes the play into COPIES of your profile save and your career save, in a folder you choose, and leaves your own saves alone. To try it in "
+                       "the game, close RPCS3 and copy the two files over a TEST profile and career (keep backups); the play is then in the playbook you pick, under "
+                       "\"Created Plays\". If the game rejects it or shows something odd, tell me what it did; that is what this prototype is for.").pack(anchor="w")
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=14)
+        self.name_var = tk.StringVar(value=d["play"]["name"][:24])
+        self.profile_var = tk.StringVar(value=(find_profile_saves(app.model.db_path) or [""])[0] if app.model.db_path else "")
+        self.career_var = tk.StringVar(value=app.model.db_path or "")
+        self.out_var = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "Documents", "hc09-custom-play-output"))
+        self.book_var = tk.StringVar()
+        self._books = {}
+        for i, (label, var, browse) in enumerate((("Play name (24 characters):", self.name_var, None), ("Profile save (a copy is made):", self.profile_var, "file"),
+                                                   ("Career save (a copy is made):", self.career_var, "file"), ("Output folder:", self.out_var, "dir"))):
+            ttk.Label(form, text=label).grid(row=i, column=0, sticky="w", pady=3)
+            ttk.Entry(form, width=52, textvariable=var).grid(row=i, column=1, sticky="we", padx=6)
+            if browse:
+                ttk.Button(form, text="...", width=3, command=lambda v=var, b=browse: self._browse(v, b)).grid(row=i, column=2)
+        ttk.Label(form, text="Custom playbook (1-10):").grid(row=4, column=0, sticky="w", pady=3)
+        self.cmb_book = ttk.Combobox(form, state="readonly", width=49, textvariable=self.book_var)
+        self.cmb_book.grid(row=4, column=1, sticky="we", padx=6)
+        ttk.Button(form, text="Read", width=5, command=self._read_books).grid(row=4, column=2)
+        form.columnconfigure(1, weight=1)
+        self.lbl_changes = ttk.Label(self, wraplength=680, justify="left", padding=(14, 8, 14, 4))
+        self.lbl_changes.pack(anchor="w")
+        self.lbl_result = ttk.Label(self, wraplength=680, justify="left", foreground="gray", padding=(14, 0, 14, 4))
+        self.lbl_result.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Make the files", style="Accent.TButton", command=self._make).pack(side="right", padx=(0, 8))
+        ch = designer.overrides
+        self.lbl_changes.configure(text=("Changed slots: " + ", ".join(next(s["label"] for s in d["slots"] if s["poso"] == p_) for p_ in sorted(ch)) + "."
+                                         if ch else "No slot is changed: the custom play will be a copy of the original."))
+        self._read_books()
+
+    def _browse(self, var, kind):
+        path = filedialog.askdirectory(parent=self) if kind == "dir" else filedialog.askopenfilename(parent=self, title="Pick the save file (USR-DATA)")
+        if path:
+            var.set(path)
+            if var is self.profile_var:
+                self._read_books()
+
+    def _read_books(self):
+        try:
+            self._books = self.app.profile_custom_books(self.profile_var.get())
+        except Exception as e:
+            self._books = {}
+            self.lbl_result.configure(text=f"Could not read the profile's playbooks: {e}")
+        names = [f"{b} - {n}" for b, n in sorted(self._books.items())]
+        self.cmb_book.configure(values=names)
+        if names and not self.book_var.get():
+            self.book_var.set(names[0])
+
+    def _make(self):
+        try:
+            bokl = int(self.book_var.get().split(" - ")[0])
+        except (ValueError, IndexError):
+            messagebox.showerror("Make custom play", "Pick the custom playbook (read the profile first).")
+            return
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            result = self.app.make_custom_play_files(self.designer.lib, self.designer.plyl, self.name_var.get().strip(), dict(self.designer.overrides), self.profile_var.get(),
+                                                     self.career_var.get(), bokl, self.out_var.get())
+        except Exception as e:
+            messagebox.showerror("Make custom play", str(e))
+            return
+        finally:
+            self.config(cursor="")
+        self.lbl_result.configure(text=result["message"])
+        messagebox.showinfo("Custom play made", result["message"])
+
+
 class TeamPhilosophyDialog(tk.Toplevel):
     """Edit a team's philosophy (schemes, playbook control, position philosophies) by
     name, on a row of the TPHS table. Only fields the row has are shown (and a tab
@@ -7067,6 +7571,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Load / Refresh", command=lambda: self.refresh_playbooks(force=True)).pack(side="left", padx=8)
         ttk.Button(top, text="Profile save...", command=self.on_pick_profile).pack(side="left")
         ttk.Button(top, text="Set personnel...", command=self.on_open_personnel).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Play designer...", command=self.on_open_play_designer).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Help", command=self._toggle_pb_help).pack(side="left", padx=(8, 0))
         self._pb_top_frame = top
         self.lbl_playbook_status = ttk.Label(top, text="Open this tab after loading a save.", foreground="gray")
@@ -8947,6 +9452,138 @@ class App(tk.Tk):
             f"Player: {name}", refresh_callback=self.refresh_stats_for_player,
             subject_kind="player",
         )
+
+    # ---- Play designer (a prototype of Create-A-Play outside the game; see hc09_plays.py and docs/hc09_play_data.md)
+    PLAY_TABLES = "SETL,PBPL,PLYS,PSLO,PSLD,ARTO,ARTD,PLPD,PLRD,PLCM,SETG,SGFF,FORM,PBAI"
+
+    def load_play_library(self, archives=None):
+        """Read the game's plays from the archives (the bridge's play-sets-scan): the master play database holds all of them. About a second; may run
+        off the main thread. Needs the archives' paths (found beforehand on the main thread, as that may ask the user)."""
+        archives = archives or self._personnel_archives()
+        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "plays")
+        shutil.rmtree(cache, ignore_errors=True)
+        scan = self.model.run_bridge(["play-sets-scan", "--asts", ",".join(archives), "--out-dir", cache, "--tables", self.PLAY_TABLES])
+        copies = [c for c in scan["copies"] if c["tables"].get("PLYS") and c["tables"].get("PSLO")]
+        if not copies:
+            raise RuntimeError("No play database with plays and step lists was found in the game files.")
+        master = max(copies, key=lambda c: c["tables"]["PLYS"])
+        tabs = {name: read_csv(os.path.join(cache, f"{name.lower()}_{master['base']}.csv")) for name in
+                ("SETL", "SETP", "PBPL", "PLYS", "PSLO", "PSLD", "ARTO", "ARTD", "PLPD", "PLRD", "PLCM", "SETG", "SGFF", "PBAI")}
+        forms = {}                       # the formation names are in the subsets (a few each), not in the master
+        for c in scan["copies"]:
+            if c["tables"].get("FORM"):
+                for r in read_csv(os.path.join(cache, f"form_{c['base']}.csv")):
+                    forms.setdefault(r["FORM"], r)
+        tabs["FORM"] = list(forms.values())
+        return PlayLibrary(tabs)
+
+    def on_open_play_designer(self):
+        archives = self._personnel_archives()
+        if not archives:
+            return
+        boot = archives[0]
+
+        def work():
+            if not self._playbook_names_cached():
+                self._extract_playbook_names(boot)       # playbook names for the filter
+            return self.load_play_library(archives)
+
+        def done(lib):
+            self.ui_prefs["boot_ast_path"] = boot
+            save_ui_prefs(self.ui_prefs)
+            PlayDesignerDialog(self, lib)
+
+        self.run_in_thread_with_busy("Reading the game's plays...", work, done, error_title="Play designer")
+
+    def play_pair_hint(self, psal):
+        """The art a profile's custom plays draw this step list with, for step lists no stock play uses (set by profile_custom_books)."""
+        return getattr(self, "_play_pair_hints", {}).get(psal)
+
+    def _export_tables(self, db_path, tables):
+        """{TABLE: (headers, rows)} of a save, read with the bridge."""
+        tmp = tempfile.mkdtemp(prefix="hc09_tables_")
+        try:
+            self.model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", ",".join(tables)])
+            out = {}
+            for t in tables:
+                path = os.path.join(tmp, t.lower() + ".csv")
+                with open(path, newline="", encoding="utf-8-sig") as f:
+                    rd = csv.DictReader(f)
+                    out[t] = (list(rd.fieldnames or []), list(rd))
+            return out
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def profile_custom_books(self, profile_path):
+        """{playbook number (1-10): name} of the offensive custom playbooks in a profile save; also remembers which art the profile's plays draw each step list with."""
+        if not profile_path or not os.path.isfile(profile_path):
+            raise RuntimeError("Pick the profile save (the USR-DATA in the BLUS30128-PROFILE-... folder).")
+        t = self._export_tables(profile_path, ["PLAB", "PLYS"])
+        self._play_pair_hints = {}
+        for r in t["PLYS"][1]:
+            self._play_pair_hints.setdefault(int(r["PSAL"]), int(r["ARTL"]))
+        return {int(r["PBGI"]): (r.get("BNAM") or "").strip() for r in t["PLAB"][1] if (r.get("BOFF") or "").strip() == "1" and 1 <= int(r["PBGI"]) <= 10}
+
+    def _append_and_import(self, db_path, new_rows, tables_headers, check_capacity=True):
+        """Append rows ({table: [row dicts]}) to the tables of a save file with the bridge's append import; raises unless every table was written."""
+        tmp = tempfile.mkdtemp(prefix="hc09_append_")
+        try:
+            names = [t for t, rows in new_rows.items() if rows]
+            for t in names:
+                headers, old = tables_headers[t]
+                with open(os.path.join(tmp, t.lower() + ".csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f, lineterminator="\r\n")
+                    w.writerow(headers)
+                    for r in old:
+                        w.writerow([r.get(h, "") for h in headers])
+                    for r in new_rows[t]:
+                        missing = [h for h in headers if h not in r]
+                        if missing:
+                            raise RuntimeError(f"A new {t} row lacks the columns {missing}.")
+                        w.writerow([r[h] for h in headers])
+            res = self.model.run_bridge(["import", "--db", db_path, "--in", tmp, "--tables", ",".join(names), "--allow-append", ",".join(names)])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
+        if bad:
+            raise RuntimeError("The bridge did not write every table: " + "; ".join(f"{r.get('table')}: {r.get('status')} {r.get('warnings') or ''}" for r in bad)[:400])
+        return res
+
+    def make_custom_play_files(self, lib, base_plyl, name, overrides, profile_path, career_path, bokl, out_dir):
+        """Make a custom play from a stock play in COPIES of a profile save and a career save (see build_custom_play and career_link_rows); returns {"message", ...}.
+        The originals are only read."""
+        if not profile_path or not os.path.isfile(profile_path):
+            raise RuntimeError("Pick the profile save.")
+        if not career_path or not os.path.isfile(career_path):
+            raise RuntimeError("Pick the career save.")
+        if not out_dir:
+            raise RuntimeError("Pick an output folder.")
+        out_profile, out_career = os.path.join(out_dir, "profile", "USR-DATA"), os.path.join(out_dir, "career", "USR-DATA")
+        if any(os.path.abspath(p) in (os.path.abspath(profile_path), os.path.abspath(career_path)) for p in (out_profile, out_career)):
+            raise RuntimeError("The output folder would overwrite your own saves; pick another one.")
+        os.makedirs(os.path.dirname(out_profile), exist_ok=True)
+        os.makedirs(os.path.dirname(out_career), exist_ok=True)
+        shutil.copy2(profile_path, out_profile)
+        shutil.copy2(career_path, out_career)
+        ptables = ["PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM", "PGPL", "PGSS", "PGSL", "PGFM"]
+        prof = self._export_tables(out_profile, ptables)
+        new, summary = build_custom_play(lib, base_plyl, name, overrides, {t: prof[t][1] for t in ptables})
+        links = career_link_rows({"PGFM": prof["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
+        self._append_and_import(out_profile, {**new, **links}, prof)
+        car = self._export_tables(out_career, ["PGPL", "PGSS", "PGSL", "PGFM"])
+        links_c = career_link_rows({"PGFM": car["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
+        self._append_and_import(out_career, links_c, car)
+        for p in (out_profile, out_career):
+            ok = self.model.run_bridge(["verify-db", "--db", p])
+            if not ok.get("ok"):
+                raise RuntimeError(f"The structure check of {p} failed: {ok.get('issues')}")
+        summary.update({"profile": out_profile, "career": out_career})
+        summary["message"] = (f"Made the custom play \"{name}\" (from {summary['from']}, set {summary['setl']}, play {summary['plyl']}) in playbook {bokl}.\n\n"
+                              f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, keep backups of a TEST profile and career, copy these two "
+                              "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
+        with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
+            f.write(summary["message"] + "\n")
+        return summary
 
     # ---- Set personnel (the positions in each set, edited in the game's own files; see PersonnelData)
     def _personnel_backup_dir(self):
