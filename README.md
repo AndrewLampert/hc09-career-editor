@@ -114,6 +114,13 @@ you always have the previous version to fall back to.
 
 ## Setup
 
+**Windows, the easy way:** double-click **`Start HC09 Editor.bat`**. It checks that Python 3.9+ (with Tk) and
+Node.js 18+ are installed (and tells you where to get them if not), runs `npm install` for the bridge the first
+time, and opens the editor without a console window. `"Start HC09 Editor.bat" --check` only reports what it found.
+On Linux / macOS use `./start-hc09-editor.sh` (same checks, `--check` too).
+
+By hand:
+
 ```bash
 cd hc09-bridge
 npm install
@@ -123,8 +130,13 @@ python guiHC09.py
 
 ## Usage
 
-1. Click **Load Save File** and pick your career's `USR-DATA` file (in RPCS3, that's
-   under `dev_hdd0/home/00000001/savedata/<CAREER-NAME>/USR-DATA`).
+1. Click **Saves...** to see the career saves the editor found (in RPCS3's `savedata` folders: the ones your
+   recent saves live in, any folder you add with *Look in another folder...*, the usual places, or *Search this
+   computer*), newest first, and open one with a double-click. Or click **Load Save File** and pick your career's
+   `USR-DATA` file (in RPCS3, that's under `dev_hdd0/home/00000001/savedata/<CAREER-NAME>/USR-DATA`; the dialog starts
+   there). **Options... > Reopen my last save when the editor starts** loads the most recent one on its own. The
+   game's files (`qkl_boot.ast`, `qkl_fe2ig.ast`) are found the same way, through RPCS3's own `config/games.yml`, so
+   the editor only asks you to locate them if that fails.
    The first time you load a save it asks which team is yours and remembers the answer;
    switch teams any time from the list on the left.
 2. Edit players, stats, contracts, trades, picks, staff, playbooks, or the salary cap.
@@ -132,6 +144,19 @@ python guiHC09.py
    after backing up the previous version to `USR-DATA.bak`.
 
 Try changes on a copy of your save first. **Reload from File** discards unsaved edits.
+
+## Updates
+
+A few seconds after it starts, the editor asks GitHub (read-only, one request, at most once an hour,
+silent if you are offline) whether your copy is behind the `main` branch, and if so shows a banner
+above the tabs: **What's new...** lists what changed, **Skip this version** hides it until there is
+something newer, **Dismiss** hides it for now. If your copy is a git clone on `main` with no changes
+of your own, the *What's new* window also offers **Update now** (a `git pull --ff-only`, then a
+restart); otherwise it tells you how to update (`git pull`, or download the zip again; run
+`npm install` in `hc09-bridge` if `package.json` changed). A zip download is recognised by comparing
+its files with the ones on GitHub, a clone by the commit it is on, so nobody has to bump a version
+number. **Options... > Check for a newer version when the editor starts** turns the check off, and
+**Check for updates now** asks immediately. The check is in `hc09_update.py`.
 
 ## Format notes / known limitations
 

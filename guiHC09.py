@@ -30,10 +30,13 @@ from collections import Counter, defaultdict
 import json
 import random
 import shutil
+import queue
+import sys
 import tempfile
 import threading
 import time
 import subprocess
+import webbrowser
 import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
@@ -41,6 +44,16 @@ try:
     from hc09_plays import (PlayLibrary, build_custom_play, career_link_rows, decode_art, step_text, STEP_HINTS, read_csv)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
+
+try:
+    import hc09_detect          # finds RPCS3's saves and the game's files (next to this file); the editor still runs without it
+except ImportError:
+    hc09_detect = None
+
+try:
+    import hc09_update          # the update check (next to this file); the editor still runs without it
+except ImportError:
+    hc09_update = None
 
 try:
     from PIL import Image, ImageTk
@@ -70,8 +83,12 @@ def load_recent_files():
         pass
     return []
 
+def _same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
 def save_recent_file(path):
-    recents = [p for p in load_recent_files() if p != path]
+    path = os.path.normpath(path)      # C:/x/USR-DATA and C:\x\USR-DATA are one save
+    recents = [p for p in load_recent_files() if not _same_path(p, path)]
     recents.insert(0, path)
     recents = recents[:RECENT_FILES_MAX]
     try:
@@ -82,7 +99,7 @@ def save_recent_file(path):
     return recents
 
 def remove_recent_file(path):
-    recents = [p for p in load_recent_files() if p != path]
+    recents = [p for p in load_recent_files() if not _same_path(p, path)]
     try:
         with open(RECENT_FILES_PATH, "w", encoding="utf-8") as f:
             json.dump(recents, f)
@@ -5189,6 +5206,142 @@ class PersonnelBulkDialog(tk.Toplevel):
             self.destroy()
 
 
+class SavesDialog(tk.Toplevel):
+    """Saves...: every career save found in RPCS3's savedata folders (newest first), open with a click, plus the recent list
+    with a remove button per entry and the "reopen my last save" setting. Look in another folder... adds a folder to look in;
+    Search this computer looks a few levels down in the usual folders for an RPCS3 install."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Saves")
+        self.transient(app)
+        self.geometry("760x640")
+        self.minsize(640, 460)
+        self.app = app
+        self.saves = []
+
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=12, pady=(8, 12))
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        self.reopen_var = tk.BooleanVar(value=app.ui_prefs.get("reopen_last", False))
+        ttk.Checkbutton(self, text="Reopen my last save when the editor starts", variable=self.reopen_var,
+                        command=self._reopen_toggled).pack(side="bottom", anchor="w", padx=12)
+        self.recent_frame = ttk.Frame(self)
+        self.recent_frame.pack(side="bottom", fill="x", padx=12)
+        ttk.Label(self, text="Recent saves (X removes an entry from the Recent list)", padding=(12, 0, 12, 2)).pack(side="bottom", anchor="w")
+        ttk.Separator(self, orient="horizontal").pack(side="bottom", fill="x", padx=12, pady=(2, 6))
+
+        ttk.Label(self, text="Career saves found on this computer", font=("", 11, "bold"), padding=(12, 12, 12, 2)).pack(anchor="w")
+        self.lbl_note = ttk.Label(self, foreground="gray", wraplength=720, justify="left", padding=(12, 0, 12, 6))
+        self.lbl_note.pack(anchor="w")
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, padx=12)
+        cols = ("name", "played", "size", "where")
+        self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse", height=8)
+        for c, (text, width, anchor) in zip(cols, [("Save", 220, "w"), ("Last saved", 150, "w"), ("Size", 70, "e"), ("Folder", 260, "w")]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor=anchor, stretch=(c == "where"))
+        ys = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=ys.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        ys.pack(side="right", fill="y")
+        self.tree.bind("<Double-1>", lambda e: self._open())
+        row = ttk.Frame(self)
+        row.pack(fill="x", padx=12, pady=(6, 8))
+        self.btn_open = ttk.Button(row, text="Open", style="Accent.TButton", command=self._open)
+        self.btn_open.pack(side="left")
+        ttk.Button(row, text="Show folder", command=self._show_folder).pack(side="left", padx=(8, 0))
+        ttk.Button(row, text="Look in another folder...", command=self._add_folder).pack(side="left", padx=(8, 0))
+        ttk.Button(row, text="Search this computer", command=lambda: self._refresh(search=True)).pack(side="left", padx=(8, 0))
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._refresh()
+        self._rebuild_recent()
+
+    def _refresh(self, search=False):
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            self.saves = self.app.detected_saves(search=search)
+        finally:
+            self.config(cursor="")
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        for i, sv in enumerate(self.saves):
+            self.tree.insert("", tk.END, iid=str(i), values=(
+                sv["name"], time.strftime("%Y-%m-%d %H:%M", time.localtime(sv["mtime"])), f"{sv['size'] / 1048576:.1f} MB", sv["root"]))
+        if self.saves:
+            self.tree.selection_set("0")
+            self.lbl_note.configure(text="Newest first. Double-click a save, or select it and press Open. The editor looks in the folders your "
+                                         "recent saves live in, the ones you add, and the usual RPCS3 places.")
+        else:
+            self.lbl_note.configure(text="No career saves found yet. Use Look in another folder... and pick RPCS3's folder (the one that holds dev_hdd0) "
+                                         "or its savedata folder, or Search this computer.")
+        self.btn_open.configure(state="normal" if self.saves else "disabled")
+
+    def _selected(self):
+        sel = self.tree.selection()
+        return self.saves[int(sel[0])] if sel else None
+
+    def _open(self):
+        sv = self._selected()
+        if sv and self.app._open_save_path(sv["path"]):
+            self.destroy()
+
+    def _show_folder(self):
+        sv = self._selected()
+        if not sv:
+            return
+        folder = os.path.dirname(sv["path"])
+        try:
+            if os.name == "nt":
+                os.startfile(folder)
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", folder])
+        except OSError as e:
+            messagebox.showerror("Show folder", str(e))
+
+    def _add_folder(self):
+        folder = filedialog.askdirectory(title="Pick RPCS3's folder (the one that holds dev_hdd0) or a savedata folder", parent=self)
+        if not folder:
+            return
+        extra = list(self.app.ui_prefs.get("extra_rpcs3_dirs", []))
+        if folder not in extra:
+            extra.append(folder)
+        self.app.ui_prefs["extra_rpcs3_dirs"] = extra
+        save_ui_prefs(self.app.ui_prefs)
+        self._refresh()
+
+    def _rebuild_recent(self):
+        for child in self.recent_frame.winfo_children():
+            child.destroy()
+        recents = load_recent_files()
+        if not recents:
+            ttk.Label(self.recent_frame, text="No recent saves.", foreground="gray").pack(anchor="w", pady=2)
+            return
+        for path in recents:
+            row = ttk.Frame(self.recent_frame)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=recent_file_display(path)).pack(side="left")
+            ttk.Button(row, text="Open", width=6, command=lambda pth=path: self._open_recent(pth)).pack(side="right", padx=(4, 0))
+            ttk.Button(row, text="X", width=3, command=lambda pth=path: self._remove_recent(pth)).pack(side="right")
+
+    def _open_recent(self, path):
+        if self.app._open_save_path(path):
+            self.destroy()
+
+    def _remove_recent(self, path):
+        self.app._refresh_recent_files_ui(remove_recent_file(path))
+        self._rebuild_recent()
+
+    def _reopen_toggled(self):
+        self.app.ui_prefs["reopen_last"] = bool(self.reopen_var.get())
+        save_ui_prefs(self.app.ui_prefs)
+
+
 PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 24: ("#e0c040", 12, 7)}   # step code of the slot -> (colour, half width, half height)
 
 
@@ -6790,7 +6943,11 @@ class App(tk.Tk):
                 self.ui_prefs["game_ast_path"] = candidate
                 save_ui_prefs(self.ui_prefs)
                 return candidate
-        return ""
+        found = self._detected_game_file("qkl_fe2ig.ast")
+        if found:
+            self.ui_prefs["game_ast_path"] = found
+            save_ui_prefs(self.ui_prefs)
+        return found
 
     def on_locate_game_files(self):
         path = filedialog.askopenfilename(
@@ -7140,6 +7297,15 @@ class App(tk.Tk):
             chk_dark.state(["disabled"])
         self._options_dark_chk = chk_dark
 
+        ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=(10, 8))
+        self.reopen_last_var = tk.BooleanVar(value=self.ui_prefs.get("reopen_last", False))
+        ttk.Checkbutton(inner, text="Reopen my last save when the editor starts", variable=self.reopen_last_var,
+                        command=self.on_toggle_reopen_last).pack(anchor="w")
+        self.check_updates_var = tk.BooleanVar(value=self.ui_prefs.get("check_updates", True))
+        ttk.Checkbutton(inner, text="Check for a newer version when the editor starts", variable=self.check_updates_var,
+                        command=self.on_toggle_check_updates).pack(anchor="w")
+        ttk.Button(inner, text="Check for updates now", command=lambda: self.start_update_check(force=True)).pack(anchor="w", pady=(6, 0))
+
         ttk.Button(inner, text="Close", command=dlg.destroy).pack(anchor="e", pady=(14, 0))
         self._options_dlg = dlg
 
@@ -7150,6 +7316,157 @@ class App(tk.Tk):
         x = self._options_btn.winfo_rootx() - dlg.winfo_reqwidth() + self._options_btn.winfo_width()
         y = self._options_btn.winfo_rooty() + self._options_btn.winfo_height() + 4
         dlg.geometry(f"+{x}+{y}")
+
+    # ---------- Update notice (see hc09_update.py) ----------
+    def on_toggle_check_updates(self):
+        self.ui_prefs["check_updates"] = bool(self.check_updates_var.get())
+        save_ui_prefs(self.ui_prefs)
+
+    def start_update_check(self, force=False, fetch=None, root=None):
+        """Ask GitHub, off the main thread, whether this copy is behind the main branch, and show a banner above the tabs if it is.
+        Started from the program's entry point (not from __init__, so tests and scripts never touch the network). Checks at most once
+        an hour (the answer is remembered in between); force asks now and always answers."""
+        if hc09_update is None:
+            return
+        if not force and not self.ui_prefs.get("check_updates", True):
+            return
+        if not force and time.time() - (self.ui_prefs.get("update_checked_at") or 0) < hc09_update.CHECK_EVERY:
+            info = self.ui_prefs.get("update_info")
+            if info:
+                self._show_update_banner(info)
+            return
+        if getattr(self, "_update_thread", None) is not None and self._update_thread.is_alive():
+            return
+        self._update_force = force
+        self._update_queue = queue.Queue()
+        root = root or os.path.dirname(os.path.abspath(__file__))
+        fetch = fetch or hc09_update.default_fetch
+        q = self._update_queue
+
+        def work():
+            q.put(hc09_update.check_for_update(root, fetch))
+
+        self._update_thread = threading.Thread(target=work, daemon=True)
+        self._update_thread.start()
+        self.after(150, self._poll_update_check)
+
+    def _poll_update_check(self):
+        try:
+            result = self._update_queue.get_nowait()
+        except queue.Empty:
+            try:
+                self.after(150, self._poll_update_check)
+            except tk.TclError:
+                pass
+            return
+        self._finish_update_check(result)
+
+    def _finish_update_check(self, result):
+        force = getattr(self, "_update_force", False)
+        status = result.get("status")
+        if status == "unknown":
+            if force:
+                messagebox.showinfo("Check for updates", "Couldn't reach GitHub to check (offline, or GitHub is busy). Try again later.")
+            return                        # no timestamp: the next start tries again
+        self.ui_prefs["update_checked_at"] = time.time()
+        self.ui_prefs["update_info"] = result if status == "update" else None
+        save_ui_prefs(self.ui_prefs)
+        if status == "update":
+            if force:
+                self.ui_prefs.pop("update_skip", None)
+            self._show_update_banner(result)
+        else:
+            self._hide_update_banner()
+            if force:
+                messagebox.showinfo("Check for updates", "You have the latest version.")
+
+    def _show_update_banner(self, info):
+        if self.ui_prefs.get("update_skip") == info.get("latest") and info.get("latest"):
+            return
+        banner = self.update_banner
+        for w in banner.winfo_children():
+            w.destroy()
+        detail = (f"{info['behind']} new change{'s' if info['behind'] != 1 else ''} since your copy" if info.get("behind")
+                  else "your files differ from the latest version on GitHub")
+        ttk.Label(banner, text="A newer version of the editor is available", font=("", 10, "bold")).pack(side="left", padx=(0, 8))
+        ttk.Label(banner, text=f"({detail})", foreground="gray").pack(side="left")
+        ttk.Button(banner, text="Dismiss", command=self._hide_update_banner).pack(side="right", padx=(6, 0))
+        ttk.Button(banner, text="Skip this version", command=lambda: self.on_update_skip(info)).pack(side="right", padx=(6, 0))
+        ttk.Button(banner, text="What's new...", style="Accent.TButton", command=lambda: self.on_update_whats_new(info)).pack(side="right")
+        if not banner.winfo_ismapped():
+            banner.pack(fill="x", padx=12, pady=(0, 8), before=self.notebook)
+
+    def _hide_update_banner(self):
+        self.update_banner.pack_forget()
+
+    def on_update_skip(self, info):
+        self.ui_prefs["update_skip"] = info.get("latest", "")
+        save_ui_prefs(self.ui_prefs)
+        self._hide_update_banner()
+
+    def on_update_whats_new(self, info):
+        """What changed and how to update; Update now when this copy is a git clone that can safely pull."""
+        root = os.path.dirname(os.path.abspath(__file__))
+        ok, why = hc09_update.can_update_in_place(root) if hc09_update else (False, "")
+        dlg = tk.Toplevel(self)
+        dlg.title("A newer version is available")
+        dlg.transient(self)
+        dlg.geometry("620x420")
+        p = getattr(self, "_ui_palette", None)
+        if p:
+            dlg.configure(background=p["bg"])
+        ttk.Label(dlg, text="What changed on GitHub since your copy", font=("", 11, "bold"), padding=(14, 12, 14, 4)).pack(anchor="w")
+        lines = info.get("changes") or []
+        text = "\n".join(f"- {c}" for c in lines) or "(no description available)"
+        if info.get("behind") and info["behind"] > len(lines):
+            text += f"\n...and others ({info['behind']} changes in all)."
+        if info.get("files"):
+            text += "\n\nFiles that differ: " + ", ".join(info["files"])
+        ttk.Label(dlg, text=text, wraplength=580, justify="left", padding=(14, 0, 14, 8)).pack(anchor="w")
+        how = ("Update now runs `git pull` in this folder, then you restart the editor." if ok else
+               ("To update a git clone, run `git pull` in the editor's folder" + (f" ({why})" if why else "") + ". "
+                if info.get("kind") == "git" else
+                "Download the latest zip from GitHub and replace the files here (your settings files starting with .hc09_ stay). ")
+               + "If hc09-bridge/package.json changed, also run `npm install` in the hc09-bridge folder.")
+        ttk.Label(dlg, text=how, wraplength=580, justify="left", foreground="gray", padding=(14, 0, 14, 8)).pack(anchor="w")
+        btn = ttk.Frame(dlg)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=dlg.destroy).pack(side="right")
+        ttk.Button(btn, text="Open the GitHub page", command=lambda: webbrowser.open(hc09_update.PAGE)).pack(side="right", padx=(0, 8))
+        if ok:
+            ttk.Button(btn, text="Update now", style="Accent.TButton", command=lambda: (dlg.destroy(), self.on_update_now(info))).pack(side="right", padx=(0, 8))
+
+    def on_update_now(self, info):
+        root = os.path.dirname(os.path.abspath(__file__))
+        ok, why = hc09_update.can_update_in_place(root)
+        if not ok:
+            messagebox.showinfo("Update", f"Can't update from here: {why}.")
+            return
+        if not messagebox.askyesno("Update now", f"This runs `git pull --ff-only` in {root} to bring in the changes, then you restart the editor. Continue?"):
+            return
+
+        def work():
+            return hc09_update.pull_update(root)
+
+        def done(res):
+            if not res["ok"]:
+                messagebox.showerror("Update", "The update did not work:\n\n" + (res["output"] or "git pull failed") +
+                                     "\n\nNothing was changed that git could not undo.")
+                return
+            self.ui_prefs["update_info"] = None
+            save_ui_prefs(self.ui_prefs)
+            self._hide_update_banner()
+            note = "\n\nThe bridge's dependencies changed: run `npm install` in the hc09-bridge folder before restarting." if res["npm"] else ""
+            if self.dirty:
+                messagebox.showinfo("Updated", "Updated. You have unsaved changes, so restart the editor yourself after saving." + note)
+            elif messagebox.askyesno("Updated", "Updated. Restart the editor now?" + note):
+                self._restart_editor(root)
+
+        self.run_in_thread_with_busy("Updating the editor...", work, done, error_title="Update")
+
+    def _restart_editor(self, root):
+        subprocess.Popen([sys.executable] + sys.argv, cwd=root)
+        self.destroy()
 
     # ---------- UI layout ----------
     def _build_ui(self):
@@ -7170,7 +7487,7 @@ class App(tk.Tk):
         # ttk.Combobox can't show a per-row "x" inside its own dropdown - this
         # opens a small separate list that can, so entries can be individually
         # removed instead of only ever appending/aging out at RECENT_FILES_MAX.
-        ttk.Button(top, text="Manage...", command=self.on_manage_recent_files).pack(side="left", padx=(4, 0))
+        ttk.Button(top, text="Saves...", command=self.on_manage_recent_files).pack(side="left", padx=(4, 0))
         self._recent_display_to_path = {}
         self._refresh_recent_files_ui(load_recent_files())
 
@@ -7195,9 +7512,10 @@ class App(tk.Tk):
         self._options_btn.pack(side="right", padx=(8, 0))
         ttk.Separator(top, orient="vertical").pack(side="right", fill="y", padx=12)
 
-        self.lbl_status = ttk.Label(top, text="Load play.csv to begin.", style="Status.TLabel", width=40, anchor="w")
+        self.lbl_status = ttk.Label(top, text="Load a save to begin (Saves... lists the ones found).", style="Status.TLabel", width=40, anchor="w")
         self.lbl_status.pack(side="left", fill="x", expand=True, padx=14)
 
+        self.update_banner = ttk.Frame(self)      # shown (packed above the tabs) only when a newer version exists
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
@@ -8450,9 +8768,11 @@ class App(tk.Tk):
             if not self._confirm_discard_if_dirty("load a different save"):
                 return
 
+            start = self._save_dialog_dir()
             db_path = filedialog.askopenfilename(
                 title="Select your career save file (USR-DATA)",
-                filetypes=[("All files", "*.*")]
+                filetypes=[("All files", "*.*")],
+                **({"initialdir": start} if start else {})
             )
             if not db_path:
                 return
@@ -8462,6 +8782,15 @@ class App(tk.Tk):
         except Exception as e:
             self.clear_busy()
             messagebox.showerror("Load Error", str(e))
+
+    def _save_dialog_dir(self):
+        """Where the file dialog should start: the savedata folder of the last save, else the first one found, else the default."""
+        for path in load_recent_files():
+            folder = os.path.dirname(os.path.dirname(path))
+            if os.path.isdir(folder):
+                return folder
+        saves = self.detected_saves()
+        return saves[0]["root"] if saves else ""
 
     def on_reload(self):
         try:
@@ -8484,13 +8813,59 @@ class App(tk.Tk):
             messagebox.showerror("File not found", f"This save no longer exists:\n{path}")
             self._refresh_recent_files_ui(load_recent_files())
             return
+        self._open_save_path(path)
+
+    def _open_save_path(self, path):
+        """Load a save by path (asks first if there are unsaved changes). True if the load was started."""
+        if not os.path.isfile(path):
+            messagebox.showerror("File not found", f"This save no longer exists:\n{path}")
+            self._refresh_recent_files_ui(load_recent_files())
+            return False
         try:
             if not self._confirm_discard_if_dirty("load a different save"):
-                return
+                return False
             self._load_db_path(path, error_title="Load Error")
+            return True
         except Exception as e:
             self.clear_busy()
             messagebox.showerror("Load Error", str(e))
+            return False
+
+    # ---------- Finding saves and game files without asking (see hc09_detect.py)
+    def _detect_rpcs3_dirs(self, search=False):
+        if hc09_detect is None:
+            return []
+        home = os.path.expanduser("~")
+        roots = [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")] if search else []
+        return hc09_detect.candidate_rpcs3_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
+
+    def detected_saves(self, search=False):
+        """The career saves found in RPCS3's savedata folders (those of the recent saves, any the user added, the usual places and, if asked,
+        a bounded search of the usual drives' folders), newest first."""
+        if hc09_detect is None:
+            return []
+        return hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))
+
+    def _detected_game_file(self, name):
+        """qkl_boot.ast or qkl_fe2ig.ast found through RPCS3's own configuration (config/games.yml), or ""."""
+        if hc09_detect is None:
+            return ""
+        found = hc09_detect.find_game_files(self._detect_rpcs3_dirs())
+        return found.get(name, "")
+
+    def reopen_last_save(self):
+        """At start, with Options > "Reopen my last save when the editor starts" on: load the most recent save if it is still there.
+        Called from the entry point only (never from __init__)."""
+        if not self.ui_prefs.get("reopen_last", False) or self.model.db_path:
+            return
+        for path in load_recent_files():
+            if os.path.isfile(path):
+                self._load_db_path(path, error_title="Load Error")
+                return
+
+    def on_toggle_reopen_last(self):
+        self.ui_prefs["reopen_last"] = bool(self.reopen_last_var.get())
+        save_ui_prefs(self.ui_prefs)
 
     def _refresh_recent_files_ui(self, recents):
         self._recent_display_to_path = {recent_file_display(p): p for p in recents}
@@ -8500,40 +8875,11 @@ class App(tk.Tk):
             self.recent_files_var.set(values[0])
 
     def on_manage_recent_files(self):
-        """Small standalone list (not the main Combobox - ttk.Combobox can't
-        show a per-row button inside its own dropdown) where each recent file
-        has its own X button to remove it individually."""
-        dlg = tk.Toplevel(self)
-        dlg.title("Manage Recent Files")
-        dlg.geometry("420x260")
-        dlg.minsize(360, 200)
-
-        ttk.Label(dlg, text="Click X to remove an entry from the recent files list.").pack(
-            anchor="w", padx=10, pady=(10, 6)
-        )
-
-        rows_frame = ttk.Frame(dlg)
-        rows_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-
-        def rebuild():
-            for child in rows_frame.winfo_children():
-                child.destroy()
-            recents = load_recent_files()
-            if not recents:
-                ttk.Label(rows_frame, text="No recent files.", foreground="gray").pack(anchor="w", pady=6)
-                return
-            for path in recents:
-                row = ttk.Frame(rows_frame)
-                row.pack(fill="x", pady=2)
-                ttk.Label(row, text=recent_file_display(path)).pack(side="left")
-                ttk.Button(row, text="X", width=3, command=lambda p=path: remove_one(p)).pack(side="right")
-
-        def remove_one(path):
-            self._refresh_recent_files_ui(remove_recent_file(path))
-            rebuild()
-
-        rebuild()
-        ttk.Button(dlg, text="Close", command=dlg.destroy).pack(pady=(0, 10))
+        """Saves...: the career saves found on this computer, open with one click; the recent list with a remove button per entry."""
+        if getattr(self, "_saves_dlg", None) is not None and self._saves_dlg.winfo_exists():
+            self._saves_dlg.lift()
+            return
+        self._saves_dlg = SavesDialog(self)
 
     def on_save(self):
         if not self.model.players:
@@ -9670,6 +10016,11 @@ class App(tk.Tk):
             sibling = os.path.join(os.path.dirname(fe2ig), BOOT_AST_FILENAME)
             if os.path.isfile(sibling):
                 return sibling
+        found = self._detected_game_file(BOOT_AST_FILENAME)
+        if found:
+            self.ui_prefs["boot_ast_path"] = found
+            save_ui_prefs(self.ui_prefs)
+            return found
         messagebox.showinfo(
             f"{feature} needs game data",
             f"This feature reads the game's {what} straight from your own game files.\n\n"
@@ -11081,4 +11432,6 @@ del _name
 
 if __name__ == "__main__":
     app = App()
+    app.after(400, app.reopen_last_save)          # after the window is up; never from __init__
+    app.after(2500, app.start_update_check)       # after the window is up; never from __init__, so tests make no network calls
     app.mainloop()
