@@ -30,12 +30,20 @@ from collections import Counter, defaultdict
 import json
 import random
 import shutil
+import queue
+import sys
 import tempfile
 import threading
 import time
 import subprocess
+import webbrowser
 import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
+
+try:
+    import hc09_update          # the update check (next to this file); the editor still runs without it
+except ImportError:
+    hc09_update = None
 
 try:
     from PIL import Image, ImageTk
@@ -6636,6 +6644,12 @@ class App(tk.Tk):
             chk_dark.state(["disabled"])
         self._options_dark_chk = chk_dark
 
+        ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=(10, 8))
+        self.check_updates_var = tk.BooleanVar(value=self.ui_prefs.get("check_updates", True))
+        ttk.Checkbutton(inner, text="Check for a newer version when the editor starts", variable=self.check_updates_var,
+                        command=self.on_toggle_check_updates).pack(anchor="w")
+        ttk.Button(inner, text="Check for updates now", command=lambda: self.start_update_check(force=True)).pack(anchor="w", pady=(6, 0))
+
         ttk.Button(inner, text="Close", command=dlg.destroy).pack(anchor="e", pady=(14, 0))
         self._options_dlg = dlg
 
@@ -6646,6 +6660,157 @@ class App(tk.Tk):
         x = self._options_btn.winfo_rootx() - dlg.winfo_reqwidth() + self._options_btn.winfo_width()
         y = self._options_btn.winfo_rooty() + self._options_btn.winfo_height() + 4
         dlg.geometry(f"+{x}+{y}")
+
+    # ---------- Update notice (see hc09_update.py) ----------
+    def on_toggle_check_updates(self):
+        self.ui_prefs["check_updates"] = bool(self.check_updates_var.get())
+        save_ui_prefs(self.ui_prefs)
+
+    def start_update_check(self, force=False, fetch=None, root=None):
+        """Ask GitHub, off the main thread, whether this copy is behind the main branch, and show a banner above the tabs if it is.
+        Started from the program's entry point (not from __init__, so tests and scripts never touch the network). Checks at most once
+        an hour (the answer is remembered in between); force asks now and always answers."""
+        if hc09_update is None:
+            return
+        if not force and not self.ui_prefs.get("check_updates", True):
+            return
+        if not force and time.time() - (self.ui_prefs.get("update_checked_at") or 0) < hc09_update.CHECK_EVERY:
+            info = self.ui_prefs.get("update_info")
+            if info:
+                self._show_update_banner(info)
+            return
+        if getattr(self, "_update_thread", None) is not None and self._update_thread.is_alive():
+            return
+        self._update_force = force
+        self._update_queue = queue.Queue()
+        root = root or os.path.dirname(os.path.abspath(__file__))
+        fetch = fetch or hc09_update.default_fetch
+        q = self._update_queue
+
+        def work():
+            q.put(hc09_update.check_for_update(root, fetch))
+
+        self._update_thread = threading.Thread(target=work, daemon=True)
+        self._update_thread.start()
+        self.after(150, self._poll_update_check)
+
+    def _poll_update_check(self):
+        try:
+            result = self._update_queue.get_nowait()
+        except queue.Empty:
+            try:
+                self.after(150, self._poll_update_check)
+            except tk.TclError:
+                pass
+            return
+        self._finish_update_check(result)
+
+    def _finish_update_check(self, result):
+        force = getattr(self, "_update_force", False)
+        status = result.get("status")
+        if status == "unknown":
+            if force:
+                messagebox.showinfo("Check for updates", "Couldn't reach GitHub to check (offline, or GitHub is busy). Try again later.")
+            return                        # no timestamp: the next start tries again
+        self.ui_prefs["update_checked_at"] = time.time()
+        self.ui_prefs["update_info"] = result if status == "update" else None
+        save_ui_prefs(self.ui_prefs)
+        if status == "update":
+            if force:
+                self.ui_prefs.pop("update_skip", None)
+            self._show_update_banner(result)
+        else:
+            self._hide_update_banner()
+            if force:
+                messagebox.showinfo("Check for updates", "You have the latest version.")
+
+    def _show_update_banner(self, info):
+        if self.ui_prefs.get("update_skip") == info.get("latest") and info.get("latest"):
+            return
+        banner = self.update_banner
+        for w in banner.winfo_children():
+            w.destroy()
+        detail = (f"{info['behind']} new change{'s' if info['behind'] != 1 else ''} since your copy" if info.get("behind")
+                  else "your files differ from the latest version on GitHub")
+        ttk.Label(banner, text="A newer version of the editor is available", font=("", 10, "bold")).pack(side="left", padx=(0, 8))
+        ttk.Label(banner, text=f"({detail})", foreground="gray").pack(side="left")
+        ttk.Button(banner, text="Dismiss", command=self._hide_update_banner).pack(side="right", padx=(6, 0))
+        ttk.Button(banner, text="Skip this version", command=lambda: self.on_update_skip(info)).pack(side="right", padx=(6, 0))
+        ttk.Button(banner, text="What's new...", style="Accent.TButton", command=lambda: self.on_update_whats_new(info)).pack(side="right")
+        if not banner.winfo_ismapped():
+            banner.pack(fill="x", padx=12, pady=(0, 8), before=self.notebook)
+
+    def _hide_update_banner(self):
+        self.update_banner.pack_forget()
+
+    def on_update_skip(self, info):
+        self.ui_prefs["update_skip"] = info.get("latest", "")
+        save_ui_prefs(self.ui_prefs)
+        self._hide_update_banner()
+
+    def on_update_whats_new(self, info):
+        """What changed and how to update; Update now when this copy is a git clone that can safely pull."""
+        root = os.path.dirname(os.path.abspath(__file__))
+        ok, why = hc09_update.can_update_in_place(root) if hc09_update else (False, "")
+        dlg = tk.Toplevel(self)
+        dlg.title("A newer version is available")
+        dlg.transient(self)
+        dlg.geometry("620x420")
+        p = getattr(self, "_ui_palette", None)
+        if p:
+            dlg.configure(background=p["bg"])
+        ttk.Label(dlg, text="What changed on GitHub since your copy", font=("", 11, "bold"), padding=(14, 12, 14, 4)).pack(anchor="w")
+        lines = info.get("changes") or []
+        text = "\n".join(f"- {c}" for c in lines) or "(no description available)"
+        if info.get("behind") and info["behind"] > len(lines):
+            text += f"\n...and others ({info['behind']} changes in all)."
+        if info.get("files"):
+            text += "\n\nFiles that differ: " + ", ".join(info["files"])
+        ttk.Label(dlg, text=text, wraplength=580, justify="left", padding=(14, 0, 14, 8)).pack(anchor="w")
+        how = ("Update now runs `git pull` in this folder, then you restart the editor." if ok else
+               ("To update a git clone, run `git pull` in the editor's folder" + (f" ({why})" if why else "") + ". "
+                if info.get("kind") == "git" else
+                "Download the latest zip from GitHub and replace the files here (your settings files starting with .hc09_ stay). ")
+               + "If hc09-bridge/package.json changed, also run `npm install` in the hc09-bridge folder.")
+        ttk.Label(dlg, text=how, wraplength=580, justify="left", foreground="gray", padding=(14, 0, 14, 8)).pack(anchor="w")
+        btn = ttk.Frame(dlg)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=dlg.destroy).pack(side="right")
+        ttk.Button(btn, text="Open the GitHub page", command=lambda: webbrowser.open(hc09_update.PAGE)).pack(side="right", padx=(0, 8))
+        if ok:
+            ttk.Button(btn, text="Update now", style="Accent.TButton", command=lambda: (dlg.destroy(), self.on_update_now(info))).pack(side="right", padx=(0, 8))
+
+    def on_update_now(self, info):
+        root = os.path.dirname(os.path.abspath(__file__))
+        ok, why = hc09_update.can_update_in_place(root)
+        if not ok:
+            messagebox.showinfo("Update", f"Can't update from here: {why}.")
+            return
+        if not messagebox.askyesno("Update now", f"This runs `git pull --ff-only` in {root} to bring in the changes, then you restart the editor. Continue?"):
+            return
+
+        def work():
+            return hc09_update.pull_update(root)
+
+        def done(res):
+            if not res["ok"]:
+                messagebox.showerror("Update", "The update did not work:\n\n" + (res["output"] or "git pull failed") +
+                                     "\n\nNothing was changed that git could not undo.")
+                return
+            self.ui_prefs["update_info"] = None
+            save_ui_prefs(self.ui_prefs)
+            self._hide_update_banner()
+            note = "\n\nThe bridge's dependencies changed: run `npm install` in the hc09-bridge folder before restarting." if res["npm"] else ""
+            if self.dirty:
+                messagebox.showinfo("Updated", "Updated. You have unsaved changes, so restart the editor yourself after saving." + note)
+            elif messagebox.askyesno("Updated", "Updated. Restart the editor now?" + note):
+                self._restart_editor(root)
+
+        self.run_in_thread_with_busy("Updating the editor...", work, done, error_title="Update")
+
+    def _restart_editor(self, root):
+        subprocess.Popen([sys.executable] + sys.argv, cwd=root)
+        self.destroy()
 
     # ---------- UI layout ----------
     def _build_ui(self):
@@ -6694,6 +6859,7 @@ class App(tk.Tk):
         self.lbl_status = ttk.Label(top, text="Load play.csv to begin.", style="Status.TLabel", width=40, anchor="w")
         self.lbl_status.pack(side="left", fill="x", expand=True, padx=14)
 
+        self.update_banner = ttk.Frame(self)      # shown (packed above the tabs) only when a newer version exists
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
@@ -10441,4 +10607,5 @@ del _name
 
 if __name__ == "__main__":
     app = App()
+    app.after(2500, app.start_update_check)       # after the window is up; never from __init__, so tests make no network calls
     app.mainloop()
