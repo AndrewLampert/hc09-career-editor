@@ -5359,7 +5359,7 @@ class PlayCanvas(tk.Canvas):
     PAD = 8
 
     def __init__(self, parent, art_dir=None, **kw):
-        super().__init__(parent, width=int(round(180 * self.SCALE)) + 2 * self.PAD, height=int(round(104 * self.SCALE)) + 2 * self.PAD, highlightthickness=0, background="#2a5230", **kw)
+        super().__init__(parent, width=int(round(180 * self.SCALE)) + 2 * self.PAD, height=int(round(104 * self.SCALE)) + 2 * self.PAD + 18, highlightthickness=0, background="#1c3a20", **kw)
         self.field_img, self.num_imgs = None, {}
         if art_dir:
             try:

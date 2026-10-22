@@ -359,7 +359,8 @@ class PlayTypes:
             tables = self._tables_synth(target, plyl, out, s["setl"])
         issues = self.validate(s["setl"], out, target)
         return {"family": target, "overrides": {poso: e for poso, e in out.items() if e != base.get(poso)}, "changes": changes, "plyt": plyt, "tables_from": sib,
-                "tables": tables, "source": (f"the play \"{lib.plays[sib]['name']}\" of the same set" if sib is not None else "the usual assignments of that kind of play"),
+                "tables": tables, "source": (f"the play \"{lib.plays[sib]['name']}\" of the same set" if sib is not None else
+                           "the usual assignments of that kind of play, from other formations (no stock play of that kind uses this set, so they may not suit this alignment: less certain)"),
                 "issues": issues}
 
     # ---- the comparison
