@@ -6609,6 +6609,8 @@ class SaveTargetFrame(ttk.Frame):
         self._error = ""
         self._read_path = None
         self._open = False
+        self._manual = False            # a playbook was picked by hand here: the team's playbook is then not followed
+        self._names = []
         self.lbl_where = ttk.Label(self, wraplength=wrap, justify="left", font=("", 10, "bold"))
         self.lbl_where.pack(anchor="w")
         self.btn_details = ttk.Button(self, text="Details...", command=self.toggle)
@@ -6627,7 +6629,7 @@ class SaveTargetFrame(ttk.Frame):
         ttk.Label(form, text="Add it to this custom playbook:").grid(row=3, column=0, sticky="w", pady=3)
         self.cmb_book = ttk.Combobox(form, state="readonly", width=49, textvariable=self.book_var)
         self.cmb_book.grid(row=3, column=1, sticky="we", padx=6)
-        self.cmb_book.bind("<<ComboboxSelected>>", lambda e: self._summary())
+        self.cmb_book.bind("<<ComboboxSelected>>", lambda e: self._picked())
         ttk.Button(form, text="Find", width=5, command=self.refresh).grid(row=3, column=2)
         form.columnconfigure(1, weight=1)
         self.extra = ttk.Frame(form)
@@ -6675,6 +6677,7 @@ class SaveTargetFrame(ttk.Frame):
             except Exception as e:
                 self._error = f"Could not read the profile's playbooks: {e}"
         names = [f"{b} - {n}" for b, n in sorted(self._books.items())]
+        self._names = names
         self.cmb_book.configure(values=names)
         if not self._error and not names:
             self._error = "Your profile has no custom offensive playbook to add the play to. Make one in the game first (Create a Playbook)."
@@ -6684,6 +6687,31 @@ class SaveTargetFrame(ttk.Frame):
         self._summary()
         if self._error or not self.sure:
             self.show(True)
+
+    def _picked(self):
+        self._manual = True
+        self._summary()
+
+    def recheck(self):
+        """The team's playbook may have been changed in the Playbooks tab while this window was open: unless a playbook was picked by hand here, choose again."""
+        if self._manual or self._error or not self._books:
+            return
+        pick = self.app.suggested_custom_book(self._books)
+        want = next((n for n in self._names if n.startswith(f"{pick} - ")), "")
+        if want and want != self.book_var.get():
+            self.book_var.set(want)
+        self._summary()
+
+    def team_line(self):
+        """A sentence about the chosen team and the chosen custom playbook ("" when the team's playbook is not known)."""
+        use = self.in_use()
+        nick = team_nickname(self.app.selected_team_id.get().strip())
+        who = f"Your team ({nick})" if nick else "Your team"
+        if use:
+            return f"{who} plays this playbook."
+        if use is False:
+            return f"{who} does not play this playbook yet, so the game will not offer the play until it does."
+        return ""
 
     def bokl(self):
         try:
@@ -6702,12 +6730,10 @@ class SaveTargetFrame(ttk.Frame):
         if self._error:
             self.lbl_where.configure(text=self._error, foreground="#e05050")
             return
-        use = self.in_use()
-        text = f"It goes in custom playbook {self.bokl()} ({self.playbook_name()})."
-        if use:
-            text += " Your team plays with it."
-        elif use is False:
-            text += " Your team does not play with it yet, so the game will not offer the play until it does: Playbooks tab, Team playbooks, Change... next to Offense."
+        text = f"It goes in custom playbook {self.bokl()} ({self.playbook_name()}). " + self.team_line()
+        if self.in_use() is False:
+            text += " (Playbooks tab, Team playbooks, Change... next to Offense.)"
+        text = text.rstrip()
         if not self.sure:
             text += " The editor found several profile saves: open Details and check that the profile is the one you play with."
         self.lbl_where.configure(text=text, foreground="")
@@ -6715,6 +6741,7 @@ class SaveTargetFrame(ttk.Frame):
     def problem(self):
         """What is missing (a sentence), or None when the play can be made."""
         self._reread()
+        self.recheck()
         if self._error:
             return self._error
         for label, path in (("career", self.career_var.get()), ("profile", self.profile_var.get())):
@@ -6819,7 +6846,8 @@ class CustomPlayDialog(tk.Toplevel):
         if why:
             messagebox.showerror("Add to my game", why, parent=self)
             return
-        if not messagebox.askyesno("Add to my game", f"Add \"{self.name_var.get().strip()}\" to custom playbook {t.bokl()} ({t.playbook_name()})?\n\nThis changes your profile save and your career save "
+        team = t.team_line()
+        if not messagebox.askyesno("Add to my game", f"Add \"{self.name_var.get().strip()}\" to custom playbook {t.bokl()} ({t.playbook_name()})?\n\n" + (team + "\n\n" if team else "") + "This changes your profile save and your career save "
                                    "(the two USR-DATA files). Your own two files are saved first in Documents\\hc09-test-backups, and Put my saves back undoes it.\n\n"
                                    f"Profile: {profile}\nCareer: {career}", parent=self):
             return
@@ -6884,7 +6912,9 @@ class TestPlaysDialog(tk.Toplevel):
         row.pack(fill="x", padx=8, pady=(2, 8))
         self.btn_add = ttk.Button(row, text="Add the seven test plays to my game", style="Accent.TButton", command=self._add_all)
         self.btn_add.pack(side="left")
-        self.lbl_status = ttk.Label(row, wraplength=760, justify="left", padding=(12, 0, 0, 0))
+        self.btn_add_one = ttk.Button(row, text="Add only T1 (the control)", command=lambda: self._add_all(True))
+        self.btn_add_one.pack(side="left", padx=(8, 0))
+        self.lbl_status = ttk.Label(row, wraplength=540, justify="left", padding=(12, 0, 0, 0))
         self.lbl_status.pack(side="left")
         bottom = ttk.Frame(self)
         bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 12))
@@ -6938,7 +6968,7 @@ class TestPlaysDialog(tk.Toplevel):
         t = self.by_id[sel[0]]
         self.current = t
         self.lbl_title.configure(text=f"{t['id']}: {t['name']}  -  {t['title']}")
-        self.lbl_text.configure(text=f"What was changed: {t['changed']}\n\nIn the game: open the offensive playbook, go to custom playbook {self.state.get('made', {}).get('playbook', '(the one the editor used)')}, then Created Plays, "
+        self.lbl_text.configure(text=f"What was changed: {t['changed']}\n\nIn the game: open the offensive playbook, go to custom playbook {self.state.get('made', {}).get('playbook') or self.target.bokl() or '(the one the editor used)'}, then Created Plays, "
                                      f"and call {t['name']} two or three times. Look at this: {t['look']}")
         self._loading = True
         for w in self.form.winfo_children():
@@ -6969,35 +6999,41 @@ class TestPlaysDialog(tk.Toplevel):
     def _show_status(self):
         made = self.state.get("made")
         if made:
-            self.lbl_status.configure(text=f"Added on {made.get('time', '?')} to custom playbook {made.get('playbook', '?')}. Now start the game.", foreground="#4caf50")
+            ids = made.get("ids") or []
+            which = "T1 only" if ids == ["T1"] else "The seven test plays"
+            self.lbl_status.configure(text=f"{which}: added on {made.get('time', '?')} to custom playbook {made.get('playbook', '?')}. Now start the game.", foreground="#4caf50")
         else:
-            self.lbl_status.configure(text="Close RPCS3, then press the button. The editor makes and adds all seven plays; you confirm once.", foreground="")
+            self.lbl_status.configure(text="Close RPCS3, then press the button. The editor makes and adds all seven plays; you confirm once. (If the game then will not load, Put my saves back and try T1 alone.)", foreground="")
 
     # ---- actions
-    def _add_all(self):
+    def _add_all(self, only_first=False):
         app, t = self.app, self.target
+        tests = self.tests[:1] if only_first else self.tests
+        what = "the control play T1 only" if only_first else "the seven test plays"
         why = t.problem() or app.install_blocker(t.career_var.get().strip())
         if why:
             messagebox.showerror("Test plays", why, parent=self)
             return
         profile, career, bokl = t.profile_var.get().strip(), t.career_var.get().strip(), t.bokl()
         try:
-            dups = PT.existing_names(app._export_tables(profile, ["PBPL"])["PBPL"][1], self.tests)
+            dups = PT.existing_names(app._export_tables(profile, ["PBPL"])["PBPL"][1], tests)
         except Exception as e:
             messagebox.showerror("Test plays", f"Could not read the profile: {e}", parent=self)
             return
         extra = ""
         if dups:
-            extra = ("\n\nYour profile already has plays with these names: " + ", ".join(dups) + ". Adding the seven again makes a second set with the same names, which is easy to mix up. "
+            extra = ("\n\nYour profile already has plays with these names: " + ", ".join(dups) + ". Adding them again makes a second set with the same names, which is easy to mix up. "
                      "Put my saves back first to start clean, or go on anyway.")
-        if not messagebox.askyesno("Test plays", f"Add the seven test plays to custom playbook {bokl} ({t.playbook_name()})?\n\nThis changes your profile save and your career save (the two USR-DATA files). "
-                                   "Your own two files are saved first in Documents\\hc09-test-backups, and Put my saves back undoes it. It takes about a minute.\n\n"
+        team = t.team_line()
+        if not messagebox.askyesno("Test plays", f"Add {what} to custom playbook {bokl} ({t.playbook_name()})?\n\n" + (team + "\n\n" if team else "") +
+                                   "This changes your profile save and your career save (the two USR-DATA files). Your own two files are saved first in Documents\\hc09-test-backups, "
+                                   f"and Put my saves back undoes it. It takes {'a few seconds' if only_first else 'about a minute'}.\n\n"
                                    f"Profile: {profile}\nCareer: {career}" + extra, parent=self):
             return
         out = t.out_var.get().strip()
 
         def work():
-            return app.make_test_plays(self.lib, self.tests, profile, career, bokl, out)
+            return app.make_test_plays(self.lib, tests, profile, career, bokl, out)
 
         def done(result):
             try:
@@ -7005,17 +7041,17 @@ class TestPlaysDialog(tk.Toplevel):
             except Exception as e:
                 messagebox.showerror("Test plays", str(e), parent=self)
                 return
-            self.state["made"] = {"time": time.strftime("%Y-%m-%d %H:%M"), "playbook": bokl, "backup": dest}
+            self.state["made"] = {"time": time.strftime("%Y-%m-%d %H:%M"), "playbook": bokl, "backup": dest, "ids": [x["id"] for x in tests]}
             app.play_test_save_state(self.state)
             self._show_status()
             self._select()
             use = t.in_use()
-            messagebox.showinfo("Test plays", f"Done: the seven test plays are in custom playbook {bokl} ({t.playbook_name()}). Start the game, load the career and look under Created Plays.\n\n" +
-                                ("" if use is not False else f"Your team does not play with custom playbook {bokl} yet, so the game will not offer them until it does: Playbooks tab, Team playbooks, choose your team, "
-                                 "Change... next to Offense, pick that playbook, then Save to File.\n\n") +
+            messagebox.showinfo("Test plays", f"Done: {what} {'is' if only_first else 'are'} in custom playbook {bokl} ({t.playbook_name()}). Start the game, load the career and look under Created Plays.\n\n" +
+                                ("" if use is not False else f"Your team does not play with custom playbook {bokl} yet, so the game will not offer {'it' if only_first else 'them'} until it does: Playbooks tab, "
+                                 "Team playbooks, choose your team, Change... next to Offense, pick that playbook, then Save to File.\n\n") +
                                 f"Your own files are saved in {dest}. Put my saves back puts them back.", parent=self)
 
-        app.run_in_thread_with_busy("Making the seven test plays (about a minute)...", work, done, error_title="Test plays")
+        app.run_in_thread_with_busy("Making the test plays..." if only_first else "Making the seven test plays (about a minute)...", work, done, error_title="Test plays")
 
     def _uninstall(self):
         answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
@@ -7027,6 +7063,12 @@ class TestPlaysDialog(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Put my saves back", str(e), parent=self)
             return
+        made = self.state.get("made")
+        if made and (answer or info["folder"] == made.get("backup")):      # the plays this window added are gone: it must not say they are there
+            self.state.pop("made")
+            self.app.play_test_save_state(self.state)
+            self._show_status()
+            self._select()
         messagebox.showinfo("Put my saves back", f"Done: your profile and career are the ones saved in {info['folder']} again.", parent=self)
 
     def _text(self):

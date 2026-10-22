@@ -32,6 +32,10 @@ One button makes all seven test plays and adds them to your game; you then try t
 2. Press **Add the seven test plays to my game** and say yes to the one question. The editor makes the seven plays, checks them, saves your own two files in `Documents\hc09-test-backups` and puts the new ones in place (about a minute). If it says it could not find your profile save, press **Details...** and pick the `USR-DATA` in the `BLUS30128-PROFILE-...` folder.
 3. Start RPCS3 and the game, load the career: open the offensive playbook, go to the custom playbook, then **Created Plays**.
 
+**If the game crashes or will not load the career with the seven in** (the editor adds them together, so a crash cannot be pinned on one play): close RPCS3, press **Put my saves back...** and **Yes**, then press **Add only T1 (the control)** and see whether the career loads with that one alone. Tell us which of the two worked.
+
+If you changed your team's playbook in the Playbooks tab while the window was open, the window picks that playbook when you press the button (unless you chose one by hand under **Details...**); the question it asks says which playbook and whether your team plays it. The editor also names the team (the one picked at the top of the editor), so check that it is yours.
+
 The seven plays are copies of **Slants** (formation Singleback, set Big) with one thing changed each, so that what the game does with each kind of change can be told apart:
 
 | Test | What it is | What to look at |
@@ -103,6 +107,7 @@ Measure in yards as well as you can; "about twice as far", "turned toward the mi
 | **B4 flips the side, B5 changes sharpness** | the cut's numbers are side and sharpness | the lab can build a cut |
 | **everything responds as above, and T1 to T3 work** | writing routes in place is possible | we build the route lab (draw a route, match it to the nearest one the game has, give up one of the game's single-use routes only if you insist), with these numbers |
 | **B1 works but the numbers behave in no pattern** | the file is read but we cannot yet say how | more tests with a simpler route |
+| **the game will not load the career with all seven, but loads it with T1 alone** | one of T2 to T7 breaks the game (T4, with assignments from other formations, is the likeliest) | add them one at a time from the Play creator (Add to my game) and tell us which one breaks it |
 | **T1 fails** | custom plays made by the editor are not accepted at all | fix that first; Part B still answers the route question |
 | **T7: he lines up at the new place** | the game reads the new play's own alignment from the profile, so players can be moved without touching a game file | keep and extend it (also the flipped version, the motion groups) |
 | **T7: he lines up where T1 has him, but the diagram shows him moved** | the game takes the on-field alignment from its own sets, not from the profile | the same edit has to be made in the game files: a new test series like Part B |
@@ -113,5 +118,6 @@ Measure in yards as well as you can; "about twice as far", "turned toward the mi
 
 - **The Route test says the file is in use:** close RPCS3 (and anything else that has `qkl_boot.ast` open) and press the button again.
 - **The game will not start or crashes after a test:** close RPCS3, press **Put the route back to the game's own** (Part B) or **Put my saves back...** (Part A, in the Test plays window), and tell us the test number and what you saw. If the editor itself will not open the files, copy your own copy of the saves back and, for `qkl_boot.ast`, restore `Documents\hc09-game-file-backup\qkl_boot.ast.entry40.orig` with **Restore all to stock** in *Set personnel* (that puts the whole entry back, so it also undoes any Set personnel changes you made).
+- **The game will not load the career with the seven test plays in:** Put my saves back, then Add only T1 (see Part A).
 - **RPCS3 is running:** the editor refuses to add plays or put saves back while it runs (it rewrites the saves when it closes).
 - **The editor says the career has unsaved changes:** save them (Save to File) or throw them away (Reload from File) and press the button again; the editor loads the career again after adding the plays, so it must not hold changes of its own.
