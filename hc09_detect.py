@@ -1,5 +1,5 @@
 """
-Find what the editor needs on this computer without asking: RPCS3's career saves and the game's files.
+Find what the editor needs on this computer without asking: RPCS3's career saves and the game's files, and Xenia's saves (see the Xenia section at the end).
 
 Standard library only, read-only. RPCS3 keeps the saves in <rpcs3>/dev_hdd0/home/<user>/savedata/<GAMEID>-CAREER-<NAME>/USR-DATA and
 the folder each installed game was added from in <rpcs3>/config/games.yml, so from any one save the game's own files
@@ -142,4 +142,208 @@ def candidate_rpcs3_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search
             out.append(d)
     if not out:
         out = search_rpcs3_dirs(search_roots, budget=search_budget)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Xenia (Xbox 360). WRITTEN FROM WHAT XENIA IS KNOWN TO DO, NOT YET CHECKED AGAINST A REAL INSTALL: if someone's folders differ, change the constants below (and, if the shape
+# of the folders is different, xenia_title_folders / _save_files). Everything else (finding the files, telling a career from a profile, pairing them) follows from these.
+#
+# Xenia keeps a game's saves in <xenia folder>/content/<profile id>/<title id>/<content type>/<package>/<files>. The save file is the game's own MC02 file (see the bridge): the
+# letters MC02, a 28-byte header whose 32-bit big-endian value at offset 8 is the length of a metadata block, then the database, which starts with "DB". A career has 208 tables,
+# a profile 43 (the number of tables is the 32-bit big-endian value 0x10 bytes into the database), which is how the two are told apart without relying on any file name.
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+XENIA_TITLE_ID = "45410841"                     # NFL Head Coach 09 (Xbox 360)
+XENIA_CONTENT_DIR = "content"                   # the folder inside Xenia's folder that holds the profiles' content
+XENIA_MAX_DEPTH = 5                             # how many levels below the title folder a save file may sit
+MC02_MAGIC = b"MC02"
+MC02_HEADER_SIZE = 28
+TDB_SIGNATURE = b"DB\x00\x08\x01\x00\x00\x00"   # how the databases of this game start
+CAREER_MIN_TABLES = 150                         # 208 in a career save
+PROFILE_MAX_TABLES = 80                         # 43 in a profile save
+MIN_SAVE_SIZE = 50 * 1024                       # smaller files are not saves (headers, thumbnails)
+
+
+def common_xenia_dirs():
+    """Places Xenia's own folder (the one that holds `content`) is usually found, only those that exist."""
+    home = os.path.expanduser("~")
+    cands = [os.path.join(home, "Documents", "Xenia"), os.path.join(home, "Documents", "xenia"), os.path.join(home, "Xenia"), os.path.join(home, "xenia"),
+             r"C:\Xenia", r"C:\xenia", r"C:\Emulators\Xenia", r"C:\Emulators\xenia", os.path.join(home, ".local", "share", "xenia"),
+             os.path.join(home, ".local", "share", "Xenia")]
+    for var in ("APPDATA", "LOCALAPPDATA"):
+        if os.environ.get(var):
+            cands.append(os.path.join(os.environ[var], "Xenia"))
+    for pattern in (os.path.join(home, "Downloads", "xenia*"), os.path.join(home, "Documents", "xenia*"), os.path.join(home, "Desktop", "xenia*"),
+                    r"C:\Emulators\*enia*", r"C:\Games\*enia*"):
+        cands += sorted(glob.glob(pattern))
+    out = []
+    for c in cands:
+        if os.path.isdir(os.path.join(c, XENIA_CONTENT_DIR)) and c not in out:
+            out.append(c)
+    return out
+
+
+def search_xenia_dirs(roots, max_depth=4, budget=3.0):
+    """Xenia folders (those holding `content/<profile id>/<title id>`) found by looking inside the given folders a few levels down, for at most `budget` seconds."""
+    found, start = [], time.time()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        base_depth = root.rstrip("\\/").count(os.sep)
+        for cur, dirs, _files in os.walk(root):
+            if time.time() - start > budget:
+                return found
+            if os.path.basename(cur).lower() == XENIA_CONTENT_DIR and xenia_title_folders(os.path.dirname(cur)):
+                found.append(os.path.dirname(cur))
+                dirs[:] = []
+                continue
+            if cur.count(os.sep) - base_depth >= max_depth:
+                dirs[:] = []
+            else:
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in ("node_modules", "windows", "$recycle.bin", "system volume information")]
+    return found
+
+
+def xenia_dir_of(path):
+    """The Xenia folder a save (or any path inside its content folder) lives in, or None: the parent of the `content` folder on the way up."""
+    cur = os.path.abspath(path)
+    for _ in range(12):
+        parent = os.path.dirname(cur)
+        if os.path.basename(cur).lower() == XENIA_CONTENT_DIR:
+            return parent
+        if parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def xenia_title_folders(xenia_dir):
+    """The folders of this game inside a Xenia folder: content/<profile id>/<title id>."""
+    return [p for p in glob.glob(os.path.join(xenia_dir, XENIA_CONTENT_DIR, "*", XENIA_TITLE_ID)) if os.path.isdir(p)]
+
+
+def title_folder_of(path):
+    """The title folder (.../content/<profile id>/<title id>) a path lies in, or None."""
+    cur = os.path.abspath(path)
+    for _ in range(12):
+        if os.path.basename(cur).upper() == XENIA_TITLE_ID and os.path.basename(os.path.dirname(os.path.dirname(cur))).lower() == XENIA_CONTENT_DIR:
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def mc02_db_start(path):
+    """Where the database starts in a save file: after the MC02 header and its metadata block; 0 for a bare database; None when the file holds neither."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+            if head[:2] == b"DB":
+                return 0
+            if head[:4] != MC02_MAGIC or len(head) < 12:
+                return None
+            start = MC02_HEADER_SIZE + int.from_bytes(head[8:12], "big")
+            f.seek(start)
+            if f.read(2) == b"DB":
+                return start
+            f.seek(0)
+            found = f.read().find(TDB_SIGNATURE)                    # the header does not point at a database: look for one (as the converter does)
+            return found if found >= 0 else None
+    except OSError:
+        return None
+
+
+def db_table_count(path):
+    """The number of tables in a save's database (43 in a profile, 208 in a career), or None when it cannot be read."""
+    start = mc02_db_start(path)
+    if start is None:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(start + 0x10)
+            raw = f.read(4)
+        return int.from_bytes(raw, "big") if len(raw) == 4 else None
+    except OSError:
+        return None
+
+
+def classify_save(path):
+    """("career" | "profile" | "other", table count): a career has 208 tables and a profile 43."""
+    n = db_table_count(path)
+    if n is None:
+        return "other", None
+    return ("career" if n >= CAREER_MIN_TABLES else "profile" if n <= PROFILE_MAX_TABLES else "other"), n
+
+
+def _save_files(title_folder):
+    """Candidate save files below a title folder: files of a useful size (the type and package folders are not assumed)."""
+    base_depth = title_folder.rstrip("\\/").count(os.sep)
+    for cur, dirs, files in os.walk(title_folder):
+        if cur.count(os.sep) - base_depth >= XENIA_MAX_DEPTH:
+            dirs[:] = []
+        for name in files:
+            path = os.path.join(cur, name)
+            try:
+                if os.path.getsize(path) >= MIN_SAVE_SIZE:
+                    yield path
+            except OSError:
+                continue
+
+
+def list_xenia_saves(xenia_dirs):
+    """Every save of this game in the given Xenia folders, newest first: [{name, path, mtime, size, root (the title folder), kind ("career" | "profile"), tables, xuid, package}].
+    Files that are not saves (headers, other games' folders) are left out. The name is the package folder's (what the game or Xenia called the save), else the file's."""
+    out, seen = [], set()
+    for xd in xenia_dirs:
+        for title in xenia_title_folders(xd):
+            xuid = os.path.basename(os.path.dirname(title))
+            for path in _save_files(title):
+                key = os.path.normcase(os.path.abspath(path))
+                if key in seen:
+                    continue
+                kind, tables = classify_save(path)
+                if kind == "other":
+                    continue
+                seen.add(key)
+                rel = os.path.relpath(path, title).split(os.sep)
+                package = rel[-2] if len(rel) >= 3 else ""             # <type>/<package>/<file>; a file straight in the type folder has no package folder
+                st = os.stat(path)
+                out.append({"name": package or os.path.splitext(os.path.basename(path))[0], "path": path, "mtime": st.st_mtime, "size": st.st_size, "root": title, "kind": kind,
+                            "tables": tables, "xuid": xuid, "package": package})
+    return sorted(out, key=lambda s: -s["mtime"])
+
+
+def xenia_profiles_for(career_path):
+    """The profile saves that go with a career save found by Xenia's layout: the ones in the same title folder, newest first; [] when the career is not inside a Xenia folder."""
+    title = title_folder_of(career_path)
+    if not title:
+        return []
+    xd = xenia_dir_of(title)
+    if not xd:
+        return []
+    return [s["path"] for s in list_xenia_saves([xd]) if s["kind"] == "profile" and os.path.normcase(s["root"]) == os.path.normcase(title)]
+
+
+def candidate_xenia_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search_budget=3.0):
+    """Xenia folders to look at, best first: the ones the recent saves live in, the ones the user added (the Xenia folder itself, its content folder, or anything inside), the usual
+    places, and (only if none of those turned up) a bounded search of search_roots."""
+    out = []
+
+    def add(d):
+        if d and os.path.isdir(d) and xenia_title_folders(d) and d not in out:
+            out.append(d)
+
+    for p in list(recent_paths):
+        add(xenia_dir_of(p))
+    for p in extra_dirs:
+        add(p if os.path.isdir(os.path.join(p, XENIA_CONTENT_DIR)) else xenia_dir_of(p))
+        for d in search_xenia_dirs([p], budget=search_budget):
+            add(d)
+    for d in common_xenia_dirs():
+        add(d)
+    if not out:
+        for d in search_xenia_dirs(search_roots, budget=search_budget):
+            add(d)
     return out
