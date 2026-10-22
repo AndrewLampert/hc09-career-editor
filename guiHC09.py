@@ -5296,10 +5296,10 @@ class SavesDialog(tk.Toplevel):
         if self.saves:
             self.tree.selection_set("0")
             self.lbl_note.configure(text="Newest first. Double-click a save, or select it and press Open. The editor looks in the folders your "
-                                         "recent saves live in, the ones you add, and the usual RPCS3 places.")
+                                         "recent saves live in, the ones you add, and the usual RPCS3 and Xenia places.")
         else:
             self.lbl_note.configure(text="No career saves found yet. Use Look in another folder... and pick RPCS3's folder (the one that holds dev_hdd0) "
-                                         "or its savedata folder, or Search this computer.")
+                                         "or its savedata folder, or Xenia's folder (the one that holds content), or Search this computer.")
         self.btn_open.configure(state="normal" if self.saves else "disabled")
 
     def _selected(self):
@@ -5325,7 +5325,7 @@ class SavesDialog(tk.Toplevel):
             messagebox.showerror("Show folder", str(e))
 
     def _add_folder(self):
-        folder = filedialog.askdirectory(title="Pick RPCS3's folder (the one that holds dev_hdd0) or a savedata folder", parent=self)
+        folder = filedialog.askdirectory(title="Pick RPCS3's folder (the one that holds dev_hdd0), a savedata folder, or Xenia's folder (the one that holds content)", parent=self)
         if not folder:
             return
         extra = list(self.app.ui_prefs.get("extra_rpcs3_dirs", []))
@@ -7778,7 +7778,12 @@ PLAYBOOK_NAME_MATCH = 0.8   # a custom playbook is named only if this share of i
 
 
 def find_profile_saves(career_db_path):
-    """Profile saves of the same game sitting next to a career save (savedata/<TITLE>-PROFILE-*/USR-DATA)."""
+    """Profile saves of the same game sitting next to a career save: RPCS3's savedata/<TITLE>-PROFILE-*/USR-DATA, or, for a Xenia (Xbox 360) career, the profile saves in the same
+    title folder (found by what is in them, not by name)."""
+    if hc09_detect is not None:
+        xenia = hc09_detect.xenia_profiles_for(career_db_path)
+        if xenia:
+            return xenia
     folder = os.path.dirname(os.path.abspath(career_db_path))
     root = os.path.dirname(folder)
     title = os.path.basename(folder).split("-")[0]
@@ -10283,12 +10288,23 @@ class App(tk.Tk):
         roots = [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")] if search else []
         return hc09_detect.candidate_rpcs3_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
 
-    def detected_saves(self, search=False):
-        """The career saves found in RPCS3's savedata folders (those of the recent saves, any the user added, the usual places and, if asked,
-        a bounded search of the usual drives' folders), newest first."""
+    def _detect_xenia_dirs(self, search=False):
         if hc09_detect is None:
             return []
-        return hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))
+        home = os.path.expanduser("~")
+        roots = [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")] if search else []
+        return hc09_detect.candidate_xenia_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
+
+    def detected_saves(self, search=False):
+        """The career saves found in RPCS3's savedata folders and in Xenia's content folders (those of the recent saves, any the user added, the usual places and, if asked,
+        a bounded search of the usual drives' folders), newest first. A Xenia save is marked "(Xenia)" in its name."""
+        if hc09_detect is None:
+            return []
+        found = hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))
+        for sv in hc09_detect.list_xenia_saves(self._detect_xenia_dirs(search)):
+            if sv["kind"] == "career":
+                found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"]})
+        return sorted(found, key=lambda s: -s["mtime"])
 
     def _detected_game_file(self, name):
         """qkl_boot.ast or qkl_fe2ig.ast found through RPCS3's own configuration (config/games.yml), or ""."""
