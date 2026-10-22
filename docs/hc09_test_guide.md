@@ -7,7 +7,7 @@ Two parts. **Part A** tests the custom plays the Play creator makes (about 10 mi
 ## 0. Before you start (10 minutes, once)
 
 1. **Get the newest editor** (the `main` branch of the editor's GitHub page: `git pull` if you cloned it, or download the zip again) and start it with `Start HC09 Editor.bat` (the launcher checks Python and Node and installs what the bridge needs the first time).
-2. **Close RPCS3.** Keep it closed whenever you press an Apply or Install button; start it again only to look at the result, and close it again before the next button.
+2. **Close RPCS3.** Keep it closed whenever you press an Add, Apply or Put-back button; start it again only to look at the result, and close it again before the next button.
 3. **Make your own copy of the saves**, by hand, as well as the editor's automatic backups: copy the whole `BLUS30128-PROFILE-HEADCOACH` folder (in RPCS3's `dev_hdd0/home/00000001/savedata/`) and the folder of the career you will use somewhere safe. The profile is shared by every career and holds all your custom plays, so this copy matters.
 4. In the editor, press **Saves...** (or Load Save File) and open the career you will test with. The editor finds the game files by itself; if it asks for `qkl_boot.ast`, point it at the one in RPCS3's `NFL Head Coach 09 (USA)/PS3_GAME/USRDIR` folder.
 
