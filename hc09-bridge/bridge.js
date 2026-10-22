@@ -7,6 +7,8 @@ const zlib = require('zlib');
 const crypto = require('crypto');
 const os = require('os');
 const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
+const HC09Helper = require('madden-file-tools/helpers/HC09Helper');
+const TDBParser = require('madden-file-tools/streams/TDBParser');
 const ASTParser = require('madden-file-tools/streams/ASTParser');
 const { Readable } = require('stream');
 
@@ -103,8 +105,54 @@ function tableFileName(tableName) {
     return tableName.toLowerCase() + '.csv';
 }
 
+// ---------- Xbox 360 / Xenia saves ----------
+// A save made on the Xbox 360 (Xenia keeps it as an ordinary file, usually named *.mc02) is wrapped in the game's own "MC02" memory-card container: the letters MC02, a 28-byte
+// header whose 32-bit big-endian value at offset 8 is the length of a metadata chunk that follows it, then the database (it starts with "DB"). The database therefore starts at
+// 28 + that length. This is the rule of the community's MC02 <-> DB converter. The header and the chunk are never changed: the database is read and written in place, exactly as
+// the PS3 career save's own header is (HC09Helper), so a made file keeps its size.
+const MC02_MAGIC = 'MC02';
+const MC02_HEADER_SIZE = 28;
+const TDB_SIGNATURE = Buffer.from([0x44, 0x42, 0x00, 0x08, 0x01, 0x00, 0x00, 0x00]);      // how the databases of this game start
+
+// Where the database starts inside an MC02 file, -1 when the file is not MC02, or throws when it is MC02 and holds no database.
+function mc02DataStart(filePath) {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const head = Buffer.alloc(12);
+        if (fs.readSync(fd, head, 0, 12, 0) < 12 || head.toString('latin1', 0, 4) !== MC02_MAGIC) return -1;
+        const size = fs.fstatSync(fd).size;
+        const start = MC02_HEADER_SIZE + head.readUInt32BE(8);
+        const mark = Buffer.alloc(2);
+        if (start + 2 <= size && fs.readSync(fd, mark, 0, 2, start) === 2 && mark.readUInt16BE(0) === 0x4442) return start;
+        // the header does not point at a database: look for where one starts (the converter falls back to the first "DB" too)
+        const all = fs.readFileSync(filePath);
+        const found = all.indexOf(TDB_SIGNATURE);
+        if (found >= 0) return found;
+        throw new Error('This is an MC02 file (an Xbox 360 / Xenia save) but no database was found in it.');
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+class MC02Helper extends HC09Helper {
+    load(filePath) {
+        this._filePath = filePath;
+        this._dataStart = mc02DataStart(filePath);
+        return new Promise((resolve, reject) => {
+            const stream = fs.createReadStream(filePath, { start: this._dataStart });
+            this._parser = new TDBParser();
+            stream.on('error', reject);
+            stream.on('end', () => {
+                this._file = this._parser.file;
+                resolve(this._file);
+            });
+            stream.pipe(this._parser);
+        });
+    }
+}
+
 async function openDb(dbPath) {
-    const helper = await DBHelperFactory.createHelper(dbPath);
+    const helper = mc02DataStart(dbPath) >= 0 ? new MC02Helper() : await DBHelperFactory.createHelper(dbPath);
     await helper.load(dbPath);
     return helper;
 }

@@ -29,7 +29,7 @@ One button makes all seven test plays and adds them to your game; you then try t
 **In the editor** (RPCS3 closed, your career loaded):
 
 1. Playbooks tab, **Test plays (testers)...** (a few seconds to read the game's plays).
-2. Press **Add the seven test plays to my game** and say yes to the one question. The editor makes the seven plays, checks them, saves your own two files in `Documents\hc09-test-backups` and puts the new ones in place (about a minute). If it says it could not find your profile save, press **Details...** and pick the `USR-DATA` in the `BLUS30128-PROFILE-...` folder.
+2. Press **Add the seven test plays to my game** and say yes to the one question. The editor makes the seven plays, checks them, saves your own two files in `Documents\hc09-test-backups` and puts the new ones in place (about a minute). If it says it could not find your profile save, press **Details...** and pick the `USR-DATA` in the `BLUS30128-PROFILE-...` folder. **On Xenia (Xbox 360)** the editor does not find the saves by itself yet: load your career's `.mc02` file with **Load Save File**, then in **Details...** pick your career's and your profile's `.mc02` files by hand.
 3. Start RPCS3 and the game, load the career: open the offensive playbook, go to the custom playbook, then **Created Plays**.
 
 **If the game crashes or will not load the career with the seven in** (the editor adds them together, so a crash cannot be pinned on one play): close RPCS3, press **Put my saves back...** and **Yes**, then press **Add only T1 (the control)** and see whether the career loads with that one alone. Tell us which of the two worked.

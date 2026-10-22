@@ -5043,7 +5043,7 @@ class PersonnelDialog(tk.Toplevel):
     # ---- writing
     def _check_closed(self):
         if rpcs3_running():
-            messagebox.showerror("Close the emulator", "RPCS3 is running. Close it first: the game files can't be written reliably while it has them open.")
+            messagebox.showerror("Close the emulator", "RPCS3 or Xenia is running. Close it first: the game files can't be written reliably while it has them open.")
             return False
         return True
 
@@ -6867,7 +6867,7 @@ class CustomPlayDialog(tk.Toplevel):
                             f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
 
     def _uninstall(self):
-        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
+        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 and Xenia must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
                                            "No: put back your files from before the LAST install only.\nCancel: do nothing.", parent=self)
         if answer is None:
             return
@@ -7054,7 +7054,7 @@ class TestPlaysDialog(tk.Toplevel):
         app.run_in_thread_with_busy("Making the test plays..." if only_first else "Making the seven test plays (about a minute)...", work, done, error_title="Test plays")
 
     def _uninstall(self):
-        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
+        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 and Xenia must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
                                            "No: put back your files from before the LAST install only.\nCancel: do nothing.", parent=self)
         if answer is None:
             return
@@ -11365,7 +11365,7 @@ class App(tk.Tk):
         edits = RT.edits_for(test_id, self.route_test_current(info["boot"]))
         if edits:
             if self._rpcs3_running():
-                raise RuntimeError("RPCS3 is running. Close it first (it can hold the game file open), then press the button again.")
+                raise RuntimeError("RPCS3 or Xenia is running. Close it first (it can hold the game file open), then press the button again.")
             m = info["copy"]
             try:
                 apply_personnel_targets(self.model, [{"ast": m["ast"], "index": m["index"], "start": m["start"], "size": m["size"], "edits": edits}], backup_dir=self._personnel_backup_dir())
@@ -11391,12 +11391,14 @@ class App(tk.Tk):
 
     @staticmethod
     def _rpcs3_running():
-        """True if RPCS3 seems to be running (it holds the saves open, and rewrites them when it closes)."""
+        """True if an emulator that plays the game seems to be running: RPCS3 (PS3) or Xenia (Xbox 360). It holds the saves open, and rewrites them when it closes."""
+        names = ("rpcs3", "xenia", "xenia_canary")
         try:
             if os.name == "nt":
-                out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq rpcs3.exe"], capture_output=True, text=True, timeout=15)
-                return "rpcs3.exe" in out.stdout.lower()
-            return subprocess.run(["pgrep", "-x", "rpcs3"], capture_output=True, timeout=15).returncode == 0
+                out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=15)
+                running = {line.split()[0].lower() for line in out.stdout.splitlines() if line.strip()}
+                return any(n + ".exe" in running for n in names)
+            return any(subprocess.run(["pgrep", "-x", n], capture_output=True, timeout=15).returncode == 0 for n in names)
         except (OSError, subprocess.SubprocessError):
             return False
 
@@ -11438,7 +11440,7 @@ class App(tk.Tk):
         """Put the profile and the career back from a backup install_custom_play made: "newest" (the files from before the last install) or "oldest" (from before the first one,
         so every test play is gone). Returns its info dict."""
         if self._rpcs3_running():
-            raise RuntimeError("RPCS3 is running. Close it first, then try again.")
+            raise RuntimeError("RPCS3 or Xenia is running. Close it first, then try again.")
         if not os.path.isdir(self.TEST_BACKUP_DIR):
             raise RuntimeError("There is no backup to put back.")
         folders = sorted(d for d in os.listdir(self.TEST_BACKUP_DIR) if os.path.isfile(os.path.join(self.TEST_BACKUP_DIR, d, "info.json")))
@@ -11458,7 +11460,7 @@ class App(tk.Tk):
     def install_blocker(self, career_path):
         """Why custom plays cannot be put into the game right now (a sentence), or None."""
         if self._rpcs3_running():
-            return "RPCS3 is running. Close it first (it rewrites the saves when it closes), then press the button again."
+            return "RPCS3 or Xenia is running. Close it first (it rewrites the saves when it closes), then press the button again."
         if self._career_open(career_path) and self.dirty:
             return "The career that is open in the editor has unsaved changes. Save them (Save to File) or throw them away (Reload from File), then press the button again."
         return None
