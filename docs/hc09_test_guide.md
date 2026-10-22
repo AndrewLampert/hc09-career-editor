@@ -2,7 +2,7 @@
 
 For people helping to test, on their own copy of the game (PS3 USA in RPCS3). Everything is done from the editor; you never edit a file by hand. **Nothing here has been tried in the game yet, so your answers are the first.**
 
-Two parts. **Part A** tests the custom plays the Play creator makes (about 50 minutes; **A7, the moved player, is the one that matters most for what we can build next**). **Part B** tests what the numbers inside a route mean, which decides whether making your own routes is possible at all (about 40 minutes for the main tests, B1 to B5; B6 to B9 are a bonus). You can do Part A without Part B and the other way round.
+Two parts. **Part A** tests the custom plays the Play creator makes (about 10 minutes in the editor and then the game; **T7, the moved player, is the one that matters most for what we can build next**). **Part B** tests what the numbers inside a route mean, which decides whether making your own routes is possible at all (about 40 minutes for the main tests, B1 to B5; B6 to B9 are a bonus). You can do Part A without Part B and the other way round.
 
 ## 0. Before you start (10 minutes, once)
 
@@ -15,59 +15,46 @@ Two parts. **Part A** tests the custom plays the Play creator makes (about 50 mi
 
 | Part | What changes | Backup | Undo |
 |---|---|---|---|
-| A | your profile save and your career save (the two `USR-DATA` files), only when you press **Install in my game** | `Documents\hc09-test-backups\<date and time>\` (both files, every time) | **Put my saves back** in the same window (all the way back, or one step), or copy your own copies back |
+| A | your profile save and your career save (the two `USR-DATA` files), only when you press **Add the seven test plays to my game** (or **Add to my game** in the Play creator) | `Documents\hc09-test-backups\<date and time>\` (both files, every time) | **Put my saves back** in the same window (all the way back, or one step), or copy your own copies back |
 | B | a few numbers of one route in `qkl_boot.ast` (the game's play database), only when you press **Apply this test** | the first time, the original entry in `Documents\hc09-game-file-backup\` | **Put the route back to the game's own** in the Route test window, which restores the numbers exactly (tested byte for byte) |
 
 If anything looks wrong or the game will not start: close RPCS3, press the undo button, and tell us what happened.
 
-## Part A: the custom plays (do these in order)
+## Part A: the custom plays (the Test plays window)
 
-For each test: make the play in the editor, press **Install in my game**, and look at the result in the game. You can make all of A1 to A4 first (each one is made from your files as they are, so the plays pile up in the same custom playbook), then start the game once and try them all.
+One button makes all seven test plays and adds them to your game; you then try them in the game and write down what you saw, in the same window. About 10 minutes in the editor, the rest in the game.
 
-**First, make your team use the custom playbook** (otherwise the game never offers the test plays and "it is not in my playbook" would only mean your team plays another one): Playbooks tab, **Team playbooks** box, choose your team, and on the Offense row press **Change...** and pick the custom playbook (1 to 10) you will add the test plays to; then **Save to File**. Use that same custom playbook number below. (Install in my game replaces the career file on disk and loads it again in the editor; it refuses while the open career has unsaved changes, so save first.)
+**First, make your team use the custom playbook** (otherwise the game never offers the test plays and "it is not in my playbook" would only mean your team plays another one): Playbooks tab, **Team playbooks** box, choose your team, and on the Offense row press **Change...** and pick a custom playbook (1 to 10); then **Save to File**. The Test plays window says which custom playbook it is going to use: the one your team plays if it plays a custom one, otherwise custom playbook 1 (and then it tells you your team does not play it yet).
 
-**Setup in the editor:** Playbooks tab, **Play creator...** (a few seconds to read the game's plays). Show: Offense. Find: `slants`. Pick the **Slants** whose formation is **Singleback** and set is **Big**. When you press **Make custom play...** pick a custom playbook (1 to 10) that you do not mind adding to (press Find after the profile path is filled in), keep the suggested output folder, and press **Make the files**, then **Install in my game** and say yes.
+**In the editor** (RPCS3 closed, your career loaded):
 
-| Test | In the Play creator | Name it |
+1. Playbooks tab, **Test plays (testers)...** (a few seconds to read the game's plays).
+2. Press **Add the seven test plays to my game** and say yes to the one question. The editor makes the seven plays, checks them, saves your own two files in `Documents\hc09-test-backups` and puts the new ones in place (about a minute). If it says it could not find your profile save, press **Details...** and pick the `USR-DATA` in the `BLUS30128-PROFILE-...` folder.
+3. Start RPCS3 and the game, load the career: open the offensive playbook, go to the custom playbook, then **Created Plays**.
+
+**If the game crashes or will not load the career with the seven in** (the editor adds them together, so a crash cannot be pinned on one play): close RPCS3, press **Put my saves back...** and **Yes**, then press **Add only T1 (the control)** and see whether the career loads with that one alone. Tell us which of the two worked.
+
+If you changed your team's playbook in the Playbooks tab while the window was open, the window picks that playbook when you press the button (unless you chose one by hand under **Details...**); the question it asks says which playbook and whether your team plays it. The editor also names the team (the one picked at the top of the editor), so check that it is yours.
+
+The seven plays are copies of **Slants** (formation Singleback, set Big) with one thing changed each, so that what the game does with each kind of change can be told apart:
+
+| Test | What it is | What to look at |
 |---|---|---|
-| **A1** control | change nothing | `T1 Slants` |
-| **A2** play action | **Change the kind of play...**, choose *Play-action pass*, **Change this play to this kind** (it copies a stock play action of the same set) | `T2 Slants PA` |
-| **A3** handoff run | start again from Slants, **Change the kind of play...**, *Handoff run* | `T3 Slants Run` |
-| **A4** no same-set example | start again from the same Slants (Singleback / Big), **Change the kind of play...**, *Triple option*; the window says its assignments come "from other formations" because no triple option uses that set, which is the case we want to see | `T4 To Triple` |
-| **A5** (bonus) one player | start from Slants, click WR1 on the field, **Change what WR1 does...**, pick *Out, medium*, **Use this** | `T5 WR Out` |
-| **A6** (bonus) your own reads | start from Slants, press **Pass reads...**, move WR1 to the top and TE1 second (or press *Use the usual chances*), **Use these reads** | `T6 Reads` |
-| **A7** a moved player (important) | start from Slants, press **Move players...**, click **WR1** in the list (the wide receiver on the right, now 15 yards across and 2.2 back) and set **Across** to **7** (leave Back), **Use these places** | `T7 Moved WR` |
+| **T1 Slants** | the control: nothing changed | does the game accept a custom play at all? Does it run like the original Slants? Where does WR1, the wide receiver on the right, stand before the snap? (write it down: this is what T7 is compared with) |
+| **T2 Slants PA** | changed to a play-action pass | the quarterback turns and fakes the handoff, the linemen fire out as if to run block and then pass block, the back fakes taking the ball, the receivers run their routes and the quarterback throws |
+| **T3 Slants Run** | changed to a handoff run | the quarterback hands off, a back takes the ball and runs, the linemen run block, the receivers block downfield instead of running routes |
+| **T4 To Triple** | changed to a triple option (no triple option uses this set, so the assignments come from other formations) | the quarterback runs the option (rides, then keeps or pitches), a back takes a pitch; does anything stand still or run into the wrong place? |
+| **T5 WR Out** | one receiver's route: WR1 runs an out, medium | WR1 runs up the field, then toward the sideline |
+| **T6 Reads** | the quarterback's reads: WR1 first, TE1 second | on the play's diagram in the playbook the numbers 1 to 5 stand on the receivers in that order; with no pressure the quarterback looks to WR1 first |
+| **T7 Moved WR** (important) | one player's place: WR1 stands 7 yards from the middle instead of out by the sideline | before the snap WR1 stands about 7 yards from the middle of the field (near the hash marks, inside the numbers); the diagram shows him moved; if the game flips plays, the whole formation is the mirror image. **This is the one that matters most for what we can build next.** |
 
-**In the game** (RPCS3 started again, your career loaded; any way you normally try custom plays is fine: a career game, or Play Now with your custom playbook if the game lets you): open the offensive playbook, go to the custom playbook, then **Created Plays**. For every test play, answer:
+**In the game**, for every test play: is it listed, with its name and a diagram that looks like the original? Can you call it without the game crashing or freezing? Run it two or three times and look at what the table says. Anything odd (players standing still, wrong formation, missing players, strange camera)?
 
-1. Is the play listed, with its name? Does the play diagram look like the original (Slants / the kind you asked for)?
-2. Can you call it? Does the game crash or freeze when you do?
-3. Run it two or three times. What does each player do?
-   - **A1:** like the original Slants?
-   - **A2:** does the quarterback turn and fake the handoff, do the linemen fire out as if to run block, does the back fake taking the ball, and do the receivers run their routes and the quarterback throw?
-   - **A3:** does the quarterback hand off, does a back take the handoff and run, do the linemen run block, do the receivers block downfield instead of running routes?
-   - **A4:** does the quarterback run the option (ride, then keep or pitch), does a back take a pitch? Does anything stand still or run into the wrong place?
-   - **A5:** does WR1 run an out route (up the field, then toward the sideline)?
-   - **A6:** on the play's diagram in the playbook, are the numbers 1 to 5 on the receivers in the order you set? With no pressure, does the quarterback look to your first read first?
-   - **A7:** before the snap, where does the wide receiver who stood on the right sideline in T1 line up? About 7 yards from the middle of the field (near the right hash marks, inside the numbers) means the game took the new place. Also: does the play's diagram in the playbook show him moved? If the game has a flip for plays, flip it: is the whole formation the mirror image?
-4. Anything odd (players standing still, wrong formation, missing players, strange camera)?
+**Write the answers in the window** (step 2 of the Test plays window): pick a test in the list and answer its questions with the drop-downs and the text lines. The answers are saved as you give them, so closing the editor loses nothing. When you are done press **Copy my answers for Discord** and paste into the chat (or **Save my answers to a file**: `Documents\hc09-test-results\play-test-results.txt`; the state is in `play-test.json` in the same folder). Screenshots of the playbook screen (Created Plays) and of anything odd are welcome.
 
-**Write the answers like this** (copy this block into the chat, one per test):
+When you are done, close RPCS3 and press **Put my saves back...** in the Test plays window, then **Yes** to get your files from before the first install (if you want to keep the test plays, skip this).
 
-```
-A2 Slants PA
- - listed with its name and a matching diagram: yes / no
- - could be called, no crash: yes / no (what happened)
- - QB fakes then throws: yes / no
- - linemen fire out then pass block: yes / no / could not tell
- - back fakes the handoff: yes / no
- - routes run and a pass thrown: yes / no
- - anything odd:
-```
-
-For **A7** also write down where the wide receiver lined up in T1 (the control) and where he lined up in T7: yards from the sideline or the hash marks, in your own words.
-
-When you are done with Part A, close RPCS3 and press **Put my saves back...** in the save window, then **Yes** to get your files from before the first install (if you want to keep the test plays, skip this).
+**Making one play by hand** (not part of the test): Playbooks tab, **Play creator...**, pick a play, change what you like, press **Make custom play...** and then **Add to my game** (one question; the same backups and the same Put my saves back). **Details...** has the files, the output folder and the playbook if you want to choose them yourself, and **Only make the files** makes the two copies without changing your game.
 
 ## Part B: the route numbers (the Route test window)
 
@@ -108,7 +95,7 @@ When you are done with Part A, close RPCS3 and press **Put my saves back...** in
 
 Measure in yards as well as you can; "about twice as far", "turned toward the middle at about 45 degrees" are good answers. If you cannot tell, say so. A short video of B0, B1 and B3 (the receiver and the yard lines) helps a lot if you can make one; it is optional.
 
-**Sending the results:** in the Route test window press **Copy my answers for Discord** and paste into the chat (the answers are also saved in `Documents\hc09-test-results\route-test.json`). Send the Part A blocks as they are. Screenshots of the playbook screen (Created Plays) and of anything odd are welcome.
+**Sending the results:** in the Route test window press **Copy my answers for Discord** and paste into the chat (the answers are also saved in `Documents\hc09-test-results\route-test.json`). Screenshots of the playbook screen (Created Plays) and of anything odd are welcome.
 
 ## What the answers decide
 
@@ -118,16 +105,19 @@ Measure in yards as well as you can; "about twice as far", "turned toward the mi
 | **B1: the stem is longer, B6: the second leg is shorter** | the file is read and the first number is a length | measure yards per unit from B0 and B1 (68 against 136) |
 | **B2 and B3 break in two different directions** | the second number of a leg is a direction, 32 straight on | the lab can draw a break at any angle: needs a few more points to calibrate |
 | **B4 flips the side, B5 changes sharpness** | the cut's numbers are side and sharpness | the lab can build a cut |
-| **everything responds as above, and A1 to A3 work** | writing routes in place is possible | we build the route lab (draw a route, match it to the nearest one the game has, give up one of the game's single-use routes only if you insist), with these numbers |
+| **everything responds as above, and T1 to T3 work** | writing routes in place is possible | we build the route lab (draw a route, match it to the nearest one the game has, give up one of the game's single-use routes only if you insist), with these numbers |
 | **B1 works but the numbers behave in no pattern** | the file is read but we cannot yet say how | more tests with a simpler route |
-| **A1 fails** | custom plays made by the editor are not accepted at all | fix that first; Part B still answers the route question |
-| **A7: he lines up at the new place** | the game reads the new play's own alignment from the profile, so players can be moved without touching a game file | keep and extend it (also the flipped version, the motion groups) |
-| **A7: he lines up where T1 has him, but the diagram shows him moved** | the game takes the on-field alignment from its own sets, not from the profile | the same edit has to be made in the game files: a new test series like Part B |
-| **A7: he lines up somewhere else** (mirrored, further back ...) | the yards mean something else than we think | tell us where (yards from the middle and from the line) |
-| **A1 works, A2/A3 do not** | changing the kind of a play is the problem | tell us which player does what |
+| **the game will not load the career with all seven, but loads it with T1 alone** | one of T2 to T7 breaks the game (T4, with assignments from other formations, is the likeliest) | add them one at a time from the Play creator (Add to my game) and tell us which one breaks it |
+| **T1 fails** | custom plays made by the editor are not accepted at all | fix that first; Part B still answers the route question |
+| **T7: he lines up at the new place** | the game reads the new play's own alignment from the profile, so players can be moved without touching a game file | keep and extend it (also the flipped version, the motion groups) |
+| **T7: he lines up where T1 has him, but the diagram shows him moved** | the game takes the on-field alignment from its own sets, not from the profile | the same edit has to be made in the game files: a new test series like Part B |
+| **T7: he lines up somewhere else** (mirrored, further back ...) | the yards mean something else than we think | tell us where (yards from the middle and from the line) |
+| **T1 works, T2/T3 do not** | changing the kind of a play is the problem | tell us which player does what |
 
 ## If something goes wrong
 
 - **The Route test says the file is in use:** close RPCS3 (and anything else that has `qkl_boot.ast` open) and press the button again.
-- **The game will not start or crashes after a test:** close RPCS3, press **Put the route back to the game's own** (Part B) or **Put my saves back...** (Part A), and tell us the test number and what you saw. If the editor itself will not open the files, copy your own copy of the saves back and, for `qkl_boot.ast`, restore `Documents\hc09-game-file-backup\qkl_boot.ast.entry40.orig` with **Restore all to stock** in *Set personnel* (that puts the whole entry back, so it also undoes any Set personnel changes you made).
-- **RPCS3 is running:** the editor refuses to install or put saves back while it runs (it rewrites the saves when it closes).
+- **The game will not start or crashes after a test:** close RPCS3, press **Put the route back to the game's own** (Part B) or **Put my saves back...** (Part A, in the Test plays window), and tell us the test number and what you saw. If the editor itself will not open the files, copy your own copy of the saves back and, for `qkl_boot.ast`, restore `Documents\hc09-game-file-backup\qkl_boot.ast.entry40.orig` with **Restore all to stock** in *Set personnel* (that puts the whole entry back, so it also undoes any Set personnel changes you made).
+- **The game will not load the career with the seven test plays in:** Put my saves back, then Add only T1 (see Part A).
+- **RPCS3 is running:** the editor refuses to add plays or put saves back while it runs (it rewrites the saves when it closes).
+- **The editor says the career has unsaved changes:** save them (Save to File) or throw them away (Reload from File) and press the button again; the editor loads the career again after adding the plays, so it must not hold changes of its own.
