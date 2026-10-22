@@ -33,6 +33,9 @@ ART_BITS = {"10": (8, 3, 8, 7), "11": (2, 2, 8, 7), "12": (2, 2, 8, 5), "01": (9
 POSITIONS = {0: "QB", 1: "HB", 2: "FB", 3: "WR", 4: "TE", 5: "LT", 6: "LG", 7: "C", 8: "RG", 9: "RT",
              10: "LE", 11: "RE", 12: "DT", 13: "LOLB", 14: "MLB", 15: "ROLB", 16: "CB", 17: "FS", 18: "SS"}
 CREATED_FORMATION = 8190          # "Created Plays": the formation the game files its custom plays under
+# The game's own formation names (its FORM table, which lives in qkl_fe2ig.ast). Used for the ids the editor cannot read names for, for example when it did not find that archive.
+FORMATION_NAMES = {1: "Shotgun", 2: "4-3", 3: "I Form", 4: "Strong I", 5: "Split Backs", 10: "Goal Line Offense", 11: "Singleback", 13: "Weak I", 14: "Near", 15: "Far", 16: "3-4",
+                   17: "Nickel", 18: "Dime", 19: "Goal Line Defense", 36: "Quarter", 63: "Jumbo T", 67: "Full House", 95: "Flexbone", 103: "Pistol", 105: "Wishbone", 115: "Maryland I"}
 OPTION_CODES = (36, 37, 42, 43)   # step codes found (almost) only in option plays: 42 and 43 in 100% of their uses, 36 and 37 in 96%
 # What a step code does, read from the data (no documentation of it was found): which positions use it, whether the play is a pass or a run, what the play is
 # called (a code found in every "trap" and "sweep" and nowhere else is a pull) and what comes before and after it. The code numbers overlap between the offense
@@ -165,6 +168,8 @@ class PlayLibrary:
             s["side"] = "offense" if 0 in epos else ("defense" if epos and all(10 <= e <= 18 for e in epos) else "other")
         self.form_names = {int(r["FORM"]): r["name"] for r in t["FORM"]}
         self.form_names.setdefault(CREATED_FORMATION, "Created Plays")
+        for fid, fname in FORMATION_NAMES.items():
+            self.form_names.setdefault(fid, fname)
         self.plays = {}
         for r in t["PBPL"]:
             self.plays[int(r["PLYL"])] = {"plyl": int(r["PLYL"]), "setl": int(r["SETL"]), "name": r["name"], "plyt": int(r["PLYT"]), "plf": int(r["PLF_"]), "risk": int(r["risk"]),

@@ -62,22 +62,13 @@ When you are done, close RPCS3 and press **Put my saves back...** in the Test pl
 
 **How:** Playbooks tab, **Route test (testers)...**. The window changes **one route** (the *Post* that *WR Post*, *FL Post*, *Cross Up* and others use; it is used by 58 receivers in 42 of the game's playbooks) one number at a time and tells you, for each test, what to look at.
 
-**Which receiver to watch.** Several receivers run deep breaking routes in the same play, and only the one who runs this route changes. In the plays with the most playbooks it is:
+**Which play to test with.** The window picks it for you; it is in step 2 of every test: the team to play as, that team's **base playbook** (the game's own, never a custom one), the exact play with its **PLYL** (the play's id in the game files), its formation and set (several sets are called "Normal"), and where the receiver lines up (for example *WR1, wide on the right, about 15 yards right of the middle and 2 yards behind the line, closest to the sideline*). Several receivers run deep breaking routes in the same play, and only the one who runs this route changes, so watch that one. The window uses your team when its playbook has a good play for this (an ordinary pass that throws to that receiver), otherwise another team, and names a few more teams that have the same play. **Use the same play for every test.** (A playbook can show a play under another name: go by the formation, the set and the receiver.)
 
-| Play (set, formation) | the receiver |
-|---|---|
-| FL Post (Normal, I Form) | WR1, wide on the right |
-| Cross Up (Normal Slot, Singleback) | WR1, wide on the right |
-| Panther Cross (4WR, Shotgun) | WR1, wide on the right |
-| WR Option (Slot Strong, Singleback) | WR3, wide on the right |
-| Play Action (Normal, I Form) | WR1, wide on the right |
-| WR Post (Normal, I Form) | WR1, wide on the right |
-
-(The window prints this list for your own copy of the game, with the playbooks that have each play.) **If a test seems to change nothing, check B0 and that test again with a second play from the list before you report "no change"**; a receiver you did not watch is the usual reason. For every test:
+The route is the *Post* that *WR Post*, *FL Post*, *Cross Up* and others use; it is used by 58 receivers in 42 of the game's playbooks. **Copy all plays that use this route** (bottom left of the window) copies every one of them with its PLYL, formation, receiver and all its playbooks, if you want to choose another. **If a test seems to change nothing, check B0 and that test again with a second play before you report "no change"**; a receiver you did not watch is the usual reason. For every test:
 
 1. Close RPCS3. Select the test in the list and press **1. Apply this test**.
-2. Start the game and a quick game (**Play Now**) with a team whose playbook has one of the plays the window lists (WR Post, FL Post, Cross Up ... most playbooks have one; if yours has none, choose another team). On offense, call the play.
-3. Run it three or four times and watch the receiver named in the list above for that play (the one with the long run up the field and a break). The replay helps. **Count yards using the field's yard lines: how many yards past the line of scrimmage does he run before he breaks?** Which way does he break? How far does he run after the break?
+2. Start the game and a quick game (**Play Now**) as the team step 2 of the window names, and play offense. Call the play it names.
+3. Run it three or four times and watch the receiver step 2 names (the one with the long run up the field and a break). The replay helps. **Count yards using the field's yard lines: how many yards past the line of scrimmage does he run before he breaks?** Which way does he break? How far does he run after the break?
 4. Close the game, fill in the form in the window (**2. Your answer**) and press **Save my answer**. It keeps your answers even if you close the editor.
 
 **The order** (the window shows the same list):

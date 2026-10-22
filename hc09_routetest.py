@@ -62,10 +62,82 @@ RESULT_FIELDS = (
 )
 
 
-def watch_line(play, set_name, formation, slot, side):
-    """"WR Post (Normal, Singleback): WR1, wide on the right": which receiver runs the route in a play."""
-    where = {"left": "wide on the left", "right": "wide on the right", "middle": "near the middle"}.get(side, side)
-    return f"{play} ({set_name}, {formation}): {slot}, {where}"
+def receiver_text(label, x, y, rank=0, n=1):
+    """Where the receiver on the route lines up, in words: "WR1, wide on the right, about 15 yards right of the middle and 2 yards behind the line (closest to the sideline)".
+    x: yards across the field (plus is the right, 0 the middle), y: yards from the line of scrimmage (minus is behind it), rank: how many players of his kind stand further out on his side,
+    n: how many stand on that side."""
+    behind = abs(y)
+    back = f"{behind:.0f} yard{'s' if round(behind) != 1 else ''} behind the line"
+    if abs(x) < 2.5:
+        return f"{label}, in the middle of the field, {back}"
+    side = "right" if x > 0 else "left"
+    place = {0: "closest to the sideline", 1: "second in from the sideline", 2: "third in from the sideline"}.get(rank, f"number {rank + 1} in from the sideline")
+    return f"{label}, wide on the {side}, about {abs(x):.0f} yards {side} of the middle and {back}" + (f" ({place})" if n > 1 else "")
+
+
+def watch_line(play, plyl, set_name, formation, who, book_names):
+    """"WR Post (PLYL 1159) - Normal, I Form - WR1, wide on the right, ... - 7 playbooks: Reid All Passing, Zorn West Coast, and 5 more": a play that uses the route, with its id (PLYL), set and
+    formation (several sets are called "Normal"), the receiver (receiver_text) and the playbooks that have it. who: [receiver_text]."""
+    names = list(book_names)
+    shown = ", ".join(names[:2]) + (f", and {len(names) - 2} more" if len(names) > 2 else "")
+    return f"{play} (PLYL {plyl}) - {set_name}, {formation} - {' and '.join(who)} - {len(names)} playbook{'s' if len(names) != 1 else ''}" + (f": {shown}" if names else "")
+
+
+def choose_play(entries, book_names, holders, my_team="", my_book=None):
+    """The one play and team a tester should use. entries: [{"plyl", "name", "set", "form", "who", "books": [playbook ids], "read": the route runner's place in the quarterback's reads
+    (0 when the play is not a pass or he is not a read), "option": an option play} with the plays in the most playbooks first; book_names: {playbook id: name}; holders: {playbook id: [teams
+    that play it]}; my_team / my_book: the team chosen in the editor and the playbook it plays. An ordinary pass that throws to the route runner is the easiest to watch (a run play only uses him
+    as a decoy, an option play is hard to follow): the tester's own team when its playbook has such a play, else the best such play and a team that plays one of its playbooks, then worse plays the
+    same way. Returns {"entry", "team", "playbook", "others": [(team, playbook)]} or None."""
+    if not entries:
+        return None
+    name_of = lambda b: book_names.get(b, f"playbook {b}")
+
+    def build(e, book, team):
+        others = []
+        for b in sorted(e["books"], key=name_of):
+            for t in holders.get(b, ()):
+                if t != team and all(t != o[0] for o in others) and len(others) < 3:
+                    others.append((t, name_of(b)))
+        return {"entry": e, "team": team, "playbook": name_of(book) if book is not None else "", "others": others}
+
+    tiers = [[e for e in entries if e.get("read") and not e.get("option")], [e for e in entries if e.get("read")], entries]
+    if my_book is not None:
+        for tier in tiers[:1]:
+            for e in tier:
+                if my_book in e["books"]:
+                    return build(e, my_book, my_team)
+    for tier in tiers:
+        for e in tier:
+            for b in sorted(e["books"], key=name_of):
+                if holders.get(b):
+                    return build(e, b, holders[b][0])
+    e = next((tier[0] for tier in tiers if tier), entries[0])           # no team has one: the best play anyway, with the first base playbook that has it
+    return build(e, sorted(e["books"], key=name_of)[0] if e["books"] else None, "")
+
+
+def play_text(pick):
+    """Step 2 of a test in words: which team to be, which play to call, which receiver to watch."""
+    e = pick["entry"]
+    if pick["team"]:
+        start = f"Start a quick game (Play Now) as the {pick['team']} (their base playbook: {pick['playbook']}) and play offense."
+    elif pick["playbook"]:
+        start = f"Start a quick game (Play Now) with a team whose base playbook is {pick['playbook']} and play offense."
+    else:
+        start = "Start a quick game (Play Now) and play offense."
+    text = f"{start} Call {e['name']} (PLYL {e['plyl']}): the {e['form']} formation, the {e['set']} set. Watch {' and '.join(e['who'])}. Use this same play for every test."
+    if pick["others"]:
+        text += " If you cannot use that team: " + "; ".join(f"the {t} ({b})" for t, b in pick["others"]) + " have it too."
+    return text
+
+
+def full_list(entries, book_names):
+    """Every play that uses the route, for the chat: PLYL, name, set, formation, receiver and all its playbooks."""
+    lines = [f"Plays that use the route (step list {PSAL}): {len(entries)} plays (PLYL = the play's id in the game files)", ""]
+    for e in entries:
+        names = [book_names.get(b, f"playbook {b}") for b in sorted(e["books"], key=lambda b: book_names.get(b, ""))]
+        lines.append(f"PLYL {e['plyl']} | {e['name']} | set {e['set']} | {e['form']} | {' and '.join(e['who'])} | {len(names)} playbook(s): {'; '.join(names)}")
+    return "\n".join(lines) + "\n"
 
 
 def side_of(x):
