@@ -7109,6 +7109,7 @@ class RouteTestDialog(tk.Toplevel):
         play_names = ", ".join(n for n, _ in info["plays"][:14])
         self.play_text = play_names + (" ..." if len(info["plays"]) > 14 else "")
         self.pick_text = RT.play_text(info["pick"]) if info.get("pick") else "Find one of the plays that use the route in your playbook (the button at the bottom copies the list of all of them)."
+        self.cap_text = RT.cap_text(info["cap_pick"]) if info.get("cap_pick") else ""
 
         ttk.Label(self, wraplength=1130, justify="left", padding=(14, 12, 14, 2), font=("", 11, "bold"),
                   text="Help find out what the numbers in a route mean: change them one at a time, watch the receiver in the game, say what you saw.").pack(anchor="w")
@@ -7129,8 +7130,16 @@ class RouteTestDialog(tk.Toplevel):
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._select())
         right = ttk.Frame(main)
         right.pack(side="left", fill="both", expand=True, padx=(14, 0))
-        self.lbl_title = ttk.Label(right, font=("", 12, "bold"), wraplength=640, justify="left")
-        self.lbl_title.pack(anchor="w")
+        trow = ttk.Frame(right)
+        trow.pack(fill="x")
+        self.mode_var = tk.StringVar(value="play")
+        self.rb_cap = ttk.Radiobutton(trow, text="Create-A-Play" if self.cap_text else "Create-A-Play (not available)", value="cap", variable=self.mode_var, command=self._refresh_steps,
+                                      state="normal" if self.cap_text else "disabled")
+        self.rb_cap.pack(side="right", padx=(8, 0))
+        ttk.Radiobutton(trow, text="Play Now", value="play", variable=self.mode_var, command=self._refresh_steps).pack(side="right")
+        ttk.Label(trow, text="Test with:").pack(side="right", padx=(0, 6))
+        self.lbl_title = ttk.Label(trow, font=("", 12, "bold"), wraplength=400, justify="left")
+        self.lbl_title.pack(side="left", anchor="w")
         self.lbl_steps = ttk.Label(right, wraplength=640, justify="left", padding=(0, 2, 0, 2))
         self.lbl_steps.pack(anchor="w")
         row = ttk.Frame(right)
@@ -7189,13 +7198,7 @@ class RouteTestDialog(tk.Toplevel):
         t = RT.TEST_BY_ID[sel[0]]
         self.current = t
         self.lbl_title.configure(text=f"{t['id']}: {t['title']}")
-        self.lbl_steps.configure(text=(f"What it changes: {RT.describe_changes(t['id'])}\nWhat it asks: {t['asks']}\n\n"
-                                       "1.  Close RPCS3 if it is running, then press Apply this test" + (" (this one changes nothing: it is only the control)" if not t["changes"] else "") + ".\n"
-                                       f"2.  {self.pick_text}\n"
-                                       "3.  Run the play three or four times and watch THAT receiver (several others run deep breaking routes in the same play: the one named in step 2 is the one that changes). You can watch the replay. "
-                                       "If a test seems to change nothing, check B0 and the test again with a second play (the button at the bottom copies the list of all plays that use this route) before you say so.\n"
-                                       f"4.  Look at this: {t['watch']}\n"
-                                       "5.  Close the game and fill in your answer below."))
+        self._refresh_steps()
         r = self.state["results"].get(t["id"], {})
         for key, var in self.vars.items():
             var.set(r.get(key, ""))
@@ -7251,6 +7254,20 @@ class RouteTestDialog(tk.Toplevel):
         self.clipboard_clear()
         self.clipboard_append(self._text())
         messagebox.showinfo("Route test", "Your answers are copied. Paste them into the chat (Ctrl+V).", parent=self)
+
+    def _refresh_steps(self):
+        """The text of the selected test. Step 2 follows the Test with switch: a team's playbook in Play Now (the default) or the game's Create-A-Play."""
+        t = self.current
+        if t is None:
+            return
+        step2 = self.cap_text if self.mode_var.get() == "cap" and self.cap_text else self.pick_text
+        self.lbl_steps.configure(text=(f"What it changes: {RT.describe_changes(t['id'])}\nWhat it asks: {t['asks']}\n\n"
+                                       "1.  Close RPCS3 or Xenia if it is running, then press Apply this test" + (" (this one changes nothing: it is only the control)" if not t["changes"] else "") + ".\n"
+                                       f"2.  {step2}\n"
+                                       "3.  Run the play three or four times and watch THAT receiver (several others run deep breaking routes in the same play: the one named in step 2 is the one that changes). You can watch the replay. "
+                                       "If a test seems to change nothing, check B0 and the test again with a second play (the button at the bottom copies the list of all plays that use this route) before you say so.\n"
+                                       f"4.  Look at this: {t['watch']}\n"
+                                       "5.  Close the game and fill in your answer below."))
 
     def _copy_plays(self):
         self.clipboard_clear()
@@ -11301,6 +11318,26 @@ class App(tk.Tk):
             raise RuntimeError("The play database with the routes was not found in the game file.")
         return RT.rows_of(read_csv(os.path.join(cache, f"pslo_{max(copies, key=lambda c: c['tables']['PSLO'])['base']}.csv")))
 
+    def _create_a_play_pool(self, archives):
+        """{play id: the name Create-A-Play shows} for the plays of the game's Create-A-Play: the smaller copy of the play database that has exactly one play per set (qkl_fe2ig.ast entry 1676,
+        the community's File01676). {} when it is not found (it lives in qkl_fe2ig.ast, so without that archive there is nothing to find)."""
+        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "capool")
+        shutil.rmtree(cache, ignore_errors=True)
+        try:
+            scan = self.model.run_bridge(["play-sets-scan", "--asts", ",".join(archives), "--out-dir", cache, "--tables", "PLYL"])
+            best = {}
+            for c in scan["copies"]:
+                if (c["tables"].get("PLYL") or 0) < 50:
+                    continue
+                rows = read_csv(os.path.join(cache, f"plyl_{c['base']}.csv"))
+                if len({r["SETL"] for r in rows}) == len(rows) and len(rows) > len(best):
+                    best = {int(r["PLYL"]): r["name"] for r in rows}
+            return best
+        except Exception:
+            return {}
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)
+
     def route_test_prepare(self, boot, archives=None, playbooks=None, coaches=None, team_id=""):
         """Everything the Route test window needs: the master copy's place in the archive, the route's rows now, the plays that use the route (one line each, with the play's id and
         formation and where the receiver lines up), the exact play and team to test with, and how many playbooks have them (archives: both game archives when known, which gives the
@@ -11308,6 +11345,7 @@ class App(tk.Tk):
         if not self._playbook_names_cached():
             self._extract_playbook_names(boot)
         lib = self.load_play_library(archives or [boot])
+        pool = self._create_a_play_pool(archives or [boot])
         rows = RT.rows_of(lib.tables["PSLO"])
         e = lib.usage().get(("offense", RT.PSAL))
         book_names = {}
@@ -11330,6 +11368,7 @@ class App(tk.Tk):
             al = lib.alignment(d["set"]["setl"])
             skill = [(s_["poso"], al[s_["poso"]]["x"]) for s_ in d["slots"] if s_["epos"] in (1, 2, 3, 4) and s_["poso"] in al]
             who = []
+            ranks = []
             reads = d["passing"]
             order = [(int(reads[f"rcv{k}"]), int(reads[f"per{k}"])) for k in range(1, 6)] if reads else []
             read = 0
@@ -11341,9 +11380,10 @@ class App(tk.Tk):
                         read = min(read or 9, k)
                 x, y = al[sl["poso"]]["x"], al[sl["poso"]]["y"]
                 same = [sx for p_, sx in skill if sx * x > 0 and abs(sx) >= 2.5]
-                who.append(RT.receiver_text(sl["label"], x, y, sum(1 for sx in same if abs(sx) > abs(x) + 1e-6), len(same)))
+                ranks.append(sum(1 for sx in same if abs(sx) > abs(x) + 1e-6))
+                who.append(RT.receiver_text(sl["label"], x, y, ranks[-1], len(same)))
             if who:
-                entries.append({"plyl": plyl, "name": play["name"], "set": d["set"]["name"], "form": lib.form_names.get(d["set"]["form"], str(d["set"]["form"])), "who": who, "books": sorted(books), "read": read, "option": bool(d["option"])})
+                entries.append({"plyl": plyl, "name": play["name"], "set": d["set"]["name"], "form": lib.form_names.get(d["set"]["form"], str(d["set"]["form"])), "who": who, "books": sorted(books), "read": read, "option": bool(d["option"]), "rank": min(ranks) if ranks else 0, "cap": pool.get(plyl)})
         entries.sort(key=lambda x: (-len(x["books"]), x["name"], x["plyl"]))           # the plays in the most playbooks first
         holders = {}
         my_book = None
@@ -11358,7 +11398,7 @@ class App(tk.Tk):
         lines = [RT.watch_line(x["name"], x["plyl"], x["set"], x["form"], x["who"], [book_names.get(b, f"playbook {b}") for b in x["books"]]) for x in entries]
         return {"boot": boot, "copy": lib._master, "rows": rows, "plays": sorted(((n, len(b)) for n, b in plays.items()), key=lambda x: (-x[1], x[0])),
                 "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs}), "watch": lines, "pick": pick,
-                "all_plays": RT.full_list(entries, book_names)}
+                "cap_pick": RT.choose_cap_play(entries, book_names), "cap_plays": sum(1 for x in entries if x.get("cap")), "all_plays": RT.full_list(entries, book_names)}
 
     def route_test_apply(self, info, test_id):
         """Make the route the way a test wants it (backing the file up first, as every write of the game files does); returns the route's rows afterwards."""
