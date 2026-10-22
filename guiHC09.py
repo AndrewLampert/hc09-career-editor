@@ -5679,7 +5679,7 @@ class PlayDesignerDialog(tk.Toplevel):
         for iid in self.slots.get_children():
             self.slots.delete(iid)
         for sl in slots:
-            self.slots.insert("", tk.END, iid=str(sl["poso"]), values=(sl["label"], steps_in_words(sl["steps"], self.detail["table"], sl["epos"])), tags=("changed",) if sl["poso"] in self.overrides else ())
+            self.slots.insert("", tk.END, iid=str(sl["poso"]), values=(sl["label"], self._job_text(sl)), tags=("changed",) if sl["poso"] in self.overrides else ())
         if keep and self.slots.exists(keep[0]):
             self.slots.selection_set(keep[0])
         p = d["play"]
@@ -5698,6 +5698,15 @@ class PlayDesignerDialog(tk.Toplevel):
         self._refresh_kind()
         self._slot_selected()
         self._draw()
+
+    def _job_text(self, sl):
+        """What a player does in the chooser's words (Slant, medium; Pass block; Man coverage), or the step words when the catalogue has no name for it."""
+        if self.catalog is not None and self.detail["side"] in ("offense", "defense"):
+            label = self.catalog.label_of(self.detail["table"], sl["epos"], sl["x"], sl["y"], (sl["psal"], sl["artl"], sl["plrr"]))[0]
+            if label.startswith("Other route: "):
+                return label[len("Other route: "):].capitalize() + " (an unusual route)"
+            return label
+        return steps_in_words(sl["steps"], self.detail["table"], sl["epos"])
 
     def _selected_poso(self):
         sel = self.slots.selection()
@@ -5817,7 +5826,7 @@ class JobDialog(tk.Toplevel):
         left = ttk.Frame(main)
         left.pack(side="left", fill="both", expand=True)
         self.tree = ttk.Treeview(left, columns=("label", "uses"), show="headings", selectmode="browse")
-        for c, (text, width, anchor) in zip(("label", "uses"), [("Choice", 380, "w"), ("Plays that use it", 110, "e")]):
+        for c, (text, width, anchor) in zip(("label", "uses"), [("Choice", 380, "w"), ("Times the game uses it", 150, "e")]):
             self.tree.heading(c, text=text)
             self.tree.column(c, width=width, anchor=anchor, stretch=(c == "label"))
         ys = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)

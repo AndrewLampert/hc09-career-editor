@@ -56,7 +56,8 @@ class JobCatalog:
                 c = classify(art, x)
                 if c and c["name"] != "Other":
                     motion = ", after motion" if 45 in sig else ""
-                    return f"{c['name']}, {c['depth_word']}{motion}", "Routes", {"name": c["name"], "depth_word": c["depth_word"]}
+                    depth = "" if c["name"] in ("Go", "Fade", "Wheel") else f", {c['depth_word']}"       # these are deep by definition; the art's squeezed scale would say otherwise
+                    return f"{c['name']}{depth}{motion}", "Routes", {"name": c["name"], "depth_word": c["depth_word"]}
                 return "Other route: " + words, "Routes", {}
             if beh in ("pass block", "run block"):
                 return words[:1].upper() + words[1:], "Blocks", {}
@@ -138,7 +139,7 @@ class JobCatalog:
         def sort_key(r):
             if r["category"] == "Routes" and r["label"].split(",")[0] in ROUTE_ORDER:
                 parts = [x.strip() for x in r["label"].split(",")]
-                return (order.get(r["category"], 99), ROUTE_ORDER.index(parts[0]), depth_rank.get(parts[1] if len(parts) > 1 else "", 3), len(parts), -r["uses"])
+                return (order.get(r["category"], 99), ROUTE_ORDER.index(parts[0]), depth_rank.get(parts[1] if len(parts) > 1 else "", -1), len(parts), -r["uses"])
             return (order.get(r["category"], 99), 99, 0, 0, -r["uses"], r["label"])
         out.sort(key=sort_key)
         return out
