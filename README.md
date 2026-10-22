@@ -58,7 +58,11 @@ export/import through HC09Editor required.
   play works as that kind. Any slot can be given any of the game's assignments, and
   **Make custom play...** writes the result as a custom play into *copies* of your profile and career
   saves (nothing of yours is touched). The game has not been tried with these files yet, so treat it
-  as an experiment, with backups. See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
+  as an experiment, with backups. **Pass reads...** sets the order the quarterback looks to his receivers, and **Move players...** puts the offensive players somewhere else on the field (both are written into the new play's own rows in your profile). See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
+  Testing it in the game: **Install in my game** (in the save window) puts a made play into your profile
+  and career after saving them, **Put my saves back** undoes it, and **Route test (testers)...** changes the numbers of
+  one route a step at a time for the tests that show what they mean; the exact order of the tests and how
+  to write the results down is in [docs/hc09_test_guide.md](docs/hc09_test_guide.md).
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
   (rebuilds each player's overall under one of the game's team position presets,
   such as Cover 2 or Man Coverage CB, with the game's own formulas, and ranks them; select a

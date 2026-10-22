@@ -211,6 +211,41 @@ class PlayLibrary:
                     votes["offense" if in_o else "defense"] += 1
         return votes.most_common(1)[0][0] if votes else "offense"
 
+    # ---- alignment: where the players line up on the field, in yards (the SETG floats), and how the diagram's picture draws it
+    def alignment(self, setl):
+        """{poso: {"x", "y", "fx", "fy", "setp", "partner"}} for a set's normal alignment group, in yards: x across the field (plus is the right side), y from the line of scrimmage
+        (minus is behind it); fx / fy is where the slot lines up when the play is flipped, which is where another slot, "partner", lines up mirrored (partner is None when no slot
+        matches)."""
+        cache = self.__dict__.setdefault("_align_cache", {})
+        if setl in cache:
+            return cache[setl]
+        if "_setg_by_group" not in self.__dict__:
+            by = collections.defaultdict(list)
+            for r in self.tables["SETG"]:
+                by[int(r["SGF_"])].append(r)
+            self._setg_by_group = by
+        out = {}
+        group = next((g for g in self.tables["SGFF"] if int(g["SETL"]) == setl and g["dflt"] == "1"), None)
+        s = self.sets.get(setl)
+        if group is not None and s is not None:
+            poso_of = {sl["setp"]: sl["poso"] for sl in s["slots"]}
+            for r in self._setg_by_group.get(int(group["SGF_"]), []):
+                poso = poso_of.get(int(r["SETP"]))
+                if poso is not None:
+                    out[poso] = {"x": float_bits(r["x___"]), "y": float_bits(r["y___"]), "fx": float_bits(r["fx__"]), "fy": float_bits(r["fy__"]), "setp": int(r["SETP"]), "partner": None}
+            for i, a in out.items():
+                for j, b in out.items():
+                    if abs(a["fx"] + b["x"]) < 0.02 and abs(a["fy"] - b["y"]) < 0.02:
+                        a["partner"] = j
+                        break
+        cache[setl] = out
+        return out
+
+    def yard_map(self):
+        if "_yard_map" not in self.__dict__:
+            self._yard_map = YardMap(self)
+        return self._yard_map
+
     # ---- plays
     @staticmethod
     def side_key(side):
@@ -325,6 +360,64 @@ class PlayLibrary:
         return entry["plrr"].most_common(1)[0][0] if entry["plrr"] else 2
 
 
+ALIGN_X = 22.0            # a player may line up this many yards either side of the center (the game's offensive sets use up to 17.5)
+ALIGN_Y = (-12.0, -0.4)   # and from 0.4 to 12 yards behind the line of scrimmage (the game's sets use 0.6 to 10.6)
+
+
+class YardMap:
+    """How the diagram's picture draws yards. The picture squeezes the field (wide spots are drawn closer together, so a wide receiver 17.5 yards out is 75 units from the
+    middle while a tackle 3.3 yards out is 24), so the two are related by a curve, found here from where the game's own offensive sets stand in both: art(x, y) gives the
+    picture's units for yards, yards(artx, arty) the other way round."""
+
+    def __init__(self, lib):
+        px, py = collections.defaultdict(list), collections.defaultdict(list)
+        for s in lib.sets.values():
+            if s["side"] != "offense":
+                continue
+            al = lib.alignment(s["setl"])
+            for sl in s["slots"]:
+                a = al.get(sl["poso"])
+                if a:
+                    px[round(a["x"] * 4) / 4].append(sl["x"])
+                    py[round(-a["y"] * 2) / 2].append(sl["y"])
+        self.xt = self._table(px)
+        self.yt = self._table(py)
+
+    @staticmethod
+    def _table(groups):
+        pts = sorted((k, sum(v) / len(v)) for k, v in groups.items() if len(v) >= 2)
+        out, top = [], -1e9
+        for k, v in pts:                  # keep it rising (a single odd set must not fold the curve)
+            if v > top:
+                out.append((k, v))
+                top = v
+        return out
+
+    @staticmethod
+    def _interp(table, v, inverse=False):
+        a = [(t[1], t[0]) for t in table] if inverse else table
+        if v <= a[0][0]:
+            (x0, y0), (x1, y1) = a[0], a[1]
+        elif v >= a[-1][0]:
+            (x0, y0), (x1, y1) = a[-2], a[-1]
+        else:
+            i = next(k for k in range(1, len(a)) if a[k][0] >= v)
+            (x0, y0), (x1, y1) = a[i - 1], a[i]
+        return y0 + (v - x0) * (y1 - y0) / (x1 - x0) if x1 != x0 else y0
+
+    def art(self, x_yd, y_yd):
+        """(artx, arty) in whole diagram units for a place in yards."""
+        ax = self._interp(self.xt, x_yd)
+        ay = self._interp(self.yt, -y_yd)
+        return int(round(min(180, max(0, ax)))), int(round(min(104, max(0, ay))))
+
+    def yards(self, artx, arty):
+        """(x, y) in yards, to a quarter yard, for a place in the picture's units."""
+        x = self._interp(self.xt, artx, inverse=True)
+        y = -self._interp(self.yt, arty, inverse=True)
+        return round(x * 4) / 4, round(y * 4) / 4
+
+
 # ---------- building a custom play (the rows the in-game Create-A-Play writes to the profile save)
 def next_ids(profile):
     """The first free ids in a profile's custom-play tables: {"SETL", "PLYL", "SETP", "SGF_"} from {table: rows}."""
@@ -333,12 +426,17 @@ def next_ids(profile):
     return {"SETL": top("SETL", "SETL"), "PLYL": top("PBPL", "PLYL"), "SETP": top("SETP", "SETP"), "SGF_": top("SGFF", "SGF_")}
 
 
-def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=None):
+def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=None, reads=None, alignment=None):
     """The rows of a new custom play made from the stock play base_plyl: {table: [row dicts with every column of that table as strings]} for the
     profile save (PBPL, SETL, SETP, SETG, SGFF, PLYS, and PLPD / PLRD / PLCM when the base play has them), and a summary.
     overrides: {poso: (PSAL, ARTL, PLRR)} replaces a slot's assignment with any step list of the game (PSAL, ARTL and PLRR taken from library entries).
     plan: a hc09_playtypes conversion plan, when the play was turned into another kind of play: its PLYT is used, and the PLPD / PLRD / PLCM rows come from the
     stock play of that kind it names (tables_from) or are the ones it synthesised, instead of the base play's.
+    reads: the quarterback's progression for a pass play, [(slot, chance)] for five different skill slots in the order he looks to them (the in-game editor's "progressions"; a
+    chance is 0 to 100): it replaces the copied PLPD row. A play that is not a pass has no reads and ignores it.
+    alignment: {slot: (x, y)} in yards (x across, plus to the right; y from the line, minus behind it) for the players to line up somewhere else than the stock set has them:
+    written to the new set's own SETG rows of the normal alignment group (and to the flipped position of the slot that mirrors him) and, in the diagram's units, to its SETP rows;
+    the pre-snap motion alignment groups are copied as they are.
     The alignment is the stock set's, in the diagram's units (a custom set keeps the diagram coordinates in both the formation and the art columns); each of
     the set's alignment groups (the normal one and the pre-snap motion variants) is copied with its SETG rows. Ids come after the profile's own."""
     d = lib.detail(base_plyl)
@@ -353,20 +451,41 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
     ptype = plyt if plyt is not None else (plan["plyt"] if plan is not None else base["plyt"])
     rows["PBPL"].append({"SETL": new_setl, "PLYL": new_plyl, "SITT": 2, "PLYT": ptype, "PLF_": base["plf"], "name": name, "risk": 0, "motn": base["motn"], "vpos": base["vpos"]})
     rows["SETL"].append({"SETL": new_setl, "FORM": CREATED_FORMATION, "MOTN": bset["motn"], "SETT": bset["sett"], "SITT": 0, "SLF_": 0, "name": "Created", "poso": 0})
+    stock_al = lib.alignment(bset["setl"])
+    moved = {}
+    for poso, (mx, my) in (alignment or {}).items():
+        if poso not in stock_al:
+            raise ValueError(f"Slot {poso} is not in this set.")
+        if not (-ALIGN_X <= float(mx) <= ALIGN_X and ALIGN_Y[0] <= float(my) <= ALIGN_Y[1]):
+            raise ValueError(f"A player lines up within {ALIGN_X:g} yards of the middle and between {-ALIGN_Y[1]:g} and {-ALIGN_Y[0]:g} yards behind the line.")
+        if (abs(float(mx) - stock_al[poso]["x"]) > 0.001 or abs(float(my) - stock_al[poso]["y"]) > 0.001):
+            moved[poso] = (float(mx), float(my))
+    ymap = lib.yard_map() if moved else None
     setp_ids = {}
     for i, sl in enumerate(bset["slots"]):
         setp_ids[sl["setp"]] = ids["SETP"] + i
+        ax, ay = ymap.art(*moved[sl["poso"]]) if sl["poso"] in moved else (sl["x"], sl["y"])
         rows["SETP"].append({"SETL": new_setl, "SETP": ids["SETP"] + i, "SGT_": 0, "arti": 5 if sl["epos"] == 7 else 4, "opnm": 0, "tabo": sl["tabo"], "poso": sl["poso"], "odep": 0,
-                             "flas": 0, "DPos": sl["dpos"], "EPos": sl["epos"], "fmtx": sl["x"], "artx": sl["x"], "fmty": sl["y"], "arty": sl["y"]})
+                             "flas": 0, "DPos": sl["dpos"], "EPos": sl["epos"], "fmtx": ax, "artx": ax, "fmty": ay, "arty": ay})
     groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == bset["setl"]]
     group_map = {}
     for i, g in enumerate(sorted(groups, key=lambda g: -int(g["dflt"]))):
         group_map[int(g["SGF_"])] = ids["SGF_"] + i
         rows["SGFF"].append({"SETL": new_setl, "SGF_": ids["SGF_"] + i, "name": g["name"], "dflt": g["dflt"]})
+    default_group = next((int(g["SGF_"]) for g in groups if g["dflt"] == "1"), None)
+    poso_of_setp = {sl["setp"]: sl["poso"] for sl in bset["slots"]}
     for g in lib.tables["SETG"]:
         if int(g["SETP"]) in setp_ids and int(g["SGF_"]) in group_map:
-            rows["SETG"].append({"SETP": setp_ids[int(g["SETP"])], "SGF_": group_map[int(g["SGF_"])], "SF__": g["SF__"], "x___": g["x___"], "y___": g["y___"], "fx__": g["fx__"],
-                                 "fy__": g["fy__"], "anm_": g["anm_"], "dir_": g["dir_"], "fanm": g["fanm"], "fdir": g["fdir"]})
+            row = {"SETP": setp_ids[int(g["SETP"])], "SGF_": group_map[int(g["SGF_"])], "SF__": g["SF__"], "x___": g["x___"], "y___": g["y___"], "fx__": g["fx__"],
+                   "fy__": g["fy__"], "anm_": g["anm_"], "dir_": g["dir_"], "fanm": g["fanm"], "fdir": g["fdir"]}
+            if moved and int(g["SGF_"]) == default_group:
+                poso = poso_of_setp[int(g["SETP"])]
+                if poso in moved:
+                    row["x___"], row["y___"] = bits_of_float(moved[poso][0]), bits_of_float(moved[poso][1])
+                partner = stock_al.get(poso, {}).get("partner")
+                if partner in moved:               # flipped, this slot lines up where the partner is, mirrored
+                    row["fx__"], row["fy__"] = bits_of_float(-moved[partner][0]), bits_of_float(moved[partner][1])
+            rows["SETG"].append(row)
     for sl in d["slots"]:
         psal, artl, plrr = overrides.get(sl["poso"], (sl["psal"], sl["artl"], sl["plrr"]))
         if psal not in lib.steps[d["table"]]:
@@ -387,7 +506,17 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
         rows["PLPD"].append({**synth["PLPD"], "PLYL": new_plyl})
     for r in synth.get("PLRD") or []:
         rows["PLRD"].append({"PLYL": new_plyl, "hole": r["hole"]})
-    summary = {"setl": new_setl, "plyl": new_plyl, "name": name, "plyt": ptype, "from": base["name"], "slots_changed": sorted(overrides), "rows": {k: len(v) for k, v in rows.items()}}
+    if reads is not None and rows.get("PLPD"):
+        skill = {sl["poso"] for sl in bset["slots"] if sl["epos"] in (1, 2, 3, 4)}
+        if len(reads) != 5 or len({int(p) for p, _ in reads}) != 5 or any(int(p) not in skill for p, _ in reads) or any(not 0 <= int(c) <= 100 for _, c in reads):
+            raise ValueError("The pass reads are five different receivers (halfbacks, fullbacks, receivers, tight ends), each with a chance from 0 to 100.")
+        row = {"PLYL": new_plyl}
+        for k, (poso, chance) in enumerate(reads, 1):
+            row[f"rcv{k}"] = int(poso)
+            row[f"per{k}"] = int(chance)
+        rows["PLPD"] = [row]
+    summary = {"setl": new_setl, "plyl": new_plyl, "name": name, "plyt": ptype, "from": base["name"], "slots_changed": sorted(overrides), "slots_moved": sorted(moved),
+               "rows": {k: len(v) for k, v in rows.items()}}
     return dict(rows), summary
 
 
