@@ -1248,7 +1248,9 @@ def safe_int(s):
 # Other positions use the same formulas unchecked in the game. docs/hc09_position_presets.md has the readings. This
 # replaces an earlier version built on PLYT, the game's 37 player-generation archetypes, which are not the presets.
 # -----------------------------
-PHILOSOPHY_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "philosophies")
+# Where the game data read from the game's files is cached (gitignored). HC09_CACHE_DIR moves it, so that several copies of the editor (the tests, run side by side) do not wipe each other's data.
+GAMEDATA_CACHE = os.environ.get("HC09_CACHE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache")
+PHILOSOPHY_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "philosophies")
 PHILOSOPHY_WEIGHT_TABLES = ("PEAW", "PEIW", "PEOW", "PESW")
 BODY_WEIGHT_TABLE = "LPHC"     # body-part weights per position and hand, for the Durability grade
 BOOT_AST_FILENAME = "qkl_boot.ast"
@@ -4011,7 +4013,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
 # value (all the 3-4 teams share 1, the Tampa-2 teams share 3), so team usage is
 # read from the coordinators instead.
 # -----------------------------
-PLAYBOOK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "playbooks")
+PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
 PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB"]
 # The four tables that make up a playbook's contents, in CSV column order.
@@ -4425,7 +4427,7 @@ class PhilosophyWeightsDialog(tk.Toplevel):
 # "TE Slot", which override single slots of a set) are not changed.
 # -----------------------------
 PERSONNEL_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-game-file-backup")
-PERSONNEL_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "personnel")
+PERSONNEL_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "personnel")
 PERSONNEL_POSITIONS = {0: "QB", 1: "HB", 2: "FB", 3: "WR", 4: "TE", 5: "LT", 6: "LG", 7: "C", 8: "RG", 9: "RT",
                        10: "LE", 11: "RE", 12: "DT", 13: "LOLB", 14: "MLB", 15: "ROLB", 16: "CB", 17: "FS", 18: "SS"}
 PERSONNEL_OFFENSE_EDITABLE = (1, 2, 3, 4)          # HB FB WR TE: the QB and the line are not changed
@@ -11250,7 +11252,7 @@ class App(tk.Tk):
         """Read the game's plays from the archives (the bridge's play-sets-scan): the master play database holds all of them. About a second; may run
         off the main thread. Needs the archives' paths (found beforehand on the main thread, as that may ask the user)."""
         archives = archives or self._personnel_archives()
-        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "plays")
+        cache = os.path.join(GAMEDATA_CACHE, "plays")
         shutil.rmtree(cache, ignore_errors=True)
         scan = self.model.run_bridge(["play-sets-scan", "--asts", ",".join(archives), "--out-dir", cache, "--tables", self.PLAY_TABLES])
         copies = [c for c in scan["copies"] if c["tables"].get("PLYS") and c["tables"].get("PSLO")]
@@ -11273,7 +11275,7 @@ class App(tk.Tk):
         """The folder with the game's Create-A-Play field picture and receiver numbers (PNG), made by the bridge from qkl_interface.ast next to qkl_boot.ast into the cache, or None
         (the designer then draws on a plain field). The game's own pictures stay on this computer and are never part of the editor."""
         ast = os.path.join(os.path.dirname(boot_ast), "qkl_interface.ast")
-        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "ui")
+        cache = os.path.join(GAMEDATA_CACHE, "ui")
         if not os.path.isfile(ast):
             return None
         try:
@@ -11310,7 +11312,7 @@ class App(tk.Tk):
 
     def route_test_current(self, boot):
         """The route's rows in the game file right now: [(step, code, v1, v2, v3)]."""
-        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "routetest")
+        cache = os.path.join(GAMEDATA_CACHE, "routetest")
         shutil.rmtree(cache, ignore_errors=True)
         scan = self.model.run_bridge(["play-sets-scan", "--asts", boot, "--out-dir", cache, "--tables", "PSLO"])
         copies = [c for c in scan["copies"] if c["tables"].get("PSLO")]
@@ -11321,7 +11323,7 @@ class App(tk.Tk):
     def _create_a_play_pool(self, archives):
         """{play id: the name Create-A-Play shows} for the plays of the game's Create-A-Play: the smaller copy of the play database that has exactly one play per set (qkl_fe2ig.ast entry 1676,
         the community's File01676). {} when it is not found (it lives in qkl_fe2ig.ast, so without that archive there is nothing to find)."""
-        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "capool")
+        cache = os.path.join(GAMEDATA_CACHE, "capool")
         shutil.rmtree(cache, ignore_errors=True)
         try:
             scan = self.model.run_bridge(["play-sets-scan", "--asts", ",".join(archives), "--out-dir", cache, "--tables", "PLYL"])
