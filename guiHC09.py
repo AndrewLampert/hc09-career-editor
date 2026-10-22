@@ -7108,7 +7108,8 @@ class RouteTestDialog(tk.Toplevel):
         self.vars = {}
         play_names = ", ".join(n for n, _ in info["plays"][:14])
         self.play_text = play_names + (" ..." if len(info["plays"]) > 14 else "")
-        self.watch_text = "\n      ".join(info.get("watch", [])[:6])
+        self.pick_text = RT.play_text(info["pick"]) if info.get("pick") else "Find one of the plays that use the route in your playbook (the button at the bottom copies the list of all of them)."
+
         ttk.Label(self, wraplength=1130, justify="left", padding=(14, 12, 14, 2), font=("", 11, "bold"),
                   text="Help find out what the numbers in a route mean: change them one at a time, watch the receiver in the game, say what you saw.").pack(anchor="w")
         ttk.Label(self, wraplength=1130, justify="left", foreground="gray", padding=(14, 0, 14, 4),
@@ -7130,7 +7131,7 @@ class RouteTestDialog(tk.Toplevel):
         right.pack(side="left", fill="both", expand=True, padx=(14, 0))
         self.lbl_title = ttk.Label(right, font=("", 12, "bold"), wraplength=640, justify="left")
         self.lbl_title.pack(anchor="w")
-        self.lbl_steps = ttk.Label(right, wraplength=640, justify="left", padding=(0, 6, 0, 6))
+        self.lbl_steps = ttk.Label(right, wraplength=640, justify="left", padding=(0, 2, 0, 2))
         self.lbl_steps.pack(anchor="w")
         row = ttk.Frame(right)
         row.pack(anchor="w")
@@ -7140,20 +7141,21 @@ class RouteTestDialog(tk.Toplevel):
         form = ttk.LabelFrame(right, text=" 2. Your answer ")
         form.pack(fill="x", pady=(10, 0))
         for i, (key, label, options) in enumerate(RT.RESULT_FIELDS):
-            ttk.Label(form, text=label, wraplength=330, justify="left").grid(row=i, column=0, sticky="w", padx=8, pady=3)
+            ttk.Label(form, text=label, wraplength=330, justify="left").grid(row=i, column=0, sticky="w", padx=8, pady=2)
             var = tk.StringVar()
             self.vars[key] = var
             if options:
                 w = ttk.Combobox(form, textvariable=var, values=list(options), state="readonly", width=44)
             else:
                 w = ttk.Entry(form, textvariable=var, width=46 if key == "notes" else 14)
-            w.grid(row=i, column=1, sticky="w", padx=8, pady=3)
-        ttk.Button(form, text="Save my answer", command=self._save_answer).grid(row=len(RT.RESULT_FIELDS), column=1, sticky="w", padx=8, pady=(4, 8))
+            w.grid(row=i, column=1, sticky="w", padx=8, pady=2)
+        ttk.Button(form, text="Save my answer", command=self._save_answer).grid(row=len(RT.RESULT_FIELDS), column=1, sticky="w", padx=8, pady=(2, 4))
         bottom = ttk.Frame(self)
         bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 12), before=main)
         ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
         ttk.Button(bottom, text="Save my answers to a file", command=self._save_file).pack(side="right", padx=(0, 8))
         ttk.Button(bottom, text="Copy my answers for Discord", style="Accent.TButton", command=self._copy).pack(side="right", padx=(0, 8))
+        ttk.Button(bottom, text="Copy all plays that use this route", command=self._copy_plays).pack(side="left")
         self.bind("<Escape>", lambda e: self.destroy())
         self._fill()
         self._status_from(info["rows"])
@@ -7189,11 +7191,9 @@ class RouteTestDialog(tk.Toplevel):
         self.lbl_title.configure(text=f"{t['id']}: {t['title']}")
         self.lbl_steps.configure(text=(f"What it changes: {RT.describe_changes(t['id'])}\nWhat it asks: {t['asks']}\n\n"
                                        "1.  Close RPCS3 if it is running, then press Apply this test" + (" (this one changes nothing: it is only the control)" if not t["changes"] else "") + ".\n"
-                                       f"2.  Start the game and a quick game (Play Now), and on offense find one of the plays below in your playbook. The route is used by {self.info['uses']} receivers in {self.info['books']} "
-                                       "of the game's playbooks, so another team's playbook usually has one.\n"
-                                       f"      {self.watch_text}\n"
-                                       "3.  Run the play three or four times and watch THAT receiver (several others run deep breaking routes in the same play: the one named above is the one that changes). You can watch the replay. "
-                                       "If a test seems to change nothing, check B0 and the test again with a second play from the list before you say so.\n"
+                                       f"2.  {self.pick_text}\n"
+                                       "3.  Run the play three or four times and watch THAT receiver (several others run deep breaking routes in the same play: the one named in step 2 is the one that changes). You can watch the replay. "
+                                       "If a test seems to change nothing, check B0 and the test again with a second play (the button at the bottom copies the list of all plays that use this route) before you say so.\n"
                                        f"4.  Look at this: {t['watch']}\n"
                                        "5.  Close the game and fill in your answer below."))
         r = self.state["results"].get(t["id"], {})
@@ -7251,6 +7251,12 @@ class RouteTestDialog(tk.Toplevel):
         self.clipboard_clear()
         self.clipboard_append(self._text())
         messagebox.showinfo("Route test", "Your answers are copied. Paste them into the chat (Ctrl+V).", parent=self)
+
+    def _copy_plays(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.info.get("all_plays", ""))
+        messagebox.showinfo("Route test", f"The list of all {len(self.info.get('watch', []))} plays that use this route is copied: the play's id (PLYL), set, formation, where the receiver lines up and the playbooks. "
+                            "Paste it into the chat (Ctrl+V).", parent=self)
 
     def _save_file(self):
         os.makedirs(self.app.ROUTE_TEST_DIR, exist_ok=True)
@@ -11295,25 +11301,64 @@ class App(tk.Tk):
             raise RuntimeError("The play database with the routes was not found in the game file.")
         return RT.rows_of(read_csv(os.path.join(cache, f"pslo_{max(copies, key=lambda c: c['tables']['PSLO'])['base']}.csv")))
 
-    def route_test_prepare(self, boot, archives=None):
-        """Everything the Route test window needs: the master copy's place in the archive, the route's rows now, the plays that use the route and how many playbooks have them
-        (archives: both game archives when known, which gives the formations their names)."""
+    def route_test_prepare(self, boot, archives=None, playbooks=None, coaches=None, team_id=""):
+        """Everything the Route test window needs: the master copy's place in the archive, the route's rows now, the plays that use the route (one line each, with the play's id and
+        formation and where the receiver lines up), the exact play and team to test with, and how many playbooks have them (archives: both game archives when known, which gives the
+        formations their names; playbooks / coaches / team_id: the Playbooks tab's data, the loaded save's coaches and the chosen team, which say which team plays which playbook)."""
+        if not self._playbook_names_cached():
+            self._extract_playbook_names(boot)
         lib = self.load_play_library(archives or [boot])
         rows = RT.rows_of(lib.tables["PSLO"])
         e = lib.usage().get(("offense", RT.PSAL))
+        book_names = {}
+        try:
+            for r in read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv")):
+                pbgi = safe_int(r.get("PBGI", ""))
+                if pbgi is not None and (r.get("BNAM") or "").strip():
+                    book_names.setdefault(pbgi, (r.get("BNAM") or "").strip())
+        except Exception:
+            pass
         plays = defaultdict(set)
-        watch = {}
+        entries = []
         for plyl in (e["plays"] if e else ()):
             play = lib.plays[plyl]
-            plays[play["name"]] |= lib.books_of_play.get(plyl, set())
+            books = {b for b in lib.books_of_play.get(plyl, set()) if not book_names or b in book_names}       # the game's own (base) playbooks only: never a custom one
+            plays[play["name"]] |= books
             d = lib.detail(plyl)
+            if d["side"] != "offense":
+                continue
+            al = lib.alignment(d["set"]["setl"])
+            skill = [(s_["poso"], al[s_["poso"]]["x"]) for s_ in d["slots"] if s_["epos"] in (1, 2, 3, 4) and s_["poso"] in al]
+            who = []
+            reads = d["passing"]
+            order = [(int(reads[f"rcv{k}"]), int(reads[f"per{k}"])) for k in range(1, 6)] if reads else []
+            read = 0
             for sl in d["slots"]:
-                if sl["psal"] == RT.PSAL and d["side"] == "offense":
-                    key = (play["name"], d["set"]["name"], lib.form_names.get(d["set"]["form"], str(d["set"]["form"])))
-                    watch.setdefault(key, (len(lib.books_of_play.get(plyl, ())), []))[1].append(f"{sl['label']}, " + {"left": "wide on the left", "right": "wide on the right", "middle": "near the middle"}[RT.side_of(sl["x"])])
-        lines = [f"{k[0]} ({k[1]}, {k[2]}): " + " and ".join(v[1]) for k, v in sorted(watch.items(), key=lambda kv: (-kv[1][0], kv[0]))]
+                if sl["psal"] != RT.PSAL or sl["poso"] not in al:
+                    continue
+                for k, (rp, per) in enumerate(order, 1):
+                    if rp == sl["poso"] and per > 0:
+                        read = min(read or 9, k)
+                x, y = al[sl["poso"]]["x"], al[sl["poso"]]["y"]
+                same = [sx for p_, sx in skill if sx * x > 0 and abs(sx) >= 2.5]
+                who.append(RT.receiver_text(sl["label"], x, y, sum(1 for sx in same if abs(sx) > abs(x) + 1e-6), len(same)))
+            if who:
+                entries.append({"plyl": plyl, "name": play["name"], "set": d["set"]["name"], "form": lib.form_names.get(d["set"]["form"], str(d["set"]["form"])), "who": who, "books": sorted(books), "read": read, "option": bool(d["option"])})
+        entries.sort(key=lambda x: (-len(x["books"]), x["name"], x["plyl"]))           # the plays in the most playbooks first
+        holders = {}
+        my_book = None
+        if playbooks is not None:
+            holders = {int(b): [t for t in names if "(" not in t] for b, names in playbooks.offense_used_by.items() if str(b).isdigit()}
+            try:
+                mb = playbooks.team_bokl(coaches or [], team_id, "1") if team_id else None
+                my_book = int(mb) if mb is not None else None
+            except (TypeError, ValueError):
+                my_book = None
+        pick = RT.choose_play(entries, book_names, holders, team_nickname(team_id) if team_id else "", my_book)
+        lines = [RT.watch_line(x["name"], x["plyl"], x["set"], x["form"], x["who"], [book_names.get(b, f"playbook {b}") for b in x["books"]]) for x in entries]
         return {"boot": boot, "copy": lib._master, "rows": rows, "plays": sorted(((n, len(b)) for n, b in plays.items()), key=lambda x: (-x[1], x[0])),
-                "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs}), "watch": lines}
+                "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs}), "watch": lines, "pick": pick,
+                "all_plays": RT.full_list(entries, book_names)}
 
     def route_test_apply(self, info, test_id):
         """Make the route the way a test wants it (backing the file up first, as every write of the game files does); returns the route's rows afterwards."""
@@ -11338,7 +11383,8 @@ class App(tk.Tk):
         if not archives:
             return
         boot = archives[0]
-        self.run_in_thread_with_busy("Reading the game's routes...", lambda: self.route_test_prepare(boot, archives), lambda info: RouteTestDialog(self, info), error_title="Route test")
+        pb, coaches, tid = self._playbook_data, list(self.model.coaches), self.selected_team_id.get().strip()
+        self.run_in_thread_with_busy("Reading the game's routes...", lambda: self.route_test_prepare(boot, archives, pb, coaches, tid), lambda info: RouteTestDialog(self, info), error_title="Route test")
 
     # ---- putting a made custom play into the game (for testers) and taking it out again
     TEST_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-test-backups")
