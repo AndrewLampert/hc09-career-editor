@@ -51,6 +51,11 @@ except ImportError:                  # without it the play designer still works,
     PlayTypes = None
 
 try:
+    import hc09_routetest as RT
+except ImportError:                  # without it only the Route test window is missing
+    RT = None
+
+try:
     from hc09_jobs import JobCatalog
 except ImportError:                  # without it the play creator offers the plain list of assignments only
     JobCatalog = None
@@ -6220,6 +6225,10 @@ class CustomPlayDialog(tk.Toplevel):
         btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
         ttk.Button(btn, text="Make the files", style="Accent.TButton", command=self._make).pack(side="right", padx=(0, 8))
+        self.btn_install = ttk.Button(btn, text="Install in my game...", command=self._install, state="disabled")
+        self.btn_install.pack(side="left")
+        ttk.Button(btn, text="Put my saves back...", command=self._uninstall).pack(side="left", padx=(8, 0))
+        self._made = None
         ch = designer.overrides
         plan = designer.final_plan()
         self.lbl_changes.configure(text=("Changed slots: " + ", ".join(next(s["label"] for s in d["slots"] if s["poso"] == p_) for p_ in sorted(ch)) + "."
@@ -6263,7 +6272,206 @@ class CustomPlayDialog(tk.Toplevel):
         finally:
             self.config(cursor="")
         self.lbl_result.configure(text=result["message"])
-        messagebox.showinfo("Custom play made", result["message"])
+        self._made = result
+        self.btn_install.configure(state="normal")
+        messagebox.showinfo("Custom play made", result["message"] + "\n\nTo try it without copying files yourself, press Install in my game (it saves your own files first, and Put my saves back undoes it).")
+
+    def _install(self):
+        if self._made is None:
+            return
+        profile, career = self.profile_var.get(), self.career_var.get()
+        if not messagebox.askyesno("Install in my game", "This copies the two new files over your profile and your career, after saving your own two files in Documents\\hc09-test-backups. "
+                                   "RPCS3 must be closed.\n\nProfile: " + profile + "\nCareer: " + career + "\n\nContinue?", parent=self):
+            return
+        try:
+            dest = self.app.install_custom_play(self._made, profile, career)
+        except Exception as e:
+            messagebox.showerror("Install in my game", str(e), parent=self)
+            return
+        messagebox.showinfo("Install in my game", "Done. Start the game, load the career and look in the playbook you chose, under Created Plays.\n\n"
+                            f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
+
+    def _uninstall(self):
+        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
+                                           "No: put back your files from before the LAST install only.\nCancel: do nothing.", parent=self)
+        if answer is None:
+            return
+        try:
+            info = self.app.restore_installed_saves("oldest" if answer else "newest")
+        except Exception as e:
+            messagebox.showerror("Put my saves back", str(e), parent=self)
+            return
+        messagebox.showinfo("Put my saves back", f"Done: your profile and career are the ones saved in {info['folder']} again.", parent=self)
+
+
+class RouteTestDialog(tk.Toplevel):
+    """Route test: a short series of game tests for the people helping to find out what the numbers inside a route mean. Each test changes a few numbers of ONE route in the game
+    file (after the usual backup), says what to do in the game and what to look at, and takes the answer; at the end the answers are copied for the chat. Nothing else is touched."""
+
+    def __init__(self, app, info):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Route test")
+        self.transient(app)
+        self.geometry(f"{min(1180, self.winfo_screenwidth() - 30)}x{min(760, self.winfo_screenheight() - 100)}")
+        self.minsize(980, 600)
+        self.app, self.info = app, info
+        self.state = app.route_test_load_state()
+        self.state.setdefault("results", {})
+        self.state.setdefault("applied", [])
+        self.current = None
+        self.vars = {}
+        play_names = ", ".join(n for n, _ in info["plays"][:14])
+        self.play_text = play_names + (" ..." if len(info["plays"]) > 14 else "")
+        ttk.Label(self, wraplength=1130, justify="left", padding=(14, 12, 14, 2), font=("", 11, "bold"),
+                  text="Help find out what the numbers in a route mean: change them one at a time, watch the receiver in the game, say what you saw.").pack(anchor="w")
+        ttk.Label(self, wraplength=1130, justify="left", foreground="gray", padding=(14, 0, 14, 4),
+                  text="This changes only the numbers of the Post route in your qkl_boot.ast (the play database), after saving the original in Documents\\hc09-game-file-backup, and \"Put the route back\" "
+                       "restores them. Close RPCS3 before pressing Apply. Do the tests in order; B1 to B5 are the ones that matter, B6 to B9 are a bonus.").pack(anchor="w")
+        self.lbl_status = ttk.Label(self, wraplength=1130, justify="left", padding=(14, 4, 14, 4), font=("", 10, "bold"))
+        self.lbl_status.pack(anchor="w")
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True, padx=14, pady=(0, 4))
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="y")
+        self.tree = ttk.Treeview(left, columns=("id", "title", "state"), show="headings", selectmode="browse", height=14)
+        for c, (text, width) in zip(("id", "title", "state"), [("Test", 46), ("What it changes", 340), ("Your answer", 80)]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor="w", stretch=False)
+        self.tree.pack(side="left", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._select())
+        right = ttk.Frame(main)
+        right.pack(side="left", fill="both", expand=True, padx=(14, 0))
+        self.lbl_title = ttk.Label(right, font=("", 12, "bold"), wraplength=640, justify="left")
+        self.lbl_title.pack(anchor="w")
+        self.lbl_steps = ttk.Label(right, wraplength=640, justify="left", padding=(0, 6, 0, 6))
+        self.lbl_steps.pack(anchor="w")
+        row = ttk.Frame(right)
+        row.pack(anchor="w")
+        self.btn_apply = ttk.Button(row, text="1. Apply this test", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="left")
+        ttk.Button(row, text="Put the route back to the game's own", command=self._put_back).pack(side="left", padx=(10, 0))
+        form = ttk.LabelFrame(right, text=" 2. Your answer ")
+        form.pack(fill="x", pady=(10, 0))
+        for i, (key, label, options) in enumerate(RT.RESULT_FIELDS):
+            ttk.Label(form, text=label, wraplength=330, justify="left").grid(row=i, column=0, sticky="w", padx=8, pady=3)
+            var = tk.StringVar()
+            self.vars[key] = var
+            if options:
+                w = ttk.Combobox(form, textvariable=var, values=list(options), state="readonly", width=44)
+            else:
+                w = ttk.Entry(form, textvariable=var, width=46 if key == "notes" else 14)
+            w.grid(row=i, column=1, sticky="w", padx=8, pady=3)
+        ttk.Button(form, text="Save my answer", command=self._save_answer).grid(row=len(RT.RESULT_FIELDS), column=1, sticky="w", padx=8, pady=(4, 8))
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 12), before=main)
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(bottom, text="Save my answers to a file", command=self._save_file).pack(side="right", padx=(0, 8))
+        ttk.Button(bottom, text="Copy my answers for Discord", style="Accent.TButton", command=self._copy).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._fill()
+        self._status_from(info["rows"])
+        self.tree.selection_set(RT.TESTS[0]["id"])
+
+    # ---- list and form
+    def _fill(self):
+        keep = self.tree.selection()
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        for t in RT.TESTS:
+            mark = "answered" if t["id"] in self.state["results"] else ("changed" if t["id"] in self.state["applied"] else "")
+            self.tree.insert("", tk.END, iid=t["id"], values=(t["id"], t["title"] + ("  (bonus)" if t["phase"] == 2 else ""), mark))
+        if keep and self.tree.exists(keep[0]):
+            self.tree.selection_set(keep[0])
+
+    def _status_from(self, rows):
+        if RT.is_stock(rows):
+            self.lbl_status.configure(text="The route in your game file is the game's own (nothing changed).", foreground="#4caf50")
+            return
+        for t in RT.TESTS:
+            if tuple(RT.wanted_rows(t["id"])) == tuple(rows):
+                self.lbl_status.configure(text=f"The route in your game file is changed for test {t['id']}: {t['title']}.", foreground="#d98c1f")
+                return
+        self.lbl_status.configure(text="The route in your game file has numbers that do not belong to any test. Press Put the route back to the game's own.", foreground="#e05050")
+
+    def _select(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        t = RT.TEST_BY_ID[sel[0]]
+        self.current = t
+        self.lbl_title.configure(text=f"{t['id']}: {t['title']}")
+        self.lbl_steps.configure(text=(f"What it changes: {RT.describe_changes(t['id'])}\nWhat it asks: {t['asks']}\n\n"
+                                       "1.  Close RPCS3 if it is running, then press Apply this test" + (" (this one changes nothing: it is only the control)" if not t["changes"] else "") + ".\n"
+                                       f"2.  Start the game and a quick game (Play Now), and on offense find one of these plays in your playbook: {self.play_text}. "
+                                       f"The route is used by {self.info['uses']} receivers in {self.info['books']} of the game's playbooks, so another team's playbook usually has one.\n"
+                                       "3.  Run the play three or four times and watch the receiver who runs the Post (it is the one with the long run up the field and a break). You can watch the replay.\n"
+                                       f"4.  Look at this: {t['watch']}\n"
+                                       "5.  Close the game and fill in your answer below."))
+        r = self.state["results"].get(t["id"], {})
+        for key, var in self.vars.items():
+            var.set(r.get(key, ""))
+
+    # ---- actions
+    def _apply(self):
+        t = self.current
+        if t is None:
+            return
+        app = self.app
+
+        def work():
+            return app.route_test_apply(self.info, t["id"])
+
+        def done(rows):
+            if t["id"] not in self.state["applied"]:
+                self.state["applied"].append(t["id"])
+            app.route_test_save_state(self.state)
+            self._status_from(rows)
+            self._fill()
+            messagebox.showinfo("Route test", f"Done: the route is now set for test {t['id']}. Start the game and follow steps 2 to 4." if t["changes"] else
+                                "Done: the route is the game's own. Start the game and follow steps 2 to 4.", parent=self)
+
+        app.run_in_thread_with_busy("Changing the route...", work, done, error_title="Route test")
+
+    def _put_back(self):
+        app = self.app
+
+        def work():
+            return app.route_test_apply(self.info, "B0")
+
+        def done(rows):
+            self._status_from(rows)
+            messagebox.showinfo("Route test", "The route is the game's own again.", parent=self)
+
+        app.run_in_thread_with_busy("Putting the route back...", work, done, error_title="Route test")
+
+    def _save_answer(self):
+        t = self.current
+        if t is None:
+            return
+        self.state["results"][t["id"]] = {k: v.get().strip() for k, v in self.vars.items()}
+        self.app.route_test_save_state(self.state)
+        self._fill()
+        nxt = next((x["id"] for x in RT.TESTS if x["id"] not in self.state["results"] and x["phase"] == 1), None)
+        if nxt:
+            self.tree.selection_set(nxt)
+
+    def _text(self):
+        return RT.report(self.state, [n for n, _ in self.info["plays"][:12]], game=f"Game archive: {os.path.basename(self.info['boot'])} entry {self.info['copy']['index']}")
+
+    def _copy(self):
+        self.clipboard_clear()
+        self.clipboard_append(self._text())
+        messagebox.showinfo("Route test", "Your answers are copied. Paste them into the chat (Ctrl+V).", parent=self)
+
+    def _save_file(self):
+        os.makedirs(self.app.ROUTE_TEST_DIR, exist_ok=True)
+        path = os.path.join(self.app.ROUTE_TEST_DIR, "route-test-results.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self._text())
+        messagebox.showinfo("Route test", f"Saved to {path}", parent=self)
 
 
 class TeamPhilosophyDialog(tk.Toplevel):
@@ -8315,6 +8523,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Profile save...", command=self.on_pick_profile).pack(side="left")
         ttk.Button(top, text="Set personnel...", command=self.on_open_personnel).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Play creator...", command=self.on_open_play_designer).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Route test...", command=self.on_open_route_test).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Help", command=self._toggle_pb_help).pack(side="left", padx=(8, 0))
         self._pb_top_frame = top
         self.lbl_playbook_status = ttk.Label(top, text="Open this tab after loading a save.", foreground="gray")
@@ -10246,7 +10455,9 @@ class App(tk.Tk):
                 for r in read_csv(os.path.join(cache, f"form_{c['base']}.csv")):
                     forms.setdefault(r["FORM"], r)
         tabs["FORM"] = list(forms.values())
-        return PlayLibrary(tabs)
+        lib = PlayLibrary(tabs)
+        lib._master = master             # which archive entry it was read from (the Route test writes there)
+        return lib
 
     def load_play_art(self, boot_ast):
         """The folder with the game's Create-A-Play field picture and receiver numbers (PNG), made by the bridge from qkl_interface.ast next to qkl_boot.ast into the cache, or None
@@ -10267,6 +10478,121 @@ class App(tk.Tk):
         except Exception:
             return None
         return cache if res.get("found") else None
+
+    # ---- Route test (game tests of the numbers inside a route; see hc09_routetest.py and docs/hc09_test_guide.md)
+    ROUTE_TEST_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-test-results")
+
+    def route_test_state_path(self):
+        return os.path.join(self.ROUTE_TEST_DIR, "route-test.json")
+
+    def route_test_load_state(self):
+        try:
+            with open(self.route_test_state_path(), encoding="utf-8") as f:
+                st = json.load(f)
+            return st if isinstance(st, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def route_test_save_state(self, state):
+        os.makedirs(self.ROUTE_TEST_DIR, exist_ok=True)
+        with open(self.route_test_state_path(), "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=1)
+
+    def route_test_current(self, boot):
+        """The route's rows in the game file right now: [(step, code, v1, v2, v3)]."""
+        cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache", "routetest")
+        shutil.rmtree(cache, ignore_errors=True)
+        scan = self.model.run_bridge(["play-sets-scan", "--asts", boot, "--out-dir", cache, "--tables", "PSLO"])
+        copies = [c for c in scan["copies"] if c["tables"].get("PSLO")]
+        if not copies:
+            raise RuntimeError("The play database with the routes was not found in the game file.")
+        return RT.rows_of(read_csv(os.path.join(cache, f"pslo_{max(copies, key=lambda c: c['tables']['PSLO'])['base']}.csv")))
+
+    def route_test_prepare(self, boot):
+        """Everything the Route test window needs: the master copy's place in the archive, the route's rows now, the plays that use the route and how many playbooks have them."""
+        lib = self.load_play_library([boot])
+        rows = RT.rows_of(lib.tables["PSLO"])
+        e = lib.usage().get(("offense", RT.PSAL))
+        plays = defaultdict(set)
+        for plyl in (e["plays"] if e else ()):
+            plays[lib.plays[plyl]["name"]] |= lib.books_of_play.get(plyl, set())
+        return {"boot": boot, "copy": lib._master, "rows": rows, "plays": sorted(((n, len(b)) for n, b in plays.items()), key=lambda x: (-x[1], x[0])),
+                "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs})}
+
+    def route_test_apply(self, info, test_id):
+        """Make the route the way a test wants it (backing the file up first, as every write of the game files does); returns the route's rows afterwards."""
+        edits = RT.edits_for(test_id, self.route_test_current(info["boot"]))
+        if edits:
+            m = info["copy"]
+            try:
+                apply_personnel_targets(self.model, [{"ast": m["ast"], "index": m["index"], "start": m["start"], "size": m["size"], "edits": edits}], backup_dir=self._personnel_backup_dir())
+            except RuntimeError as e:
+                if any(w in str(e).lower() for w in ("ebusy", "eperm", "eacces", "in use", "being used")):
+                    raise RuntimeError("The game file is in use. Close RPCS3 (and anything else using qkl_boot.ast) and press the button again.")
+                raise
+        return self.route_test_current(info["boot"])
+
+    def on_open_route_test(self):
+        if RT is None:
+            messagebox.showerror("Route test", "The route test needs hc09_routetest.py next to guiHC09.py, and it was not found.")
+            return
+        archives = self._personnel_archives()
+        if not archives:
+            return
+        boot = archives[0]
+        self.run_in_thread_with_busy("Reading the game's routes...", lambda: self.route_test_prepare(boot), lambda info: RouteTestDialog(self, info), error_title="Route test")
+
+    # ---- putting a made custom play into the game (for testers) and taking it out again
+    TEST_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-test-backups")
+
+    @staticmethod
+    def _rpcs3_running():
+        """True if RPCS3 seems to be running (it holds the saves open, and rewrites them when it closes)."""
+        try:
+            if os.name == "nt":
+                out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq rpcs3.exe"], capture_output=True, text=True, timeout=15)
+                return "rpcs3.exe" in out.stdout.lower()
+            return subprocess.run(["pgrep", "-x", "rpcs3"], capture_output=True, timeout=15).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def install_custom_play(self, result, profile_path, career_path):
+        """Copy the two files make_custom_play_files made over the profile and the career they were made from, after saving those in Documents\\hc09-test-backups\\<time>. Returns that folder."""
+        if self._rpcs3_running():
+            raise RuntimeError("RPCS3 is running. Close it first (it rewrites the saves when it closes), then try again.")
+        pairs = [("profile", result["profile"], profile_path), ("career", result["career"], career_path)]
+        for name, new, old in pairs:
+            if not os.path.isfile(new) or not os.path.isfile(old):
+                raise RuntimeError(f"The {name} file is missing: {new if not os.path.isfile(new) else old}")
+            if os.path.abspath(new) == os.path.abspath(old):
+                raise RuntimeError(f"The new {name} file is the same file as your own; nothing was changed.")
+        dest = os.path.join(self.TEST_BACKUP_DIR, time.strftime("%Y%m%d-%H%M%S"))
+        for name, new, old in pairs:
+            os.makedirs(os.path.join(dest, name), exist_ok=True)
+            shutil.copy2(old, os.path.join(dest, name, "USR-DATA"))
+        with open(os.path.join(dest, "info.json"), "w", encoding="utf-8") as f:
+            json.dump({"profile": profile_path, "career": career_path, "play": result.get("name", "")}, f, indent=1)
+        for name, new, old in pairs:
+            shutil.copy2(new, old)
+        return dest
+
+    def restore_installed_saves(self, which="newest"):
+        """Put the profile and the career back from a backup install_custom_play made: "newest" (the files from before the last install) or "oldest" (from before the first one,
+        so every test play is gone). Returns its info dict."""
+        if self._rpcs3_running():
+            raise RuntimeError("RPCS3 is running. Close it first, then try again.")
+        if not os.path.isdir(self.TEST_BACKUP_DIR):
+            raise RuntimeError("There is no backup to put back.")
+        folders = sorted(d for d in os.listdir(self.TEST_BACKUP_DIR) if os.path.isfile(os.path.join(self.TEST_BACKUP_DIR, d, "info.json")))
+        if not folders:
+            raise RuntimeError("There is no backup to put back.")
+        dest = os.path.join(self.TEST_BACKUP_DIR, folders[0] if which == "oldest" else folders[-1])
+        with open(os.path.join(dest, "info.json"), encoding="utf-8") as f:
+            info = json.load(f)
+        for name in ("profile", "career"):
+            shutil.copy2(os.path.join(dest, name, "USR-DATA"), info[name])
+        info["folder"] = dest
+        return info
 
     def on_open_play_designer(self):
         if PlayLibrary is None:

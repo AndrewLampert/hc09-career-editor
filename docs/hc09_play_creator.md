@@ -130,6 +130,8 @@ Tested on copies (`plays_test.py`, outside the repository): all 3,099 plays deco
 
 ## A test plan for the game
 
+**For testers, the step-by-step version (what to click, what to look at, how to write it down, what each outcome means) is in [hc09_test_guide.md](hc09_test_guide.md); the editor has a Route test window and Install in my game / Put my saves back buttons for it.** The short plan:
+
 1. Close RPCS3. Back up the **whole** profile folder (`BLUS30128-PROFILE-HEADCOACH`; there is one for every career, so the change reaches all of them and it holds all your real custom plays) and the career's folder. If you can, try it with a career you do not mind losing.
 2. Play creator, pick *Slants*, change one receiver to an ordinary list (for example a deep route), **Make custom play...** with the profile and career picked, a new output folder, playbook 1.
 3. Copy the two `USR-DATA` files over the profile's and the career's. Start the game, load the career, open the playbook under *Created Plays*: the play should be listed with its name and the diagram of the set.
