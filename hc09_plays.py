@@ -333,10 +333,12 @@ def next_ids(profile):
     return {"SETL": top("SETL", "SETL"), "PLYL": top("PBPL", "PLYL"), "SETP": top("SETP", "SETP"), "SGF_": top("SGFF", "SGF_")}
 
 
-def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None):
+def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=None):
     """The rows of a new custom play made from the stock play base_plyl: {table: [row dicts with every column of that table as strings]} for the
     profile save (PBPL, SETL, SETP, SETG, SGFF, PLYS, and PLPD / PLRD / PLCM when the base play has them), and a summary.
     overrides: {poso: (PSAL, ARTL, PLRR)} replaces a slot's assignment with any step list of the game (PSAL, ARTL and PLRR taken from library entries).
+    plan: a hc09_playtypes conversion plan, when the play was turned into another kind of play: its PLYT is used, and the PLPD / PLRD / PLCM rows come from the
+    stock play of that kind it names (tables_from) or are the ones it synthesised, instead of the base play's.
     The alignment is the stock set's, in the diagram's units (a custom set keeps the diagram coordinates in both the formation and the art columns); each of
     the set's alignment groups (the normal one and the pre-snap motion variants) is copied with its SETG rows. Ids come after the profile's own."""
     d = lib.detail(base_plyl)
@@ -348,7 +350,7 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None):
     if new_setl > 511 or new_plyl > 16383:
         raise ValueError("The profile has no free set or play ids left.")
     rows = collections.defaultdict(list)
-    ptype = plyt if plyt is not None else base["plyt"]
+    ptype = plyt if plyt is not None else (plan["plyt"] if plan is not None else base["plyt"])
     rows["PBPL"].append({"SETL": new_setl, "PLYL": new_plyl, "SITT": 2, "PLYT": ptype, "PLF_": base["plf"], "name": name, "risk": 0, "motn": base["motn"], "vpos": base["vpos"]})
     rows["SETL"].append({"SETL": new_setl, "FORM": CREATED_FORMATION, "MOTN": bset["motn"], "SETT": bset["sett"], "SITT": 0, "SLF_": 0, "name": "Created", "poso": 0})
     setp_ids = {}
@@ -370,10 +372,20 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None):
         if psal not in lib.steps[d["table"]]:
             raise ValueError(f"Step list {psal} is not one of the game's {d['table']} step lists.")
         rows["PLYS"].append({"PSAL": psal, "ARTL": artl, "PLYL": new_plyl, "PLRR": plrr, "poso": sl["poso"]})
-    for table, src in (("PLPD", lib.passing.get(base_plyl)), ("PLCM", lib.combos.get(base_plyl))):
-        if src is not None:
-            rows[table].append({**{k: v for k, v in src.items() if k != "PLYL"}, "PLYL": new_plyl})
-    for r in lib.running.get(base_plyl, []):
+    src_plyl = base_plyl
+    synth = {}
+    if plan is not None:
+        src_plyl = plan.get("tables_from")
+        synth = plan.get("tables") or {}
+    if src_plyl is not None:
+        for table, src in (("PLPD", lib.passing.get(src_plyl)), ("PLCM", lib.combos.get(src_plyl))):
+            if src is not None:
+                rows[table].append({**{k: v for k, v in src.items() if k != "PLYL"}, "PLYL": new_plyl})
+        for r in lib.running.get(src_plyl, []):
+            rows["PLRD"].append({"PLYL": new_plyl, "hole": r["hole"]})
+    if synth.get("PLPD"):
+        rows["PLPD"].append({**synth["PLPD"], "PLYL": new_plyl})
+    for r in synth.get("PLRD") or []:
         rows["PLRD"].append({"PLYL": new_plyl, "hole": r["hole"]})
     summary = {"setl": new_setl, "plyl": new_plyl, "name": name, "plyt": ptype, "from": base["name"], "slots_changed": sorted(overrides), "rows": {k: len(v) for k, v in rows.items()}}
     return dict(rows), summary
