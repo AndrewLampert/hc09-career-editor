@@ -890,6 +890,230 @@ async function cmdEntryPatch(args) {
     console.log(JSON.stringify({ mode, results }));
 }
 
+// ---------- The Create-A-Play pictures (qkl_interface.ast): the field the play diagrams are drawn on and the receiver number sprites ----------
+// The user's own copy of the game is read at run time and the pictures are kept in a cache folder on the user's computer; none of the game's art is part of the editor.
+// qkl_interface.ast is a list of nested BGFA archives (one per screen: textures as DDS, the screen's layout as Apt). The Create-A-Play screen is recognised by its
+// contents (a layout that mentions "createaplay", one 512x512 texture, at least six 32x32 ones) so a copy of the game that orders the entries differently is found too;
+// entry 548 is only the place tried first (PS3 USA).
+
+const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+    }
+    return t;
+})();
+
+function crc32(buf) {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(td));
+    return Buffer.concat([len, td, crc]);
+}
+
+// rgba: Buffer of width*height*4. A PNG Tk can load by itself (8 bit, RGBA).
+function encodePng(width, height, rgba) {
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+    const raw = Buffer.alloc((width * 4 + 1) * height);
+    for (let y = 0; y < height; y++) {
+        raw[y * (width * 4 + 1)] = 0;
+        rgba.copy(raw, y * (width * 4 + 1) + 1, y * width * 4, (y + 1) * width * 4);
+    }
+    return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw, { level: 9 })), pngChunk('IEND', Buffer.alloc(0))]);
+}
+
+function unpack565(c) {
+    return [Math.round(((c >> 11) & 31) * 255 / 31), Math.round(((c >> 5) & 63) * 255 / 63), Math.round((c & 31) * 255 / 31)];
+}
+
+// The first (largest) level of a DDS with DXT1, DXT3 or DXT5 blocks as RGBA.
+function decodeDds(buf) {
+    if (buf.length < 128 || buf.slice(0, 4).toString('latin1') !== 'DDS ') throw new Error('not a DDS texture');
+    const height = buf.readUInt32LE(12);
+    const width = buf.readUInt32LE(16);
+    const fourcc = buf.slice(84, 88).toString('latin1');
+    if (!['DXT1', 'DXT3', 'DXT5'].includes(fourcc)) throw new Error('unsupported texture format ' + fourcc);
+    const out = Buffer.alloc(width * height * 4);
+    const blockBytes = fourcc === 'DXT1' ? 8 : 16;
+    let off = 128;
+    for (let by = 0; by < height; by += 4) {
+        for (let bx = 0; bx < width; bx += 4) {
+            const colorOff = off + (fourcc === 'DXT1' ? 0 : 8);
+            const c0 = buf.readUInt16LE(colorOff);
+            const c1 = buf.readUInt16LE(colorOff + 2);
+            const a = unpack565(c0);
+            const b = unpack565(c1);
+            const pal = [a, b];
+            let threeColor = false;
+            if (c0 > c1 || fourcc !== 'DXT1') {
+                pal.push(a.map((v, i) => Math.floor((2 * v + b[i]) / 3)), a.map((v, i) => Math.floor((v + 2 * b[i]) / 3)));
+            } else {
+                pal.push(a.map((v, i) => Math.floor((v + b[i]) / 2)), [0, 0, 0]);
+                threeColor = true;
+            }
+            const bits = buf.readUInt32LE(colorOff + 4);
+            let alpha = null;
+            if (fourcc === 'DXT5') {
+                const a0 = buf[off];
+                const a1 = buf[off + 1];
+                const table = [a0, a1];
+                if (a0 > a1) for (let i = 1; i <= 6; i++) table.push(Math.floor(((7 - i) * a0 + i * a1) / 7));
+                else { for (let i = 1; i <= 4; i++) table.push(Math.floor(((5 - i) * a0 + i * a1) / 5)); table.push(0, 255); }
+                const abits = BigInt(buf.readUInt32LE(off + 2)) | (BigInt(buf.readUInt16LE(off + 6)) << 32n);
+                alpha = (i) => table[Number((abits >> BigInt(3 * i)) & 7n)];
+            } else if (fourcc === 'DXT3') {
+                alpha = (i) => ((buf.readUInt16LE(off + 2 * (i >> 2)) >> (4 * (i & 3))) & 15) * 17;
+            }
+            for (let py = 0; py < 4; py++) {
+                for (let px = 0; px < 4; px++) {
+                    const x = bx + px;
+                    const y = by + py;
+                    if (x >= width || y >= height) continue;
+                    const i = py * 4 + px;
+                    const idx = (bits >>> (2 * i)) & 3;
+                    const o = (y * width + x) * 4;
+                    out[o] = pal[idx][0]; out[o + 1] = pal[idx][1]; out[o + 2] = pal[idx][2];
+                    out[o + 3] = alpha ? alpha(i) : (threeColor && idx === 3 ? 0 : 255);
+                }
+            }
+            off += blockBytes;
+        }
+    }
+    return { width, height, rgba: out };
+}
+
+// Every sub-entry of a nested BGFA archive held in memory: [{index, data}] (deflated ones inflated).
+function parseNestedArchive(buf) {
+    return new Promise((resolve) => {
+        const subs = [];
+        const parser = new ASTParser();
+        let total = -1;
+        let done = 0;
+        let finished = false;
+        const finish = () => {
+            if (finished) return;
+            finished = true;
+            parser.destroy();
+            resolve(subs.sort((x, y) => x.index - y.index));
+        };
+        const step = () => { done++; if (total >= 0 && done >= total) finish(); };
+        parser.on('toc', (t) => { total = t.length; if (total === 0) finish(); });
+        parser.on('compressed-file', ({ stream, toc }) => {
+            bufferFromReadable(stream).then((raw) => {
+                let data = raw;
+                if (data.length > 2 && data[0] === 0x78 && (data[1] === 0xda || data[1] === 0x9c || data[1] === 0x01)) {
+                    try { data = zlib.inflateSync(data); } catch (e) { /* keep as is */ }
+                }
+                subs.push({ index: toc.index, data });
+                step();
+            }, step);
+        });
+        parser.on('error', finish);
+        const s = new Readable();
+        s._read = () => {};
+        s.push(buf);
+        s.push(null);
+        s.pipe(parser);
+    });
+}
+
+const isDds = (d) => d.length >= 128 && d.slice(0, 4).toString('latin1') === 'DDS ';
+
+// The Create-A-Play screen's textures if these sub-entries are that screen: {field, small: [...]} else null.
+function playCreatorSignature(subs) {
+    const dds = subs.filter((s) => isDds(s.data)).map((s) => ({ ...s, w: s.data.readUInt32LE(16), h: s.data.readUInt32LE(12) }));
+    const field = dds.filter((d) => d.w === 512 && d.h === 512);
+    const small = dds.filter((d) => d.w === 32 && d.h === 32);
+    const named = subs.some((s) => !isDds(s.data) && s.data.toString('latin1').toLowerCase().includes('createaplay'));
+    return named && field.length === 1 && small.length >= 6 ? { field: field[0], small } : null;
+}
+
+// One streaming pass over the archive (the entries are small), stopping at the first screen that matches.
+function scanForPlayCreator(astPath) {
+    return new Promise((resolve, reject) => {
+        const parser = new ASTParser();
+        let total = -1;
+        let done = 0;
+        let settled = false;
+        let stream = null;
+        const settle = (v) => { if (settled) return; settled = true; parser.destroy(); if (stream) stream.destroy(); resolve(v); };
+        const step = () => { done++; if (total >= 0 && done >= total) settle(null); };
+        parser.on('toc', (t) => { total = t.length; });
+        parser.on('compressed-file', ({ stream: entry, toc }) => {
+            bufferFromReadable(entry).then(async (raw) => {
+                if (settled) return;
+                if (raw.slice(0, 4).toString('latin1') === 'BGFA') {
+                    const sig = playCreatorSignature(await parseNestedArchive(raw));
+                    if (sig) { settle({ index: toc.index, sig }); return; }
+                }
+                step();
+            }, step);
+        });
+        parser.on('error', reject);
+        stream = fs.createReadStream(astPath);
+        stream.pipe(parser);
+    });
+}
+
+// The field's visible part in the 512x512 texture (measured from its pixels: the sidelines are the bright columns 6-16 and 477-487, the green ends at row 282) and
+// how it maps to the play diagram's units: x 0 to 180 across it, y 0 to 104 down it (checked against the in-game thumbnails).
+const FIELD_CROP = [6, 6, 486, 282];
+
+// ui-assets --ast <qkl_interface.ast> --out-dir <dir> [--top-index N]: field.png (the field the plays are drawn on), num1.png to num5.png (the receiver numbers)
+async function cmdUiAssets(args) {
+    const astPath = args.ast;
+    const outDir = args['out-dir'];
+    if (!astPath || !outDir) throw new Error('ui-assets needs --ast and --out-dir');
+    fs.mkdirSync(outDir, { recursive: true });
+    const first = args['top-index'] ? parseInt(args['top-index'], 10) : 548;
+    let found = null;
+    try {
+        const raw = await extractEntry(astPath, first);
+        if (raw.slice(0, 4).toString('latin1') === 'BGFA') {
+            const sig = playCreatorSignature(await parseNestedArchive(raw));
+            if (sig) found = { index: first, sig };
+        }
+    } catch (e) { /* not there: scan */ }
+    if (!found) found = await scanForPlayCreator(astPath);
+    if (!found) {
+        console.log(JSON.stringify({ found: false }));
+        return;
+    }
+    const { sig } = found;
+    const field = decodeDds(sig.field.data);
+    const [x0, y0, x1, y1] = FIELD_CROP;
+    const w = x1 - x0;
+    const h = y1 - y0;
+    const crop = Buffer.alloc(w * h * 4);
+    for (let y = 0; y < h; y++) field.rgba.copy(crop, y * w * 4, ((y0 + y) * field.width + x0) * 4, ((y0 + y) * field.width + x1) * 4);
+    for (let i = 3; i < crop.length; i += 4) crop[i] = 255;
+    const files = [];
+    fs.writeFileSync(path.join(outDir, 'field.png'), encodePng(w, h, crop));
+    files.push({ name: 'field.png', width: w, height: h });
+    // the 32x32 pieces in the screen's order: the first is the marker, the next five are the receiver numbers 1 to 5
+    for (let n = 1; n <= 5; n++) {
+        const sprite = decodeDds(sig.small[n].data);
+        fs.writeFileSync(path.join(outDir, `num${n}.png`), encodePng(sprite.width, sprite.height, sprite.rgba));
+        files.push({ name: `num${n}.png`, width: sprite.width, height: sprite.height });
+    }
+    const manifest = { entry: found.index, crop: FIELD_CROP, units: [180, 104], files, sourceSize: fs.statSync(astPath).size };
+    fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest));
+    console.log(JSON.stringify({ found: true, ...manifest, outDir }));
+}
+
 function parseArgs(argv) {
     const args = {};
     for (let i = 0; i < argv.length; i++) {
@@ -933,6 +1157,8 @@ async function main() {
             await cmdShippedTableExport(args);
         } else if (cmd === 'play-sets-scan') {
             await cmdPlaySetsScan(args);
+        } else if (cmd === 'ui-assets') {
+            await cmdUiAssets(args);
         } else if (cmd === 'entry-patch') {
             args._mode = rest.find((a) => !a.startsWith('--'));
             if (!['apply', 'dry', 'restore'].includes(args._mode)) throw new Error('entry-patch needs apply, dry or restore as its first argument');
@@ -949,6 +1175,7 @@ async function main() {
             console.error('  node bridge.js portrait-list --archive <path>');
             console.error('  node bridge.js shipped-table-export --ast <qkl_boot.ast> [--top-index <N>] [--require-fields A,B] [--require-rows] (--table <NAME> --out <csv> | --tables A,B --out-dir <dir>)');
             console.error('  node bridge.js play-sets-scan --asts <qkl_boot.ast>,<qkl_fe2ig.ast> --out-dir <dir> [--tables SETL,PLYS,...]');
+            console.error('  node bridge.js ui-assets --ast <qkl_interface.ast> --out-dir <dir> [--top-index <N>]');
             console.error('  node bridge.js entry-patch <apply|dry|restore> --config <json>');
             process.exit(1);
         }
