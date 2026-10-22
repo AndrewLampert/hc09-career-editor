@@ -60,7 +60,7 @@ export/import through HC09Editor required.
   saves (nothing of yours is touched). The game has not been tried with these files yet, so treat it
   as an experiment, with backups. See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
   Testing it in the game: **Install in my game** (in the save window) puts a made play into your profile
-  and career after saving them, **Put my saves back** undoes it, and **Route test...** changes the numbers of
+  and career after saving them, **Put my saves back** undoes it, and **Route test (testers)...** changes the numbers of
   one route a step at a time for the tests that show what they mean; the exact order of the tests and how
   to write the results down is in [docs/hc09_test_guide.md](docs/hc09_test_guide.md).
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*

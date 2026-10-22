@@ -62,6 +62,16 @@ RESULT_FIELDS = (
 )
 
 
+def watch_line(play, set_name, formation, slot, side):
+    """"WR Post (Normal, Singleback): WR1, wide on the right": which receiver runs the route in a play."""
+    where = {"left": "wide on the left", "right": "wide on the right", "middle": "near the middle"}.get(side, side)
+    return f"{play} ({set_name}, {formation}): {slot}, {where}"
+
+
+def side_of(x):
+    return "left" if x < 82 else ("right" if x > 98 else "middle")
+
+
 def stock_rows():
     return [dict(step=s, code=c, val1=a, val2=b, val3=d) for s, c, a, b, d in STOCK]
 

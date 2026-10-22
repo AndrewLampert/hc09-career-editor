@@ -6325,6 +6325,7 @@ class RouteTestDialog(tk.Toplevel):
         self.vars = {}
         play_names = ", ".join(n for n, _ in info["plays"][:14])
         self.play_text = play_names + (" ..." if len(info["plays"]) > 14 else "")
+        self.watch_text = "\n      ".join(info.get("watch", [])[:6])
         ttk.Label(self, wraplength=1130, justify="left", padding=(14, 12, 14, 2), font=("", 11, "bold"),
                   text="Help find out what the numbers in a route mean: change them one at a time, watch the receiver in the game, say what you saw.").pack(anchor="w")
         ttk.Label(self, wraplength=1130, justify="left", foreground="gray", padding=(14, 0, 14, 4),
@@ -6405,9 +6406,11 @@ class RouteTestDialog(tk.Toplevel):
         self.lbl_title.configure(text=f"{t['id']}: {t['title']}")
         self.lbl_steps.configure(text=(f"What it changes: {RT.describe_changes(t['id'])}\nWhat it asks: {t['asks']}\n\n"
                                        "1.  Close RPCS3 if it is running, then press Apply this test" + (" (this one changes nothing: it is only the control)" if not t["changes"] else "") + ".\n"
-                                       f"2.  Start the game and a quick game (Play Now), and on offense find one of these plays in your playbook: {self.play_text}. "
-                                       f"The route is used by {self.info['uses']} receivers in {self.info['books']} of the game's playbooks, so another team's playbook usually has one.\n"
-                                       "3.  Run the play three or four times and watch the receiver who runs the Post (it is the one with the long run up the field and a break). You can watch the replay.\n"
+                                       f"2.  Start the game and a quick game (Play Now), and on offense find one of the plays below in your playbook. The route is used by {self.info['uses']} receivers in {self.info['books']} "
+                                       "of the game's playbooks, so another team's playbook usually has one.\n"
+                                       f"      {self.watch_text}\n"
+                                       "3.  Run the play three or four times and watch THAT receiver (several others run deep breaking routes in the same play: the one named above is the one that changes). You can watch the replay. "
+                                       "If a test seems to change nothing, check B0 and the test again with a second play from the list before you say so.\n"
                                        f"4.  Look at this: {t['watch']}\n"
                                        "5.  Close the game and fill in your answer below."))
         r = self.state["results"].get(t["id"], {})
@@ -8523,7 +8526,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Profile save...", command=self.on_pick_profile).pack(side="left")
         ttk.Button(top, text="Set personnel...", command=self.on_open_personnel).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Play creator...", command=self.on_open_play_designer).pack(side="left", padx=(8, 0))
-        ttk.Button(top, text="Route test...", command=self.on_open_route_test).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Route test (testers)...", command=self.on_open_route_test).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Help", command=self._toggle_pb_help).pack(side="left", padx=(8, 0))
         self._pb_top_frame = top
         self.lbl_playbook_status = ttk.Label(top, text="Open this tab after loading a save.", foreground="gray")
@@ -10508,21 +10511,32 @@ class App(tk.Tk):
             raise RuntimeError("The play database with the routes was not found in the game file.")
         return RT.rows_of(read_csv(os.path.join(cache, f"pslo_{max(copies, key=lambda c: c['tables']['PSLO'])['base']}.csv")))
 
-    def route_test_prepare(self, boot):
-        """Everything the Route test window needs: the master copy's place in the archive, the route's rows now, the plays that use the route and how many playbooks have them."""
-        lib = self.load_play_library([boot])
+    def route_test_prepare(self, boot, archives=None):
+        """Everything the Route test window needs: the master copy's place in the archive, the route's rows now, the plays that use the route and how many playbooks have them
+        (archives: both game archives when known, which gives the formations their names)."""
+        lib = self.load_play_library(archives or [boot])
         rows = RT.rows_of(lib.tables["PSLO"])
         e = lib.usage().get(("offense", RT.PSAL))
         plays = defaultdict(set)
+        watch = {}
         for plyl in (e["plays"] if e else ()):
-            plays[lib.plays[plyl]["name"]] |= lib.books_of_play.get(plyl, set())
+            play = lib.plays[plyl]
+            plays[play["name"]] |= lib.books_of_play.get(plyl, set())
+            d = lib.detail(plyl)
+            for sl in d["slots"]:
+                if sl["psal"] == RT.PSAL and d["side"] == "offense":
+                    key = (play["name"], d["set"]["name"], lib.form_names.get(d["set"]["form"], str(d["set"]["form"])))
+                    watch.setdefault(key, (len(lib.books_of_play.get(plyl, ())), []))[1].append(f"{sl['label']}, " + {"left": "wide on the left", "right": "wide on the right", "middle": "near the middle"}[RT.side_of(sl["x"])])
+        lines = [f"{k[0]} ({k[1]}, {k[2]}): " + " and ".join(v[1]) for k, v in sorted(watch.items(), key=lambda kv: (-kv[1][0], kv[0]))]
         return {"boot": boot, "copy": lib._master, "rows": rows, "plays": sorted(((n, len(b)) for n, b in plays.items()), key=lambda x: (-x[1], x[0])),
-                "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs})}
+                "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs}), "watch": lines}
 
     def route_test_apply(self, info, test_id):
         """Make the route the way a test wants it (backing the file up first, as every write of the game files does); returns the route's rows afterwards."""
         edits = RT.edits_for(test_id, self.route_test_current(info["boot"]))
         if edits:
+            if self._rpcs3_running():
+                raise RuntimeError("RPCS3 is running. Close it first (it can hold the game file open), then press the button again.")
             m = info["copy"]
             try:
                 apply_personnel_targets(self.model, [{"ast": m["ast"], "index": m["index"], "start": m["start"], "size": m["size"], "edits": edits}], backup_dir=self._personnel_backup_dir())
@@ -10540,7 +10554,7 @@ class App(tk.Tk):
         if not archives:
             return
         boot = archives[0]
-        self.run_in_thread_with_busy("Reading the game's routes...", lambda: self.route_test_prepare(boot), lambda info: RouteTestDialog(self, info), error_title="Route test")
+        self.run_in_thread_with_busy("Reading the game's routes...", lambda: self.route_test_prepare(boot, archives), lambda info: RouteTestDialog(self, info), error_title="Route test")
 
     # ---- putting a made custom play into the game (for testers) and taking it out again
     TEST_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-test-backups")
@@ -10556,10 +10570,24 @@ class App(tk.Tk):
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def _career_open(self, path):
+        """Is this file the save that is loaded in the editor?"""
+        try:
+            return bool(self.model.db_path) and os.path.samefile(self.model.db_path, path)
+        except OSError:
+            return False
+
+    def _reload_if_open(self, path):
+        """After a file was replaced on disk: load it again if it is the open save, so that the editor does not hold (and later save over it) the old one."""
+        if self._career_open(path):
+            self._load_db_path(path, error_title="Reload Error")
+
     def install_custom_play(self, result, profile_path, career_path):
         """Copy the two files make_custom_play_files made over the profile and the career they were made from, after saving those in Documents\\hc09-test-backups\\<time>. Returns that folder."""
         if self._rpcs3_running():
             raise RuntimeError("RPCS3 is running. Close it first (it rewrites the saves when it closes), then try again.")
+        if self._career_open(career_path) and self.dirty:
+            raise RuntimeError("The career that is open in the editor has unsaved changes. Save them (Save to File) or throw them away (Reload from File), then press Install in my game again.")
         pairs = [("profile", result["profile"], profile_path), ("career", result["career"], career_path)]
         for name, new, old in pairs:
             if not os.path.isfile(new) or not os.path.isfile(old):
@@ -10574,6 +10602,7 @@ class App(tk.Tk):
             json.dump({"profile": profile_path, "career": career_path, "play": result.get("name", "")}, f, indent=1)
         for name, new, old in pairs:
             shutil.copy2(new, old)
+        self._reload_if_open(career_path)
         return dest
 
     def restore_installed_saves(self, which="newest"):
@@ -10589,8 +10618,11 @@ class App(tk.Tk):
         dest = os.path.join(self.TEST_BACKUP_DIR, folders[0] if which == "oldest" else folders[-1])
         with open(os.path.join(dest, "info.json"), encoding="utf-8") as f:
             info = json.load(f)
+        if self._career_open(info["career"]) and self.dirty:
+            raise RuntimeError("The career that is open in the editor has unsaved changes. Save them or throw them away (Reload from File), then try again.")
         for name in ("profile", "career"):
             shutil.copy2(os.path.join(dest, name, "USR-DATA"), info[name])
+        self._reload_if_open(info["career"])
         info["folder"] = dest
         return info
 

@@ -24,6 +24,8 @@ If anything looks wrong or the game will not start: close RPCS3, press the undo 
 
 For each test: make the play in the editor, press **Install in my game**, and look at the result in the game. You can make all of A1 to A4 first (each one is made from your files as they are, so the plays pile up in the same custom playbook), then start the game once and try them all.
 
+**First, make your team use the custom playbook** (otherwise the game never offers the test plays and "it is not in my playbook" would only mean your team plays another one): Playbooks tab, **Team playbooks** box, choose your team, and on the Offense row press **Change...** and pick the custom playbook (1 to 10) you will add the test plays to; then **Save to File**. Use that same custom playbook number below. (Install in my game replaces the career file on disk and loads it again in the editor; it refuses while the open career has unsaved changes, so save first.)
+
 **Setup in the editor:** Playbooks tab, **Play creator...** (a few seconds to read the game's plays). Show: Offense. Find: `slants`. Pick the **Slants** whose formation is **Singleback** and set is **Big**. When you press **Make custom play...** pick a custom playbook (1 to 10) that you do not mind adding to (press Find after the profile path is filled in), keep the suggested output folder, and press **Make the files**, then **Install in my game** and say yes.
 
 | Test | In the Play creator | Name it |
@@ -65,11 +67,24 @@ When you are done with Part A, close RPCS3 and press **Put my saves back...** in
 
 **Why:** a route is a short list of steps: `8(68,32,254) 9(2,1,0) 8(200,42,254) 10` means *run a leg, cut, run a leg, finish*. We do not know what the numbers mean (how far, which way, which side), and we do not know whether the game reads the file the editor can change. If we know both, the editor could one day let you build a route; if the game ignores the edit, that idea is dead and we must look elsewhere. Seven simple tests settle it.
 
-**How:** Playbooks tab, **Route test...**. The window changes **one route** (the *Post* that *WR Post*, *FL Post*, *Cross Up* and others use; it is used by 58 receivers in 42 of the game's playbooks) one number at a time and tells you, for each test, what to look at. For every test:
+**How:** Playbooks tab, **Route test (testers)...**. The window changes **one route** (the *Post* that *WR Post*, *FL Post*, *Cross Up* and others use; it is used by 58 receivers in 42 of the game's playbooks) one number at a time and tells you, for each test, what to look at.
+
+**Which receiver to watch.** Several receivers run deep breaking routes in the same play, and only the one who runs this route changes. In the plays with the most playbooks it is:
+
+| Play (set, formation) | the receiver |
+|---|---|
+| FL Post (Normal, I Form) | WR1, wide on the right |
+| Cross Up (Normal Slot, Singleback) | WR1, wide on the right |
+| Panther Cross (4WR, Shotgun) | WR1, wide on the right |
+| WR Option (Slot Strong, Singleback) | WR3, wide on the right |
+| Play Action (Normal, I Form) | WR1, wide on the right |
+| WR Post (Normal, I Form) | WR1, wide on the right |
+
+(The window prints this list for your own copy of the game, with the playbooks that have each play.) **If a test seems to change nothing, check B0 and that test again with a second play from the list before you report "no change"**; a receiver you did not watch is the usual reason. For every test:
 
 1. Close RPCS3. Select the test in the list and press **1. Apply this test**.
 2. Start the game and a quick game (**Play Now**) with a team whose playbook has one of the plays the window lists (WR Post, FL Post, Cross Up ... most playbooks have one; if yours has none, choose another team). On offense, call the play.
-3. Run it three or four times and watch the receiver who runs the Post (the one with the long run up the field and a break). The replay helps. **Count yards using the field's yard lines: how many yards past the line of scrimmage does he run before he breaks?** Which way does he break? How far does he run after the break?
+3. Run it three or four times and watch the receiver named in the list above for that play (the one with the long run up the field and a break). The replay helps. **Count yards using the field's yard lines: how many yards past the line of scrimmage does he run before he breaks?** Which way does he break? How far does he run after the break?
 4. Close the game, fill in the form in the window (**2. Your answer**) and press **Save my answer**. It keeps your answers even if you close the editor.
 
 **The order** (the window shows the same list):
@@ -105,5 +120,5 @@ Measure in yards as well as you can; "about twice as far", "turned toward the mi
 ## If something goes wrong
 
 - **The Route test says the file is in use:** close RPCS3 (and anything else that has `qkl_boot.ast` open) and press the button again.
-- **The game will not start or crashes after a test:** close RPCS3, press **Put the route back to the game's own** (Part B) or **Put my saves back...** (Part A), and tell us the test number and what you saw. If the editor itself will not open the files, copy your own copy of the saves back and, for `qkl_boot.ast`, restore `Documents\hc09-game-file-backup\qkl_boot.ast.entry40.orig` with **Restore all to stock** in *Set personnel*.
+- **The game will not start or crashes after a test:** close RPCS3, press **Put the route back to the game's own** (Part B) or **Put my saves back...** (Part A), and tell us the test number and what you saw. If the editor itself will not open the files, copy your own copy of the saves back and, for `qkl_boot.ast`, restore `Documents\hc09-game-file-backup\qkl_boot.ast.entry40.orig` with **Restore all to stock** in *Set personnel* (that puts the whole entry back, so it also undoes any Set personnel changes you made).
 - **RPCS3 is running:** the editor refuses to install or put saves back while it runs (it rewrites the saves when it closes).
