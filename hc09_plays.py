@@ -333,12 +333,14 @@ def next_ids(profile):
     return {"SETL": top("SETL", "SETL"), "PLYL": top("PBPL", "PLYL"), "SETP": top("SETP", "SETP"), "SGF_": top("SGFF", "SGF_")}
 
 
-def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=None):
+def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=None, reads=None):
     """The rows of a new custom play made from the stock play base_plyl: {table: [row dicts with every column of that table as strings]} for the
     profile save (PBPL, SETL, SETP, SETG, SGFF, PLYS, and PLPD / PLRD / PLCM when the base play has them), and a summary.
     overrides: {poso: (PSAL, ARTL, PLRR)} replaces a slot's assignment with any step list of the game (PSAL, ARTL and PLRR taken from library entries).
     plan: a hc09_playtypes conversion plan, when the play was turned into another kind of play: its PLYT is used, and the PLPD / PLRD / PLCM rows come from the
     stock play of that kind it names (tables_from) or are the ones it synthesised, instead of the base play's.
+    reads: the quarterback's progression for a pass play, [(slot, chance)] for five different skill slots in the order he looks to them (the in-game editor's "progressions"; a
+    chance is 0 to 100): it replaces the copied PLPD row. A play that is not a pass has no reads and ignores it.
     The alignment is the stock set's, in the diagram's units (a custom set keeps the diagram coordinates in both the formation and the art columns); each of
     the set's alignment groups (the normal one and the pre-snap motion variants) is copied with its SETG rows. Ids come after the profile's own."""
     d = lib.detail(base_plyl)
@@ -387,6 +389,15 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
         rows["PLPD"].append({**synth["PLPD"], "PLYL": new_plyl})
     for r in synth.get("PLRD") or []:
         rows["PLRD"].append({"PLYL": new_plyl, "hole": r["hole"]})
+    if reads is not None and rows.get("PLPD"):
+        skill = {sl["poso"] for sl in bset["slots"] if sl["epos"] in (1, 2, 3, 4)}
+        if len(reads) != 5 or len({int(p) for p, _ in reads}) != 5 or any(int(p) not in skill for p, _ in reads) or any(not 0 <= int(c) <= 100 for _, c in reads):
+            raise ValueError("The pass reads are five different receivers (halfbacks, fullbacks, receivers, tight ends), each with a chance from 0 to 100.")
+        row = {"PLYL": new_plyl}
+        for k, (poso, chance) in enumerate(reads, 1):
+            row[f"rcv{k}"] = int(poso)
+            row[f"per{k}"] = int(chance)
+        rows["PLPD"] = [row]
     summary = {"setl": new_setl, "plyl": new_plyl, "name": name, "plyt": ptype, "from": base["name"], "slots_changed": sorted(overrides), "rows": {k: len(v) for k, v in rows.items()}}
     return dict(rows), summary
 

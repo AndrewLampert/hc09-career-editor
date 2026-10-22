@@ -58,7 +58,7 @@ export/import through HC09Editor required.
   play works as that kind. Any slot can be given any of the game's assignments, and
   **Make custom play...** writes the result as a custom play into *copies* of your profile and career
   saves (nothing of yours is touched). The game has not been tried with these files yet, so treat it
-  as an experiment, with backups. See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
+  as an experiment, with backups. **Pass reads...** sets the order the quarterback looks to his receivers. See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
   Testing it in the game: **Install in my game** (in the save window) puts a made play into your profile
   and career after saving them, **Put my saves back** undoes it, and **Route test (testers)...** changes the numbers of
   one route a step at a time for the tests that show what they mean; the exact order of the tests and how

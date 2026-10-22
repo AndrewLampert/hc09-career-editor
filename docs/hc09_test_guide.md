@@ -34,6 +34,7 @@ For each test: make the play in the editor, press **Install in my game**, and lo
 | **A2** play action | **Change the kind of play...**, choose *Play-action pass*, **Change this play to this kind** (it copies a stock play action of the same set) | `T2 Slants PA` |
 | **A3** handoff run | start again from Slants, **Change the kind of play...**, *Handoff run* | `T3 Slants Run` |
 | **A4** no same-set example | start again from the same Slants (Singleback / Big), **Change the kind of play...**, *Triple option*; the window says its assignments come "from other formations" because no triple option uses that set, which is the case we want to see | `T4 To Triple` |
+| **A6** (bonus) your own reads | start from Slants, press **Pass reads...**, move WR1 to the top and TE1 second (or press *Use the usual chances*), **Use these reads** | `T6 Reads` |
 | **A5** (bonus) one player | start from Slants, click WR1 on the field, **Change what WR1 does...**, pick *Out, medium*, **Use this** | `T5 WR Out` |
 
 **In the game** (RPCS3 started again, your career loaded; any way you normally try custom plays is fine: a career game, or Play Now with your custom playbook if the game lets you): open the offensive playbook, go to the custom playbook, then **Created Plays**. For every test play, answer:
@@ -46,6 +47,7 @@ For each test: make the play in the editor, press **Install in my game**, and lo
    - **A3:** does the quarterback hand off, does a back take the handoff and run, do the linemen run block, do the receivers block downfield instead of running routes?
    - **A4:** does the quarterback run the option (ride, then keep or pitch), does a back take a pitch? Does anything stand still or run into the wrong place?
    - **A5:** does WR1 run an out route (up the field, then toward the sideline)?
+   - **A6:** on the play's diagram in the playbook, are the numbers 1 to 5 on the receivers in the order you set? With no pressure, does the quarterback look to your first read first?
 4. Anything odd (players standing still, wrong formation, missing players, strange camera)?
 
 **Write the answers like this** (copy this block into the chat, one per test):

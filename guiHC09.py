@@ -46,7 +46,7 @@ except ImportError:                  # the play designer needs hc09_plays.py nex
     PlayLibrary = None
 
 try:
-    from hc09_playtypes import PlayTypes, FAMILY_NAME, FAMILY_TEXT
+    from hc09_playtypes import PlayTypes, FAMILY_NAME, FAMILY_TEXT, FAMILY_KIND
 except ImportError:                  # without it the play designer still works, only the play types are missing
     PlayTypes = None
 
@@ -5462,6 +5462,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.catalog = getattr(lib, "_job_catalog", None)
         self.base_family = None   # the kind of play the game has it as
         self.plyt_override = None
+        self.reads_override = None   # [(slot, chance)] x5 set in the Pass reads window, or None for the play's own
         self.plyl = None
         self.detail = None
         self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
@@ -5549,6 +5550,8 @@ class PlayDesignerDialog(tk.Toplevel):
         self.lbl_kind.pack(anchor="w")
         self.btn_type = ttk.Button(right, text="Change the kind of play...", command=self._change_type)
         self.btn_type.pack(anchor="w", pady=(4, 0))
+        self.btn_reads = ttk.Button(right, text="Pass reads...", command=self._open_reads)
+        self.btn_reads.pack(anchor="w", pady=(4, 0))
         self.lbl_valid = ttk.Label(right, wraplength=330, justify="left", foreground="gray", padding=(0, 4, 0, 0))
         self.lbl_valid.pack(anchor="w")
         self.lbl_slot = ttk.Label(right, wraplength=330, justify="left", foreground="gray", padding=(0, 8, 0, 0))
@@ -5606,19 +5609,44 @@ class PlayDesignerDialog(tk.Toplevel):
         self.detail = self.lib.detail(self.plyl)
         self.overrides = {}
         self.plyt_override = None
+        self.reads_override = None
         self.base_family = self.types.family_of_play(self.plyl) if self.types is not None else None
         self._show()
 
-    def _reads(self):
-        """The slots of the pass reads in order (the game numbers them 1 to 5 on the diagram): from the play's PLPD row, or the kind it is being made into."""
+    def _is_pass(self):
+        """Does the play (as it is now) have pass reads: it is a pass kind, or the game's play is a pass and nothing says otherwise."""
+        if self.detail is None or self.detail["side"] != "offense":
+            return False
+        fam = self.family_now()
+        return FAMILY_KIND[fam] == "pass" if fam else bool(self.detail["passing"])
+
+    def _reads_list(self):
+        """[(slot, chance)] x5 in the order the quarterback looks to them: the ones set in the Pass reads window, else the play's own (its PLPD row, or that of the kind it is being made
+        into); [] when the play is not a pass."""
+        if not self._is_pass():
+            return []
+        if self.reads_override is not None:
+            return list(self.reads_override)
         plan = self.final_plan()
         if plan is not None:
             row = self.lib.passing.get(plan["tables_from"]) if plan["tables_from"] is not None else (plan["tables"] or {}).get("PLPD")
         else:
-            row = self.detail["passing"] if self.detail else None
+            row = self.detail["passing"]
         if not row:
             return []
-        return [int(row[f"rcv{k}"]) for k in range(1, 6) if int(row[f"per{k}"]) > 0]
+        return [(int(row[f"rcv{k}"]), int(row[f"per{k}"])) for k in range(1, 6)]
+
+    def _reads(self):
+        """The slots of the pass reads in order (the game numbers them 1 to 5 on the diagram)."""
+        return [poso for poso, chance in self._reads_list() if chance > 0]
+
+    def reads_for_make(self):
+        """The reads to write into the custom play, or None to keep the play's own."""
+        return list(self.reads_override) if self.reads_override is not None and self._is_pass() else None
+
+    def _open_reads(self):
+        if self.detail is not None and self._is_pass():
+            ReadsDialog(self.app, self)
 
     # ---- the kind of play (see hc09_playtypes.py)
     def _assign_now(self):
@@ -5646,8 +5674,10 @@ class PlayDesignerDialog(tk.Toplevel):
             self.lbl_kind.configure(text="")
             self.lbl_valid.configure(text="")
             self.btn_type.configure(state="disabled")
+            self.btn_reads.configure(state="disabled")
             return
         self.btn_type.configure(state="normal")
+        self.btn_reads.configure(state="normal" if self._is_pass() else "disabled")
         fam = self.family_now()
         if fam is None:
             self.lbl_kind.configure(text="Kind of play: none of the game's kinds (the quarterback's steps do not make one)")
@@ -5689,9 +5719,10 @@ class PlayDesignerDialog(tk.Toplevel):
             self.slots.selection_set(keep[0])
         p = d["play"]
         extras = []
-        if d["passing"]:
-            pr = d["passing"]
-            extras.append("reads: " + ", ".join(f"slot {int(pr[f'rcv{i}']) + 1} {pr[f'per{i}']}%" for i in range(1, 6) if int(pr[f"per{i}"])))
+        reads = self._reads_list()
+        if reads:
+            names = {s_["poso"]: s_["label"] for s_ in d["slots"]}
+            extras.append("reads in order: " + ", ".join(f"{names.get(poso, poso)} {chance}%" for poso, chance in reads if chance))
         if d["running"]:
             extras.append("run hole " + ", ".join(r["hole"] for r in d["running"]))
         if d["combo"]:
@@ -5786,6 +5817,7 @@ class PlayDesignerDialog(tk.Toplevel):
     def _reset_play(self):
         self.overrides = {}
         self.plyt_override = None
+        self.reads_override = None
         if self.detail is not None:
             self._show()
 
@@ -5797,6 +5829,128 @@ class PlayDesignerDialog(tk.Toplevel):
             messagebox.showinfo("Make custom play", "Custom plays are offensive here for now: pick an offensive play.")
             return
         CustomPlayDialog(self.app, self)
+
+
+class ReadsDialog(tk.Toplevel):
+    """Pass reads: the order the quarterback looks to his receivers (the first read, the second ...), each with the game's own chance number, as the in-game editor's progressions.
+    The five receivers are the play's five skill players; the picture shows the order with the game's numbers 1 to 5. Nothing is written until Make custom play."""
+
+    DEFAULT_CHANCES = (100, 20, 10, 5, 1)       # what the plays made in the game usually have, first read to last
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Pass reads")
+        self.transient(designer)
+        self.geometry(f"{min(1100, self.winfo_screenwidth() - 30)}x{min(640, self.winfo_screenheight() - 100)}")
+        self.minsize(900, 520)
+        self.app, self.designer = app, designer
+        self.items = list(designer._reads_list())
+        self.own = list(self.items)
+        self.labels = {s["poso"]: s["label"] for s in designer.detail["slots"]}
+        ttk.Label(self, text="Pass reads: who the quarterback looks to, in order", font=("", 13, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=1040, justify="left", foreground="gray", padding=(14, 0, 14, 6),
+                  text="The first receiver in the list is the first read, the next one the second read, and so on. Move receivers up and down to change the order; the picture shows the game's "
+                       "numbers 1 to 5 on them. The chance is the game's own number for each read (plays made in the game usually have 100, 20, 10, 5 and 1 from first to last); a read "
+                       "with 0 is not numbered.").pack(anchor="w")
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True, padx=14, pady=(0, 4))
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="y")
+        self.tree = ttk.Treeview(left, columns=("order", "player", "chance"), show="headings", selectmode="browse", height=5)
+        for c, (text, width, anchor) in zip(("order", "player", "chance"), [("Read", 50, "center"), ("Receiver", 150, "w"), ("Chance (0 to 100)", 130, "center")]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor=anchor, stretch=False)
+        self.tree.pack(anchor="w")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._selected())
+        row = ttk.Frame(left)
+        row.pack(anchor="w", pady=(8, 0))
+        self.btn_up = ttk.Button(row, text="Move up", command=lambda: self._move(-1))
+        self.btn_up.pack(side="left")
+        self.btn_down = ttk.Button(row, text="Move down", command=lambda: self._move(1))
+        self.btn_down.pack(side="left", padx=(8, 0))
+        row2 = ttk.Frame(left)
+        row2.pack(anchor="w", pady=(10, 0))
+        ttk.Label(row2, text="Chance of the selected read:").pack(side="left")
+        self.chance_var = tk.IntVar(value=0)
+        self.spin = ttk.Spinbox(row2, from_=0, to=100, width=5, textvariable=self.chance_var, command=self._set_chance)
+        self.spin.pack(side="left", padx=(6, 0))
+        self.spin.bind("<Return>", lambda e: self._set_chance())
+        self.spin.bind("<FocusOut>", lambda e: self._set_chance())
+        ttk.Button(left, text="Use the usual chances (100, 20, 10, 5, 1)", command=self._usual).pack(anchor="w", pady=(10, 0))
+        ttk.Button(left, text="Start again from the play's own reads", command=self._own).pack(anchor="w", pady=(6, 0))
+        right = ttk.Frame(main)
+        right.pack(side="left", padx=(16, 0))
+        self.canvas = PlayCanvas(right, art_dir=getattr(designer.lib, "_ui_art", None))
+        self.canvas.pack()
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 12), before=main)
+        ttk.Button(bottom, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(bottom, text="Use these reads", style="Accent.TButton", command=self._use).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._fill()
+        if self.items:
+            self.tree.selection_set("0")
+
+    def _fill(self, keep=None):
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        for i, (poso, chance) in enumerate(self.items):
+            self.tree.insert("", tk.END, iid=str(i), values=(i + 1, self.labels.get(poso, f"slot {poso}"), chance))
+        if keep is not None and self.tree.exists(str(keep)):
+            self.tree.selection_set(str(keep))
+        self._draw()
+        self._selected()
+
+    def _draw(self):
+        d = self.designer
+        self.canvas.draw_play(d._slots_now(), d.detail["table"], d.lib, reads=[poso for poso, chance in self.items if chance > 0])
+
+    def _index(self):
+        sel = self.tree.selection()
+        return int(sel[0]) if sel else None
+
+    def _selected(self):
+        i = self._index()
+        self.btn_up.configure(state="normal" if i not in (None, 0) else "disabled")
+        self.btn_down.configure(state="normal" if i is not None and i < len(self.items) - 1 else "disabled")
+        if i is not None:
+            self.chance_var.set(self.items[i][1])
+
+    def _move(self, step):
+        i = self._index()
+        if i is None or not 0 <= i + step < len(self.items):
+            return
+        self.items[i], self.items[i + step] = self.items[i + step], self.items[i]
+        self._fill(keep=i + step)
+
+    def _set_chance(self):
+        i = self._index()
+        if i is None:
+            return
+        try:
+            v = max(0, min(100, int(self.chance_var.get())))
+        except (tk.TclError, ValueError):
+            return
+        if v != self.items[i][1]:
+            self.items[i] = (self.items[i][0], v)
+            self._fill(keep=i)
+
+    def _usual(self):
+        self.items = [(poso, self.DEFAULT_CHANCES[k]) for k, (poso, _c) in enumerate(self.items)]
+        self._fill(keep=self._index())
+
+    def _own(self):
+        self.items = list(self.own)
+        self._fill(keep=self._index())
+
+    def _use(self):
+        d = self.designer
+        d.reads_override = None if self.items == self.own and d.reads_override is None else list(self.items)
+        d._show()
+        self.destroy()
 
 
 class JobDialog(tk.Toplevel):
@@ -6265,7 +6419,7 @@ class CustomPlayDialog(tk.Toplevel):
         self.update_idletasks()
         try:
             result = self.app.make_custom_play_files(self.designer.lib, self.designer.plyl, self.name_var.get().strip(), dict(self.designer.overrides), self.profile_var.get(),
-                                                     self.career_var.get(), bokl, self.out_var.get(), plan=self.designer.final_plan())
+                                                     self.career_var.get(), bokl, self.out_var.get(), plan=self.designer.final_plan(), reads=self.designer.reads_for_make())
         except Exception as e:
             messagebox.showerror("Make custom play", str(e))
             return
@@ -10703,7 +10857,7 @@ class App(tk.Tk):
             raise RuntimeError("The bridge did not write every table: " + "; ".join(f"{r.get('table')}: {r.get('status')} {r.get('warnings') or ''}" for r in bad)[:400])
         return res
 
-    def make_custom_play_files(self, lib, base_plyl, name, overrides, profile_path, career_path, bokl, out_dir, plan=None):
+    def make_custom_play_files(self, lib, base_plyl, name, overrides, profile_path, career_path, bokl, out_dir, plan=None, reads=None):
         """Make a custom play from a stock play in COPIES of a profile save and a career save (see build_custom_play and career_link_rows); returns {"message", ...}.
         The originals are only read."""
         if not profile_path or not os.path.isfile(profile_path):
@@ -10721,7 +10875,7 @@ class App(tk.Tk):
         shutil.copy2(career_path, out_career)
         ptables = ["PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM", "PGPL", "PGSS", "PGSL", "PGFM"]
         prof = self._export_tables(out_profile, ptables)
-        new, summary = build_custom_play(lib, base_plyl, name, overrides, {t: prof[t][1] for t in ptables}, plan=plan)
+        new, summary = build_custom_play(lib, base_plyl, name, overrides, {t: prof[t][1] for t in ptables}, plan=plan, reads=reads)
         links = career_link_rows({"PGFM": prof["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
         self._append_and_import(out_profile, {**new, **links}, prof)
         car = self._export_tables(out_career, ["PGPL", "PGSS", "PGSL", "PGFM"])
