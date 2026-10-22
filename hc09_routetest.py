@@ -131,12 +131,34 @@ def play_text(pick):
     return text
 
 
+def choose_cap_play(entries, book_names):
+    """The play to use in the game's Create-A-Play: one that is in it (entry["cap"] is the name it shows there) and in at least one of the game's own named playbooks (never a custom one,
+    and not the unnamed catch-all playbook). The same kind of choice as choose_play: an ordinary pass that throws to the route runner, then other passes, then anything; within a kind the play
+    where he stands closest to the sideline (the easiest to follow), then where he is read first, and plays with a clean name (no "(1)" tail) first. Returns {"entry", "playbooks": [names of the game's playbooks that have it]} or None when no play qualifies."""
+    pool = [e for e in entries if e.get("cap") and any(b in book_names for b in e["books"])]
+    if not pool:
+        return None
+    tiers = [[e for e in pool if e.get("read") and not e.get("option")], [e for e in pool if e.get("read")], pool]
+    tier = next(t for t in tiers if t)
+    e = min(tier, key=lambda e: (e.get("rank", 0), e.get("read") or 9, e["cap"].rstrip().endswith(")"), e["plyl"]))
+    return {"entry": e, "playbooks": sorted(book_names[b] for b in e["books"] if b in book_names)}
+
+
+def cap_text(pick):
+    """Step 2 of a test in words, for Create-A-Play: the existing play to open (formation, set, the name Create-A-Play shows), where the receiver lines up. The menu wording is not confirmed."""
+    e = pick["entry"]
+    pbs = pick["playbooks"]
+    also = f" It is also in the game playbooks {'; '.join(pbs[:3])}{' and more' if len(pbs) > 3 else ''}." if pbs else ""
+    return (f"In Create-A-Play, open the existing play {e['cap'].strip()} (PLYL {e['plyl']}): the {e['form']} formation, the {e['set']} set. Run it from there and watch {' and '.join(e['who'])}. "
+            f"Use this same play for every test.{also} (The menu may be worded differently in your game: if you cannot run a play from Create-A-Play, tell us how you tested.)")
+
+
 def full_list(entries, book_names):
-    """Every play that uses the route, for the chat: PLYL, name, set, formation, receiver and all its playbooks."""
-    lines = [f"Plays that use the route (step list {PSAL}): {len(entries)} plays (PLYL = the play's id in the game files)", ""]
+    """Every play that uses the route, for the chat: PLYL, name, set, formation, receiver, all its playbooks, and the name it has in Create-A-Play when it is in it."""
+    lines = [f"Plays that use the route (step list {PSAL}): {len(entries)} plays (PLYL = the play's id in the game files; the last part says which are in Create-A-Play)", ""]
     for e in entries:
         names = [book_names.get(b, f"playbook {b}") for b in sorted(e["books"], key=lambda b: book_names.get(b, ""))]
-        lines.append(f"PLYL {e['plyl']} | {e['name']} | set {e['set']} | {e['form']} | {' and '.join(e['who'])} | {len(names)} playbook(s): {'; '.join(names)}")
+        lines.append(f"PLYL {e['plyl']} | {e['name']} | set {e['set']} | {e['form']} | {' and '.join(e['who'])} | {len(names)} playbook(s): {'; '.join(names)}" + (f" | in Create-A-Play as {e['cap'].strip()}" if e.get("cap") else ""))
     return "\n".join(lines) + "\n"
 
 
