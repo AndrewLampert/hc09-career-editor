@@ -2,7 +2,7 @@
 
 For people helping to test, on their own copy of the game (PS3 USA in RPCS3). Everything is done from the editor; you never edit a file by hand. **Nothing here has been tried in the game yet, so your answers are the first.**
 
-Two parts. **Part A** tests the custom plays the Play creator makes (about 40 minutes). **Part B** tests what the numbers inside a route mean, which decides whether making your own routes is possible at all (about 40 minutes for the main tests, B1 to B5; B6 to B9 are a bonus). You can do Part A without Part B and the other way round.
+Two parts. **Part A** tests the custom plays the Play creator makes (about 50 minutes; **A7, the moved player, is the one that matters most for what we can build next**). **Part B** tests what the numbers inside a route mean, which decides whether making your own routes is possible at all (about 40 minutes for the main tests, B1 to B5; B6 to B9 are a bonus). You can do Part A without Part B and the other way round.
 
 ## 0. Before you start (10 minutes, once)
 
@@ -34,8 +34,9 @@ For each test: make the play in the editor, press **Install in my game**, and lo
 | **A2** play action | **Change the kind of play...**, choose *Play-action pass*, **Change this play to this kind** (it copies a stock play action of the same set) | `T2 Slants PA` |
 | **A3** handoff run | start again from Slants, **Change the kind of play...**, *Handoff run* | `T3 Slants Run` |
 | **A4** no same-set example | start again from the same Slants (Singleback / Big), **Change the kind of play...**, *Triple option*; the window says its assignments come "from other formations" because no triple option uses that set, which is the case we want to see | `T4 To Triple` |
-| **A6** (bonus) your own reads | start from Slants, press **Pass reads...**, move WR1 to the top and TE1 second (or press *Use the usual chances*), **Use these reads** | `T6 Reads` |
 | **A5** (bonus) one player | start from Slants, click WR1 on the field, **Change what WR1 does...**, pick *Out, medium*, **Use this** | `T5 WR Out` |
+| **A6** (bonus) your own reads | start from Slants, press **Pass reads...**, move WR1 to the top and TE1 second (or press *Use the usual chances*), **Use these reads** | `T6 Reads` |
+| **A7** a moved player (important) | start from Slants, press **Move players...**, click **WR1** in the list (the wide receiver on the right, now 15 yards across and 2.2 back) and set **Across** to **7** (leave Back), **Use these places** | `T7 Moved WR` |
 
 **In the game** (RPCS3 started again, your career loaded; any way you normally try custom plays is fine: a career game, or Play Now with your custom playbook if the game lets you): open the offensive playbook, go to the custom playbook, then **Created Plays**. For every test play, answer:
 
@@ -48,6 +49,7 @@ For each test: make the play in the editor, press **Install in my game**, and lo
    - **A4:** does the quarterback run the option (ride, then keep or pitch), does a back take a pitch? Does anything stand still or run into the wrong place?
    - **A5:** does WR1 run an out route (up the field, then toward the sideline)?
    - **A6:** on the play's diagram in the playbook, are the numbers 1 to 5 on the receivers in the order you set? With no pressure, does the quarterback look to your first read first?
+   - **A7:** before the snap, where does the wide receiver who stood on the right sideline in T1 line up? About 7 yards from the middle of the field (near the right hash marks, inside the numbers) means the game took the new place. Also: does the play's diagram in the playbook show him moved? If the game has a flip for plays, flip it: is the whole formation the mirror image?
 4. Anything odd (players standing still, wrong formation, missing players, strange camera)?
 
 **Write the answers like this** (copy this block into the chat, one per test):
@@ -62,6 +64,8 @@ A2 Slants PA
  - routes run and a pass thrown: yes / no
  - anything odd:
 ```
+
+For **A7** also write down where the wide receiver lined up in T1 (the control) and where he lined up in T7: yards from the sideline or the hash marks, in your own words.
 
 When you are done with Part A, close RPCS3 and press **Put my saves back...** in the save window, then **Yes** to get your files from before the first install (if you want to keep the test plays, skip this).
 
@@ -117,6 +121,9 @@ Measure in yards as well as you can; "about twice as far", "turned toward the mi
 | **everything responds as above, and A1 to A3 work** | writing routes in place is possible | we build the route lab (draw a route, match it to the nearest one the game has, give up one of the game's single-use routes only if you insist), with these numbers |
 | **B1 works but the numbers behave in no pattern** | the file is read but we cannot yet say how | more tests with a simpler route |
 | **A1 fails** | custom plays made by the editor are not accepted at all | fix that first; Part B still answers the route question |
+| **A7: he lines up at the new place** | the game reads the new play's own alignment from the profile, so players can be moved without touching a game file | keep and extend it (also the flipped version, the motion groups) |
+| **A7: he lines up where T1 has him, but the diagram shows him moved** | the game takes the on-field alignment from its own sets, not from the profile | the same edit has to be made in the game files: a new test series like Part B |
+| **A7: he lines up somewhere else** (mirrored, further back ...) | the yards mean something else than we think | tell us where (yards from the middle and from the line) |
 | **A1 works, A2/A3 do not** | changing the kind of a play is the problem | tell us which player does what |
 
 ## If something goes wrong

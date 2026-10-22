@@ -41,7 +41,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv)
+    from hc09_plays import (PlayLibrary, build_custom_play, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -5463,6 +5463,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.base_family = None   # the kind of play the game has it as
         self.plyt_override = None
         self.reads_override = None   # [(slot, chance)] x5 set in the Pass reads window, or None for the play's own
+        self.align_override = {}     # {slot: (x, y) in yards} set in the Move players window
         self.plyl = None
         self.detail = None
         self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
@@ -5550,8 +5551,12 @@ class PlayDesignerDialog(tk.Toplevel):
         self.lbl_kind.pack(anchor="w")
         self.btn_type = ttk.Button(right, text="Change the kind of play...", command=self._change_type)
         self.btn_type.pack(anchor="w", pady=(4, 0))
-        self.btn_reads = ttk.Button(right, text="Pass reads...", command=self._open_reads)
-        self.btn_reads.pack(anchor="w", pady=(4, 0))
+        brow = ttk.Frame(right)
+        brow.pack(anchor="w", pady=(4, 0))
+        self.btn_reads = ttk.Button(brow, text="Pass reads...", command=self._open_reads)
+        self.btn_reads.pack(side="left")
+        self.btn_align = ttk.Button(brow, text="Move players...", command=self._open_alignment)
+        self.btn_align.pack(side="left", padx=(8, 0))
         self.lbl_valid = ttk.Label(right, wraplength=330, justify="left", foreground="gray", padding=(0, 4, 0, 0))
         self.lbl_valid.pack(anchor="w")
         self.lbl_slot = ttk.Label(right, wraplength=330, justify="left", foreground="gray", padding=(0, 8, 0, 0))
@@ -5610,6 +5615,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.overrides = {}
         self.plyt_override = None
         self.reads_override = None
+        self.align_override = {}
         self.base_family = self.types.family_of_play(self.plyl) if self.types is not None else None
         self._show()
 
@@ -5675,9 +5681,11 @@ class PlayDesignerDialog(tk.Toplevel):
             self.lbl_valid.configure(text="")
             self.btn_type.configure(state="disabled")
             self.btn_reads.configure(state="disabled")
+            self.btn_align.configure(state="disabled")
             return
         self.btn_type.configure(state="normal")
         self.btn_reads.configure(state="normal" if self._is_pass() else "disabled")
+        self.btn_align.configure(state="normal" if d["side"] == "offense" and self.stock_yards() else "disabled")
         fam = self.family_now()
         if fam is None:
             self.lbl_kind.configure(text="Kind of play: none of the game's kinds (the quarterback's steps do not make one)")
@@ -5694,9 +5702,36 @@ class PlayDesignerDialog(tk.Toplevel):
         if self.detail is not None and self.types is not None:
             PlayTypeDialog(self.app, self)
 
-    def _slots_now(self, overrides=None):
-        """The play's slots with the changes made here applied (or with these overrides instead)."""
+    def stock_yards(self):
+        """{slot: (x, y)} in yards as the game's set has them (the normal alignment group)."""
+        al = self.lib.alignment(self.detail["set"]["setl"])
+        return {poso: (a["x"], a["y"]) for poso, a in al.items()}
+
+    def yards_now(self):
+        """{slot: (x, y)} in yards with the moves made in the Move players window."""
+        out = self.stock_yards()
+        out.update(self.align_override)
+        return out
+
+    def alignment_for_make(self):
+        """The moved players for the custom play, or None when nobody was moved (and the play is offense)."""
+        return dict(self.align_override) if self.align_override and self.detail is not None and self.detail["side"] == "offense" else None
+
+    def _open_alignment(self):
+        if self.detail is not None and self.detail["side"] == "offense" and self.stock_yards():
+            AlignmentDialog(self.app, self)
+
+    def _slots_now(self, overrides=None, align=None):
+        """The play's slots with the changes made here applied (or with these overrides instead); players moved in the Move players window are drawn where they now stand."""
         overrides = self.overrides if overrides is None else overrides
+        align = self.align_override if align is None else align
+        out = self._slots_assigned(overrides)
+        if align and self.detail["side"] == "offense":
+            ymap = self.lib.yard_map()
+            out = [({**sl, "x": ymap.art(*align[sl["poso"]])[0], "y": ymap.art(*align[sl["poso"]])[1]} if sl["poso"] in align else sl) for sl in out]
+        return out
+
+    def _slots_assigned(self, overrides):
         out = []
         for sl in self.detail["slots"]:
             if sl["poso"] in overrides:
@@ -5818,6 +5853,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.overrides = {}
         self.plyt_override = None
         self.reads_override = None
+        self.align_override = {}
         if self.detail is not None:
             self._show()
 
@@ -5829,6 +5865,175 @@ class PlayDesignerDialog(tk.Toplevel):
             messagebox.showinfo("Make custom play", "Custom plays are offensive here for now: pick an offensive play.")
             return
         CustomPlayDialog(self.app, self)
+
+
+class AlignmentDialog(tk.Toplevel):
+    """Move players: where each offensive player lines up on the field, in yards. Pick a player in the list or on the picture, drag him on the picture or type or step his place;
+    the picture squeezes wide spots, the numbers are the game's own yards. The places go into the new play's own set in your profile (the game's sets are not touched)."""
+
+    STEP = 0.5
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Move players")
+        self.transient(designer)
+        self.geometry(f"{min(1180, self.winfo_screenwidth() - 30)}x{min(720, self.winfo_screenheight() - 100)}")
+        self.minsize(980, 560)
+        self.app, self.designer = app, designer
+        self.ymap = designer.lib.yard_map()
+        self.stock = designer.stock_yards()
+        self.pos = dict(designer.yards_now())
+        self.labels = {s["poso"]: s["label"] for s in designer.detail["slots"]}
+        ttk.Label(self, text="Move players: where each one lines up", font=("", 13, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=1130, justify="left", foreground="gray", padding=(14, 0, 14, 6),
+                  text="Click a player (in the list or on the field) and drag him, or use the arrows or the boxes. Across is yards from the middle of the field, plus to the right; Back is yards "
+                       "behind the line of scrimmage. The picture squeezes the wide spots, so it is only a guide: the yards are what the game gets. Players with pre-snap motion keep their "
+                       "starting spots for the motion alignments, which are not changed. This has not been tried in the game yet.").pack(anchor="w")
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True, padx=14, pady=(0, 4))
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="y")
+        self.tree = ttk.Treeview(left, columns=("player", "across", "back"), show="headings", selectmode="browse", height=11)
+        for c, (text, width, anchor) in zip(("player", "across", "back"), [("Player", 80, "w"), ("Across (yards)", 110, "e"), ("Back (yards)", 110, "e")]):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor=anchor, stretch=False)
+        self.tree.pack(anchor="w")
+        self.tree.tag_configure("moved", foreground="#d98c1f")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._selected())
+        pad = ttk.Frame(left)
+        pad.pack(anchor="w", pady=(10, 0))
+        ttk.Button(pad, text="\u25c0 left", width=8, command=lambda: self._nudge(-self.STEP, 0)).grid(row=1, column=0)
+        ttk.Button(pad, text="up (to the line) \u25b2", width=18, command=lambda: self._nudge(0, self.STEP)).grid(row=0, column=1)
+        ttk.Button(pad, text="right \u25b6", width=8, command=lambda: self._nudge(self.STEP, 0)).grid(row=1, column=2)
+        ttk.Button(pad, text="back \u25bc", width=18, command=lambda: self._nudge(0, -self.STEP)).grid(row=2, column=1)
+        box = ttk.Frame(left)
+        box.pack(anchor="w", pady=(10, 0))
+        self.x_var, self.y_var = tk.StringVar(), tk.StringVar()
+        ttk.Label(box, text="Across:").grid(row=0, column=0, sticky="w")
+        self.sx = ttk.Spinbox(box, from_=-ALIGN_X, to=ALIGN_X, increment=0.25, width=8, textvariable=self.x_var, command=self._typed)
+        self.sx.grid(row=0, column=1, padx=(6, 14))
+        ttk.Label(box, text="Back:").grid(row=0, column=2, sticky="w")
+        self.sy = ttk.Spinbox(box, from_=ALIGN_Y[0], to=ALIGN_Y[1], increment=0.25, width=8, textvariable=self.y_var, command=self._typed)
+        self.sy.grid(row=0, column=3, padx=(6, 0))
+        for w in (self.sx, self.sy):
+            w.bind("<Return>", lambda e: self._typed())
+            w.bind("<FocusOut>", lambda e: self._typed())
+        rowb = ttk.Frame(left)
+        rowb.pack(anchor="w", pady=(10, 0))
+        ttk.Button(rowb, text="Put him back", command=self._reset_one).pack(side="left")
+        ttk.Button(rowb, text="Put everyone back", command=self._reset_all).pack(side="left", padx=(8, 0))
+        self.lbl_note = ttk.Label(left, wraplength=360, justify="left", foreground="gray", padding=(0, 8, 0, 0))
+        self.lbl_note.pack(anchor="w")
+        right = ttk.Frame(main)
+        right.pack(side="left", padx=(16, 0))
+        self.canvas = PlayCanvas(right, art_dir=getattr(designer.lib, "_ui_art", None), on_pick=self._pick)
+        self.canvas.pack()
+        self.canvas.bind("<B1-Motion>", self._drag)
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 12), before=main)
+        ttk.Button(bottom, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(bottom, text="Use these places", style="Accent.TButton", command=self._use).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._fill()
+        self.tree.selection_set(str(next(iter(self.labels))))
+
+    def _moved(self, poso):
+        a, b = self.pos[poso], self.stock[poso]
+        return abs(a[0] - b[0]) > 0.001 or abs(a[1] - b[1]) > 0.001
+
+    def _fill(self, keep=None):
+        keep = keep if keep is not None else self._poso()
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        for poso in sorted(self.pos):
+            x, y = self.pos[poso]
+            self.tree.insert("", tk.END, iid=str(poso), values=(self.labels.get(poso, poso), f"{x:+.2f}", f"{-y:.2f}"), tags=("moved",) if self._moved(poso) else ())
+        if keep is not None and self.tree.exists(str(keep)):
+            self.tree.selection_set(str(keep))
+        self._draw()
+
+    def _poso(self):
+        sel = self.tree.selection()
+        return int(sel[0]) if sel else None
+
+    def _draw(self):
+        d = self.designer
+        self.canvas.draw_play(d._slots_now(align=self._changes()), d.detail["table"], d.lib, changed={p for p in self.pos if self._moved(p)}, selected=self._poso())
+
+    def _changes(self):
+        return {p: v for p, v in self.pos.items() if self._moved(p)}
+
+    def _selected(self):
+        poso = self._poso()
+        if poso is None:
+            return
+        x, y = self.pos[poso]
+        self.x_var.set(f"{x:.2f}")
+        self.y_var.set(f"{-y:.2f}")
+        n = len(self._changes())
+        self.lbl_note.configure(text=f"{self.labels.get(poso, poso)} stood {self.stock[poso][0]:+.2f} across and {-self.stock[poso][1]:.2f} back in the game's own set." + (f"  {n} player{'s' if n != 1 else ''} moved." if n else ""))
+        self._draw()
+
+    def _clamp(self, x, y):
+        return max(-ALIGN_X, min(ALIGN_X, round(x * 4) / 4)), max(ALIGN_Y[0], min(ALIGN_Y[1], round(y * 4) / 4))
+
+    def _set(self, poso, x, y):
+        self.pos[poso] = self._clamp(x, y)
+        self._fill(keep=poso)
+        self._selected()
+
+    def _nudge(self, dx, dy):
+        poso = self._poso()
+        if poso is not None:
+            self._set(poso, self.pos[poso][0] + dx, self.pos[poso][1] + dy)
+
+    def _typed(self):
+        poso = self._poso()
+        if poso is None:
+            return
+        try:
+            x, back = float(self.x_var.get()), float(self.y_var.get())
+        except ValueError:
+            self._selected()
+            return
+        if (x, -back) != self.pos[poso]:
+            self._set(poso, x, -back)
+
+    def _pick(self, poso):
+        if self.tree.exists(str(poso)):
+            self.tree.selection_set(str(poso))
+
+    def _drag(self, event):
+        poso = self._poso()
+        if poso is None or poso not in self.pos:
+            return
+        x, y = self.ymap.yards((event.x - self.canvas.PAD) / self.canvas.SCALE, (event.y - self.canvas.PAD) / self.canvas.SCALE)
+        if (x, y) != self.pos[poso]:
+            self.pos[poso] = self._clamp(x, y)
+            self._fill(keep=poso)
+            x2, y2 = self.pos[poso]
+            self.x_var.set(f"{x2:.2f}")
+            self.y_var.set(f"{-y2:.2f}")
+
+    def _reset_one(self):
+        poso = self._poso()
+        if poso is not None:
+            self.pos[poso] = self.stock[poso]
+            self._fill(keep=poso)
+            self._selected()
+
+    def _reset_all(self):
+        self.pos = dict(self.stock)
+        self._fill()
+        self._selected()
+
+    def _use(self):
+        self.designer.align_override = self._changes()
+        self.designer._show()
+        self.destroy()
 
 
 class ReadsDialog(tk.Toplevel):
@@ -6419,7 +6624,7 @@ class CustomPlayDialog(tk.Toplevel):
         self.update_idletasks()
         try:
             result = self.app.make_custom_play_files(self.designer.lib, self.designer.plyl, self.name_var.get().strip(), dict(self.designer.overrides), self.profile_var.get(),
-                                                     self.career_var.get(), bokl, self.out_var.get(), plan=self.designer.final_plan(), reads=self.designer.reads_for_make())
+                                                     self.career_var.get(), bokl, self.out_var.get(), plan=self.designer.final_plan(), reads=self.designer.reads_for_make(), alignment=self.designer.alignment_for_make())
         except Exception as e:
             messagebox.showerror("Make custom play", str(e))
             return
@@ -10857,7 +11062,7 @@ class App(tk.Tk):
             raise RuntimeError("The bridge did not write every table: " + "; ".join(f"{r.get('table')}: {r.get('status')} {r.get('warnings') or ''}" for r in bad)[:400])
         return res
 
-    def make_custom_play_files(self, lib, base_plyl, name, overrides, profile_path, career_path, bokl, out_dir, plan=None, reads=None):
+    def make_custom_play_files(self, lib, base_plyl, name, overrides, profile_path, career_path, bokl, out_dir, plan=None, reads=None, alignment=None):
         """Make a custom play from a stock play in COPIES of a profile save and a career save (see build_custom_play and career_link_rows); returns {"message", ...}.
         The originals are only read."""
         if not profile_path or not os.path.isfile(profile_path):
@@ -10875,7 +11080,7 @@ class App(tk.Tk):
         shutil.copy2(career_path, out_career)
         ptables = ["PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM", "PGPL", "PGSS", "PGSL", "PGFM"]
         prof = self._export_tables(out_profile, ptables)
-        new, summary = build_custom_play(lib, base_plyl, name, overrides, {t: prof[t][1] for t in ptables}, plan=plan, reads=reads)
+        new, summary = build_custom_play(lib, base_plyl, name, overrides, {t: prof[t][1] for t in ptables}, plan=plan, reads=reads, alignment=alignment)
         links = career_link_rows({"PGFM": prof["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
         self._append_and_import(out_profile, {**new, **links}, prof)
         car = self._export_tables(out_career, ["PGPL", "PGSS", "PGSL", "PGFM"])
