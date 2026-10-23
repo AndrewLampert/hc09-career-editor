@@ -7,7 +7,11 @@ Standard library only (no Tk). The editor's Route test window uses this: it chan
 """
 import collections
 
-TABLE = "PSLO"
+TABLE = "PSLO"                    # the step table of the MASTER copy of the play database (qkl_boot.ast entry 40)
+GAME_TABLE = "PSAL"               # the same step lists in the IN-GAME copies (qkl_fe2ig.ast entries 1673-1679): the game's play set-up code reads a table of this name
+# where a test writes its change: both copies, or only one of them (to find out which one the game reads)
+WHERE = (("both", "Both copies (recommended)"), ("game", "In-game copy only"), ("master", "Master copy only"))
+WHERE_LABEL = dict(WHERE)
 PSAL = 1202                       # the Post route: stem, break, run (used by 58 slots in 42 playbooks)
 # the route's rows in the stock game: (step, code, val1, val2, val3). 8 is a leg, 9 a cut, 10 the end, 255 the end of the list.
 STOCK = ((0, 8, 68, 32, 254), (1, 9, 2, 1, 0), (2, 8, 200, 42, 254), (3, 10, 0, 0, 0), (4, 255, 0, 0, 0))
@@ -191,9 +195,9 @@ def wanted_rows(test_id):
     return out
 
 
-def edits_for(test_id, current):
+def edits_for(test_id, current, table=TABLE):
     """Bridge edits that turn the route's current rows into the wanted ones (only the numbers that differ), each checked against what is there now; [] if there is nothing to do.
-    current: [(step, code, val1, val2, val3)] as read from the file."""
+    current: [(step, code, val1, val2, val3)] as read from the file; table: the step table of that copy (PSLO in the master, PSAL in an in-game copy)."""
     now = {s: (c, a, b, d) for s, c, a, b, d in current}
     if sorted(now) != [s for s, *_ in STOCK] or any(now[s][0] != c for s, c, *_ in STOCK):
         raise ValueError("This route does not look like the game this test was made for (the steps are different), so nothing is changed.")
@@ -203,8 +207,66 @@ def edits_for(test_id, current):
         new = {"val1": a, "val2": b, "val3": d}
         diff = {k: v for k, v in new.items() if old[k] != v}
         if diff:
-            edits.append({"table": TABLE, "match": {"PSAL": PSAL, "step": s}, "expect": {k: old[k] for k in diff}, "set": diff})
+            edits.append({"table": table, "match": {"PSAL": PSAL, "step": s}, "expect": {k: old[k] for k in diff}, "set": diff})
     return edits
+
+
+# ---- the copies of the route in the game files
+# A copy is {"kind": "master" | "game", "file": "qkl_boot.ast", "index": 40, "table": "PSLO" | "PSAL", "rows": [(step, code, v1, v2, v3)], ...} (the rest, ast/start/size, is for the writer).
+def copy_name(c):
+    return ("the master copy" if c["kind"] == "master" else "the in-game copy") + f" ({c['file']} entry {c['index']})"
+
+
+def copies_text(copies):
+    """For the report: which game files hold the route."""
+    return " + ".join(f"{c['file']} entry {c['index']} ({'master' if c['kind'] == 'master' else 'in-game'})" for c in copies)
+
+
+def selected(copies, where):
+    return [c for c in copies if where == "both" or c["kind"] == where]
+
+
+def plan_edits(test_id, copies, where="both"):
+    """[(copy, edits)] for the copies that need a write. The copies chosen by `where` get the numbers of the test, every other copy is put back to the game's own, so after a test the
+    route is the same in the chosen copies and stock everywhere else (a test never leaves a half-changed route behind)."""
+    if not selected(copies, where):
+        raise ValueError("The route was not found in " + ("the in-game copy of the play database (qkl_fe2ig.ast): choose \"Both copies\" or \"Master copy only\"." if where == "game" else "the master copy of the play database."))
+    chosen = selected(copies, where)
+    out = []
+    for c in copies:
+        e = edits_for(test_id if c in chosen else "B0", c["rows"], c["table"])
+        if e:
+            out.append((c, e))
+    return out
+
+
+def label_of(rows):
+    """"stock" for the game's own rows, the id of the test whose numbers these are, or None."""
+    if is_stock(rows):
+        return "stock"
+    for t in TESTS:
+        if tuple(wanted_rows(t["id"])) == tuple(rows):
+            return t["id"]
+    return None
+
+
+def describe_state(copies):
+    """(level, text) for the status line: level is "ok" (the game's own), "changed" (one test, in every copy it was written to) or "odd" (numbers that belong to no test, or a mix)."""
+    states = [(c, label_of(c["rows"])) for c in copies]
+    many = len(copies) > 1
+    if all(s == "stock" for _, s in states):
+        return "ok", "The route in your game files is the game's own (nothing changed)." if many else "The route in your game file is the game's own (nothing changed)."
+    odd = [c for c, s in states if s is None]
+    if odd:
+        return "odd", f"The route in {' and in '.join(copy_name(c) for c in odd)} has numbers that do not belong to any test. Press Put the route back to the game's own."
+    changed = [(c, s) for c, s in states if s != "stock"]
+    ids = {s for _, s in changed}
+    if len(ids) > 1:
+        return "odd", "The copies of the route are changed for different tests. Press Put the route back to the game's own."
+    t = ids.pop()
+    where = " and ".join(copy_name(c) for c, _ in changed)
+    rest = [c for c, s in states if s == "stock"]
+    return "changed", f"The route is changed for test {t}: {TEST_BY_ID[t]['title']} - in {where}." + (f" Not changed: {' and '.join(copy_name(c) for c in rest)}." if rest else "")
 
 
 def describe_changes(test_id):
@@ -221,8 +283,9 @@ def describe_changes(test_id):
 
 
 def report(state, route_plays=None, game=""):
-    """The tester's results as text to paste into Discord: one block per test with what was recorded. state: {"results": {test_id: {field: value}}, "applied": [ids]}."""
-    lines = ["**HC09 route test results**", f"Route: PSLO list {PSAL} (the Post route; stock rows {', '.join('%d(%d,%d,%d)' % (c, a, b, d) for _, c, a, b, d in STOCK[:4])})"]
+    """The tester's results as text to paste into Discord: one block per test with what was recorded. state: {"results": {test_id: {field: value}}, "applied": [ids],
+    "applied_where": {test_id: "both" | "game" | "master"} (where the test's numbers were written)}."""
+    lines = ["**HC09 route test results**", f"Route: step list {PSAL} (the Post route; PSLO in the master copy, PSAL in the in-game copy; stock rows {', '.join('%d(%d,%d,%d)' % (c, a, b, d) for _, c, a, b, d in STOCK[:4])})"]
     if game:
         lines.append(game)
     if route_plays:
@@ -236,6 +299,9 @@ def report(state, route_plays=None, game=""):
             lines.append("not done")
             lines.append("")
             continue
+        w = state.get("applied_where", {}).get(t["id"])
+        if w in WHERE_LABEL:
+            lines.append(f"- Written to: {WHERE_LABEL[w].lower().replace(' (recommended)', '')}")
         for key, label, _ in RESULT_FIELDS:
             v = (r.get(key) or "").strip()
             if v:

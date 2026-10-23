@@ -7106,6 +7106,9 @@ class RouteTestDialog(tk.Toplevel):
         self.state = app.route_test_load_state()
         self.state.setdefault("results", {})
         self.state.setdefault("applied", [])
+        self.state.setdefault("applied_where", {})
+        self.has_game = any(c["kind"] == "game" for c in info["copies"])
+        self.where_var = tk.StringVar(value=RT.WHERE_LABEL.get(self.state.get("where", "both"), RT.WHERE_LABEL["both"]) if self.has_game else RT.WHERE_LABEL["master"])
         self.current = None
         self.vars = {}
         play_names = ", ".join(n for n, _ in info["plays"][:14])
@@ -7116,8 +7119,10 @@ class RouteTestDialog(tk.Toplevel):
         ttk.Label(self, wraplength=1130, justify="left", padding=(14, 12, 14, 2), font=("", 11, "bold"),
                   text="Help find out what the numbers in a route mean: change them one at a time, watch the receiver in the game, say what you saw.").pack(anchor="w")
         ttk.Label(self, wraplength=1130, justify="left", foreground="gray", padding=(14, 0, 14, 4),
-                  text="This changes only the numbers of the Post route in your qkl_boot.ast (the play database), after saving the original in Documents\\hc09-game-file-backup, and \"Put the route back\" "
-                       "restores them. Close RPCS3 before pressing Apply. Do the tests in order; B1 to B5 are the ones that matter, B6 to B9 are a bonus.").pack(anchor="w")
+                  text=("This changes only the numbers of the Post route, in the game's two copies of the play database (qkl_boot.ast and the in-game copy in qkl_fe2ig.ast; \"Write to\" can limit it to one) "
+                        if self.has_game else "This changes only the numbers of the Post route in your qkl_boot.ast (the play database) ") +
+                       "after saving the originals in Documents\\hc09-game-file-backup, and \"Put the route back\" restores them. Close RPCS3 before pressing Apply. "
+                       "Do the tests in order; B1 to B5 are the ones that matter, B6 to B9 are a bonus.").pack(anchor="w")
         self.lbl_status = ttk.Label(self, wraplength=1130, justify="left", padding=(14, 4, 14, 4), font=("", 10, "bold"))
         self.lbl_status.pack(anchor="w")
         main = ttk.Frame(self)
@@ -7149,6 +7154,10 @@ class RouteTestDialog(tk.Toplevel):
         self.btn_apply = ttk.Button(row, text="1. Apply this test", style="Accent.TButton", command=self._apply)
         self.btn_apply.pack(side="left")
         ttk.Button(row, text="Put the route back to the game's own", command=self._put_back).pack(side="left", padx=(10, 0))
+        ttk.Label(row, text="Write to:").pack(side="left", padx=(14, 4))
+        self.cb_where = ttk.Combobox(row, textvariable=self.where_var, values=[label for _, label in RT.WHERE], state="readonly" if self.has_game else "disabled", width=24)
+        self.cb_where.pack(side="left")
+        self.cb_where.bind("<<ComboboxSelected>>", lambda e: self._where_changed())
         form = ttk.LabelFrame(right, text=" 2. Your answer ")
         form.pack(fill="x", pady=(10, 0))
         for i, (key, label, options) in enumerate(RT.RESULT_FIELDS):
@@ -7169,7 +7178,7 @@ class RouteTestDialog(tk.Toplevel):
         ttk.Button(bottom, text="Copy all plays that use this route", command=self._copy_plays).pack(side="left")
         self.bind("<Escape>", lambda e: self.destroy())
         self._fill()
-        self._status_from(info["rows"])
+        self._status_from(info["copies"])
         self.tree.selection_set(RT.TESTS[0]["id"])
 
     # ---- list and form
@@ -7183,15 +7192,20 @@ class RouteTestDialog(tk.Toplevel):
         if keep and self.tree.exists(keep[0]):
             self.tree.selection_set(keep[0])
 
-    def _status_from(self, rows):
-        if RT.is_stock(rows):
-            self.lbl_status.configure(text="The route in your game file is the game's own (nothing changed).", foreground="#4caf50")
-            return
-        for t in RT.TESTS:
-            if tuple(RT.wanted_rows(t["id"])) == tuple(rows):
-                self.lbl_status.configure(text=f"The route in your game file is changed for test {t['id']}: {t['title']}.", foreground="#d98c1f")
-                return
-        self.lbl_status.configure(text="The route in your game file has numbers that do not belong to any test. Press Put the route back to the game's own.", foreground="#e05050")
+    def _status_from(self, copies):
+        level, text = RT.describe_state(copies)
+        self.lbl_status.configure(text=text, foreground={"ok": "#4caf50", "changed": "#d98c1f"}.get(level, "#e05050"))
+
+    def _where(self):
+        """"both", "game" or "master": where a test writes its change."""
+        if not self.has_game:
+            return "master"
+        return next((k for k, label in RT.WHERE if label == self.where_var.get()), "both")
+
+    def _where_changed(self):
+        self.state["where"] = self._where()
+        self.app.route_test_save_state(self.state)
+        self._refresh_steps()
 
     def _select(self):
         sel = self.tree.selection()
@@ -7212,17 +7226,21 @@ class RouteTestDialog(tk.Toplevel):
             return
         app = self.app
 
-        def work():
-            return app.route_test_apply(self.info, t["id"])
+        where = self._where()
 
-        def done(rows):
+        def work():
+            return app.route_test_apply(self.info, t["id"], where)
+
+        def done(copies):
             if t["id"] not in self.state["applied"]:
                 self.state["applied"].append(t["id"])
+            self.state["applied_where"][t["id"]] = where
             app.route_test_save_state(self.state)
-            self._status_from(rows)
+            self._status_from(copies)
             self._fill()
-            messagebox.showinfo("Route test", f"Done: the route is now set for test {t['id']}. Start the game and follow steps 2 to 4." if t["changes"] else
-                                "Done: the route is the game's own. Start the game and follow steps 2 to 4.", parent=self)
+            at = f" ({RT.WHERE_LABEL[where].lower().replace(' (recommended)', '')})" if self.has_game else ""
+            messagebox.showinfo("Route test", f"Done: the route is now set for test {t['id']}{at}. Start the game and follow steps 2 to 4." if t["changes"] else
+                                f"Done: the route is the game's own{at}. Start the game and follow steps 2 to 4.", parent=self)
 
         app.run_in_thread_with_busy("Changing the route...", work, done, error_title="Route test")
 
@@ -7230,10 +7248,10 @@ class RouteTestDialog(tk.Toplevel):
         app = self.app
 
         def work():
-            return app.route_test_apply(self.info, "B0")
+            return app.route_test_apply(self.info, "B0", "both")
 
-        def done(rows):
-            self._status_from(rows)
+        def done(copies):
+            self._status_from(copies)
             messagebox.showinfo("Route test", "The route is the game's own again.", parent=self)
 
         app.run_in_thread_with_busy("Putting the route back...", work, done, error_title="Route test")
@@ -7250,7 +7268,7 @@ class RouteTestDialog(tk.Toplevel):
             self.tree.selection_set(nxt)
 
     def _text(self):
-        return RT.report(self.state, [n for n, _ in self.info["plays"][:12]], game=f"Game archive: {os.path.basename(self.info['boot'])} entry {self.info['copy']['index']}")
+        return RT.report(self.state, [n for n, _ in self.info["plays"][:12]], game="Game files: " + RT.copies_text(self.info["copies"]))
 
     def _copy(self):
         self.clipboard_clear()
@@ -7263,8 +7281,10 @@ class RouteTestDialog(tk.Toplevel):
         if t is None:
             return
         step2 = self.cap_text if self.mode_var.get() == "cap" and self.cap_text else self.pick_text
+        only_game = (" The in-game copy is the one that holds the Create-A-Play plays: with this setting switch Test with to Create-A-Play."
+                     if self._where() == "game" and (self.mode_var.get() != "cap" or not self.cap_text) else "")
         self.lbl_steps.configure(text=(f"What it changes: {RT.describe_changes(t['id'])}\nWhat it asks: {t['asks']}\n\n"
-                                       "1.  Close RPCS3 or Xenia if it is running, then press Apply this test" + (" (this one changes nothing: it is only the control)" if not t["changes"] else "") + ".\n"
+                                       "1.  Close RPCS3 or Xenia if it is running, then press Apply this test" + (" (this one changes nothing: it is only the control)" if not t["changes"] else "") + "." + only_game + "\n"
                                        f"2.  {step2}\n"
                                        "3.  Run the play three or four times and watch THAT receiver (several others run deep breaking routes in the same play: the one named in step 2 is the one that changes). You can watch the replay. "
                                        "If a test seems to change nothing, check B0 and the test again with a second play (the button at the bottom copies the list of all plays that use this route) before you say so.\n"
@@ -11326,15 +11346,27 @@ class App(tk.Tk):
         with open(self.route_test_state_path(), "w", encoding="utf-8") as f:
             json.dump(state, f, indent=1)
 
-    def route_test_current(self, boot):
-        """The route's rows in the game file right now: [(step, code, v1, v2, v3)]."""
+    def route_test_scan(self, archives):
+        """Every copy of the route in the game files right now, the master copy first: [{"kind": "master" | "game", "ast", "file", "index", "start", "size", "table", "rows": [(step, code, v1, v2, v3)]}].
+        The master copy (qkl_boot.ast entry 40) calls its step table PSLO; the in-game copies (qkl_fe2ig.ast) call it PSAL, and only the ones that hold this route are listed."""
         cache = os.path.join(GAMEDATA_CACHE, "routetest")
         shutil.rmtree(cache, ignore_errors=True)
-        scan = self.model.run_bridge(["play-sets-scan", "--asts", boot, "--out-dir", cache, "--tables", "PSLO"])
-        copies = [c for c in scan["copies"] if c["tables"].get("PSLO")]
-        if not copies:
+        try:
+            scan = self.model.run_bridge(["play-sets-scan", "--asts", ",".join(archives), "--out-dir", cache, "--tables", f"{RT.TABLE},{RT.GAME_TABLE}"])
+            found = []
+            for c in scan["copies"]:
+                for kind, table in (("master", RT.TABLE), ("game", RT.GAME_TABLE)):
+                    if not c["tables"].get(table):
+                        continue
+                    rows = RT.rows_of(read_csv(os.path.join(cache, f"{table.lower()}_{c['base']}.csv")))
+                    if rows:
+                        found.append({"kind": kind, "ast": c["ast"], "file": c["file"], "index": c["index"], "start": c["start"], "size": c["size"], "table": table, "rows": rows, "n": c["tables"][table]})
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)
+        masters = sorted((c for c in found if c["kind"] == "master"), key=lambda c: -c["n"])[:1]
+        if not masters:
             raise RuntimeError("The play database with the routes was not found in the game file.")
-        return RT.rows_of(read_csv(os.path.join(cache, f"pslo_{max(copies, key=lambda c: c['tables']['PSLO'])['base']}.csv")))
+        return masters + sorted((c for c in found if c["kind"] == "game"), key=lambda c: (c["file"], c["index"]))
 
     def _create_a_play_pool(self, archives):
         """{play id: the name Create-A-Play shows} for the plays of the game's Create-A-Play: the smaller copy of the play database that has exactly one play per set (qkl_fe2ig.ast entry 1676,
@@ -11414,24 +11446,26 @@ class App(tk.Tk):
                 my_book = None
         pick = RT.choose_play(entries, book_names, holders, team_nickname(team_id) if team_id else "", my_book)
         lines = [RT.watch_line(x["name"], x["plyl"], x["set"], x["form"], x["who"], [book_names.get(b, f"playbook {b}") for b in x["books"]]) for x in entries]
-        return {"boot": boot, "copy": lib._master, "rows": rows, "plays": sorted(((n, len(b)) for n, b in plays.items()), key=lambda x: (-x[1], x[0])),
+        archives = list(archives or [boot])
+        return {"boot": boot, "archives": archives, "copies": self.route_test_scan(archives), "copy": lib._master, "rows": rows, "plays": sorted(((n, len(b)) for n, b in plays.items()), key=lambda x: (-x[1], x[0])),
                 "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs}), "watch": lines, "pick": pick,
                 "cap_pick": RT.choose_cap_play(entries, book_names), "cap_plays": sum(1 for x in entries if x.get("cap")), "all_plays": RT.full_list(entries, book_names)}
 
-    def route_test_apply(self, info, test_id):
-        """Make the route the way a test wants it (backing the file up first, as every write of the game files does); returns the route's rows afterwards."""
-        edits = RT.edits_for(test_id, self.route_test_current(info["boot"]))
-        if edits:
+    def route_test_apply(self, info, test_id, where="both"):
+        """Make the route the way a test wants it in the chosen copies (RT.WHERE: "both", "game" = the in-game copy only, "master" = the master copy only; every other copy is put back to
+        the game's own), backing each file entry up first as every write of the game files does. Returns the copies afterwards (route_test_scan)."""
+        plan = RT.plan_edits(test_id, self.route_test_scan(info["archives"]), where)
+        if plan:
             if self._rpcs3_running():
                 raise RuntimeError("RPCS3 or Xenia is running. Close it first (it can hold the game file open), then press the button again.")
-            m = info["copy"]
+            targets = [{"ast": c["ast"], "index": c["index"], "start": c["start"], "size": c["size"], "edits": edits} for c, edits in plan]
             try:
-                apply_personnel_targets(self.model, [{"ast": m["ast"], "index": m["index"], "start": m["start"], "size": m["size"], "edits": edits}], backup_dir=self._personnel_backup_dir())
+                apply_personnel_targets(self.model, targets, backup_dir=self._personnel_backup_dir())
             except RuntimeError as e:
                 if any(w in str(e).lower() for w in ("ebusy", "eperm", "eacces", "in use", "being used")):
-                    raise RuntimeError("The game file is in use. Close RPCS3 (and anything else using qkl_boot.ast) and press the button again.")
+                    raise RuntimeError("A game file is in use. Close RPCS3 (and anything else using qkl_boot.ast or qkl_fe2ig.ast) and press the button again.")
                 raise
-        return self.route_test_current(info["boot"])
+        return self.route_test_scan(info["archives"])
 
     def on_open_route_test(self):
         if RT is None:
