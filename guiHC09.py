@@ -11450,7 +11450,7 @@ class App(tk.Tk):
     @staticmethod
     def _rpcs3_running():
         """True if an emulator that plays the game seems to be running: RPCS3 (PS3) or Xenia (Xbox 360). It holds the saves open, and rewrites them when it closes."""
-        names = ("rpcs3", "xenia", "xenia_canary")
+        names = ("rpcs3", "xenia", "xenia_canary", "xenia_edge", "xenia-edge")
         try:
             if os.name == "nt":
                 out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=15)
