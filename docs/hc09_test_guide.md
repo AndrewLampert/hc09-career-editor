@@ -58,7 +58,9 @@ When you are done, close RPCS3 and press **Put my saves back...** in the Test pl
 
 ## Part B: the route numbers (the Route test window)
 
-**Why:** a route is a short list of steps: `8(68,32,254) 9(2,1,0) 8(200,42,254) 10` means *run a leg, cut, run a leg, finish*. We do not know what the numbers mean (how far, which way, which side), and we do not know whether the game reads the file the editor can change. If we know both, the editor could one day let you build a route; if the game ignores the edit, that idea is dead and we must look elsewhere. Seven simple tests settle it.
+**Why:** a route is a short list of steps: `8(68,32,254) 9(2,1,0) 8(200,42,254) 10` means *run a leg, cut, run a leg, finish*. The game's own route data suggests what the numbers mean (below), but nobody has seen it in the game, and we do not know whether the game reads the file the editor can change. If we know both, the editor could one day let you build a route; if the game ignores the edit, that idea is dead and we must look elsewhere. Seven simple tests settle it.
+
+**What the data says the numbers mean (your tests confirm or refute it).** In a leg `8(first, second, third)`: the **first number is its length in yards**, (n >> 3) + (n & 7) / 7, so 68 is 8.6 yards, 136 is 17, 200 is 25 and 60 is 7.6; the **second number is a heading** in degrees, n x 2.8125, so 32 is 90 (straight upfield), 42 is 118, 16 is 45 and 64 is 180 (back along the line); the **third number is a speed**, n / 255, so 254 is full speed and 127 half. In the cut `9(side, size)`: the first number is the side (1 right, 2 left) and the second the size of the turn (1 about 45 degrees, 2 about 90, 7 and 14 about 135; the data never uses 5). So the stock Post is a first leg of about 9 yards, a cut to the left of about 45 degrees and a long second leg of 25 yards.
 
 **How:** Playbooks tab, **Route test (testers)...**. The window changes **one route** (the *Post* that *WR Post*, *FL Post*, *Cross Up* and others use; it is used by 58 receivers in 42 of the game's playbooks) one number at a time and tells you, for each test, what to look at.
 
@@ -80,12 +82,12 @@ The route is the *Post* that *WR Post*, *FL Post*, *Cross Up* and others use; it
 | Test | What it changes | What we learn |
 |---|---|---|
 | **B0** | nothing (the control) | how the stock route runs: stem depth, break direction, run after the break. Do this first, it is what the others are compared with. |
-| **B1** | the stem's first number 68 to **136** | **does the game read the edited file at all, and is that number a length?** If the receiver runs about twice as far before he breaks: yes to both. If nothing is different: no. Tell us right away. |
-| **B2** | the second leg's second number 42 to **16** | is it a direction? which way does the break turn? |
-| **B3** | the same number 42 to **64** | which way do bigger numbers turn it (opposite to B2?) |
+| **B1** | the stem's first number 68 to **136** | **does the game read the edited file at all, and is that number a length?** If the receiver runs about twice as far before he breaks (17 yards instead of 9): yes to both. If nothing is different: no. Tell us right away. |
+| **B2** | the second leg's second number 42 to **16** | is it a heading? By the numbers the break goes from 118 to 45 degrees: a flatter, wider break. |
+| **B3** | the same number 42 to **64** | which way do bigger numbers turn it (opposite to B2?) By the numbers 64 is 180 degrees, back along the line. |
 | **B4** | the cut's first number 2 to **1** | does it turn the cut to the other side? |
-| **B5** | the cut's second number 1 to **5** | sharper, rounder, a different angle, a stop first? |
-| **B6 to B9** (bonus) | second leg's length 200 to 60; stem heading 32 to 16; third number 254 to 127; cut second number 1 to 2 | more of the same questions |
+| **B5** | the cut's second number 1 to **5** | sharper, rounder, a different angle, a stop first? (5 is a code the data never uses, so there is no prediction.) |
+| **B6 to B9** (bonus) | second leg's length 200 to 60 (25 to 7.6 yards); stem heading 32 to 16 (90 to 45 degrees); third number 254 to 127 (full to half speed); cut second number 1 to 2 (45 to 90 degrees) | more of the same questions |
 | **B10** | nothing (the control again) | **did Put the route back work?** The route should run exactly as in B0. Press *Put the route back to the game's own* before this test. |
 
 Measure in yards as well as you can; "about twice as far", "turned toward the middle at about 45 degrees" are good answers. If you cannot tell, say so. A short video of B0, B1 and B3 (the receiver and the yard lines) helps a lot if you can make one; it is optional.
@@ -97,8 +99,8 @@ Measure in yards as well as you can; "about twice as far", "turned toward the mi
 | If we see ... | it means ... | next |
 |---|---|---|
 | **B1: nothing changed** | the game does not read routes from this file, so the in-place idea cannot work this way | find the copy the game does read (this is the important result; stop here and tell us) |
-| **B1: the stem is longer, B6: the second leg is shorter** | the file is read and the first number is a length | measure yards per unit from B0 and B1 (68 against 136) |
-| **B2 and B3 break in two different directions** | the second number of a leg is a direction, 32 straight on | the lab can draw a break at any angle: needs a few more points to calibrate |
+| **B1: the stem is longer, B6: the second leg is shorter** | the file is read and the first number is a length | check the yards against the formula (8.6 and 17 yards for 68 and 136) |
+| **B2 and B3 break in two different directions** | the second number of a leg is a heading (32 = 90 degrees = straight upfield) | the lab can draw a break at any angle; the degrees formula only needs a couple of angles to confirm |
 | **B4 flips the side, B5 changes sharpness** | the cut's numbers are side and sharpness | the lab can build a cut |
 | **everything responds as above, and T1 to T3 work** | writing routes in place is possible | we build the route lab (draw a route, match it to the nearest one the game has, give up one of the game's single-use routes only if you insist), with these numbers |
 | **B1 works but the numbers behave in no pattern** | the file is read but we cannot yet say how | more tests with a simpler route |

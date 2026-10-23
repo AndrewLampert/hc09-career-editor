@@ -1,6 +1,6 @@
 # What the game's own data holds
 
-Notes from reading the shipped database in `qkl_boot.ast` (the game's data, not a save) and comparing it with real saves. Everything here is read from files; where something was checked on the game's screen it says so. Companion documents: `hc09_field_reference.md` (the community field list and what the editor found to be wrong in it), `hc09_position_presets.md` (the Player Type Fit formulas and readings).
+Notes from reading the shipped database in `qkl_boot.ast` (the game's data, not a save) and comparing it with real saves. Everything here is read from files; where something was checked on the game's screen it says so. Companion documents: `hc09_field_reference.md` (the community field list and what the editor found to be wrong in it), `hc09_position_presets.md` (the Player Type Fit formulas and readings), `hc09_game_internals.md` (how the tables fit together: overall, injuries, contracts, draft, play calling, routes).
 
 ## How to read it
 
