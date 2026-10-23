@@ -153,8 +153,9 @@ python guiHC09.py
    leaves the wrapper alone, as the community's MC02 <-> DB converter does. **Saves...** also looks for Xenia's `content` folder (in the folders of your
    recent saves, any folder you add with *Look in another folder...*, the usual places, or *Search this computer*), lists the careers it finds there marked
    *(Xenia)*, and finds the profile that goes with a career by what is in it (a career has 208 tables, a profile 43), so Test plays can fill both in. This was written
-   from how Xenia is known to lay out its files (`content/<profile id>/45410841/<type>/<package>/<file>`) and not yet checked against a real install: if yours are
-   elsewhere, pick the files by hand (Details... in the save windows). Back up the files first. Xbox 360 files taken straight out of a console package (STFS) have to be
+   from how Xenia is known to lay out its files (`content/<profile id>/45410841/<type>/<package>/<file>`, each save one extensionless MC02 file in a folder of the same name,
+   such as `CAREER-ME/CAREER-ME`) and checked only against copies of our own saves: Xenia Canary and Xenia Edge are the ones meant (a portable copy, with `content` next to the
+   program, can be anywhere: the editor also asks Windows where a running Xenia is). If yours are elsewhere, pick the files by hand (Details... in the save windows). Back up the files first. Xbox 360 files taken straight out of a console package (STFS) have to be
    extracted first (for example with Modio), and PS3 files decrypted, as the community guides say.
    The first time you load a save it asks which team is yours and remembers the answer;
    switch teams any time from the list on the left.

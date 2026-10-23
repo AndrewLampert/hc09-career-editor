@@ -8,6 +8,7 @@ the folder each installed game was added from in <rpcs3>/config/games.yml, so fr
 import glob
 import os
 import re
+import subprocess
 import time
 
 GAME_ID = "BLUS30128"                                   # NFL Head Coach 09 (USA)
@@ -173,14 +174,51 @@ def common_xenia_dirs():
     for var in ("APPDATA", "LOCALAPPDATA"):
         if os.environ.get(var):
             cands.append(os.path.join(os.environ[var], "Xenia"))
-    for pattern in (os.path.join(home, "Downloads", "xenia*"), os.path.join(home, "Documents", "xenia*"), os.path.join(home, "Desktop", "xenia*"),
-                    r"C:\Emulators\*enia*", r"C:\Games\*enia*"):
-        cands += sorted(glob.glob(pattern))
+    parents = [home, os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads"), "C:\\", r"C:\Emulators", r"C:\Games", "D:\\", r"D:\Emulators", r"D:\Games"]
+    cands += xenia_named_dirs(parents)
     out = []
     for c in cands:
         if os.path.isdir(os.path.join(c, XENIA_CONTENT_DIR)) and c not in out:
             out.append(c)
     return out
+
+
+def xenia_named_dirs(parents):
+    """Folders with "xenia" in their name (xenia_canary, Xenia Edge, xenia-canary-windows ...) directly in the given folders and one level inside them (a portable copy is often
+    unzipped into a folder inside another one). The caller keeps the ones that hold `content`."""
+    out = []
+    for parent in parents:
+        try:
+            names = sorted(os.listdir(parent))
+        except OSError:
+            continue
+        for n in names:
+            d = os.path.join(parent, n)
+            if "xenia" in n.lower() and os.path.isdir(d):
+                out.append(d)
+                try:
+                    out += [os.path.join(d, c) for c in sorted(os.listdir(d)) if os.path.isdir(os.path.join(d, c))]
+                except OSError:
+                    pass
+    return out
+
+
+def running_xenia_dirs():
+    """The folders of Xenia programs (Canary, Edge) that are running now, asked of Windows: a portable Xenia keeps `content` next to its program, wherever that is. [] elsewhere or on
+    any failure."""
+    if os.name != "nt":
+        return []
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Process | Where-Object { $_.Name -like 'xenia*' } | ForEach-Object { $_.Path }"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    dirs = []
+    for line in out.splitlines():
+        line = line.strip()
+        if line and os.path.isfile(line) and os.path.dirname(line) not in dirs:
+            dirs.append(os.path.dirname(line))
+    return dirs
 
 
 def search_xenia_dirs(roots, max_depth=4, budget=3.0):
@@ -310,7 +348,8 @@ def list_xenia_saves(xenia_dirs):
                 rel = os.path.relpath(path, title).split(os.sep)
                 package = rel[-2] if len(rel) >= 3 else ""             # <type>/<package>/<file>; a file straight in the type folder has no package folder
                 st = os.stat(path)
-                out.append({"name": package or os.path.splitext(os.path.basename(path))[0], "path": path, "mtime": st.st_mtime, "size": st.st_size, "root": title, "kind": kind,
+                shown = re.sub(r"^(CAREER|PROFILE)-", "", package, flags=re.I)                      # CAREER-ME is shown as ME, as the PS3 saves are
+                out.append({"name": shown or package or os.path.splitext(os.path.basename(path))[0], "path": path, "mtime": st.st_mtime, "size": st.st_size, "root": title, "kind": kind,
                             "tables": tables, "xuid": xuid, "package": package})
     return sorted(out, key=lambda s: -s["mtime"])
 
@@ -343,6 +382,9 @@ def candidate_xenia_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search
             add(d)
     for d in common_xenia_dirs():
         add(d)
+    if not out:
+        for d in running_xenia_dirs():
+            add(d)
     if not out:
         for d in search_xenia_dirs(search_roots, budget=search_budget):
             add(d)
