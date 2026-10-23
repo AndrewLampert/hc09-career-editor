@@ -367,3 +367,156 @@ Unnamed: `IJSK`, `INJR`, `INTT`, `RHBU`, `ITUt`
 7. Club officials, owners and trainers: names and personality, mostly already reachable.
 
 Nothing here has been tested in-game; each item above should be checked on a copy of a save before it is trusted.
+
+## The game's own names for fields
+
+The game's executable registers a name for every database field id (5,648 names: all 1,925 field ids of the shipped database and 2,151 of the 2,210 in a franchise save, including every one of the 234 columns of the player table). These are the developers' own labels, so they settle some questions the community config above could only guess at. (Words only: this is a list of names, no game code is included in the editor.)
+
+**What they settle**
+- `SKPA` is `COACH_SKILLPERFORMANCE_MAX` and `SKPF` is `COACH_SKILLPERFORMANCE`: the config's reading (Potential / Current) was right, and it agrees with the in-game finding that a coach's displayed Performance is the lower of the two, so the table row above is a naming difference, not a conflict.
+- `CBMP`, `QBMP`, `HBMP`, `WRMP`, `TEMP`, `TKMP` (tackle), `GDMP` (guard), `CRMP` (center), `DEMP`, `DTMP`, `OLMP`, `MLMP`, `FSMP`, `SSMP`, `FBMP`, `KKMP` (kicker), `KPMP` (punter) on a GM are the GM's per-position roster-minimum philosophies (`CB_MINPHILOSOPHY`, `QB_MINPHILOSOPHY` ...), the same settings as Team Philosophy > Roster minimums; they are not scouting skills (an in-game test had already shown they do not drive Potential Evaluation). `GSMP` is not a position: it is `GM_SPENDINGMONEYPHILOSOPHY` (Distribute money evenly / spend on the biggest 1, 2 or 3 needs). The editor now labels them this way in the GM table.
+- Player fields the config did not describe: `PPGA` is `PLYR_PROGRESSGAMES` and `PPSP` `PLYR_PROGRESSSTATPOINTS` (the two counters that feed a player's progression), `PLDP` `PLYR_UNSPENT_POINTS` (training points to spend), `PYRP` years pro, `PWIN` weeks injured, `PIRE` the reason a player is inactive, `PVAL` the game's value of the player.
+
+### Players (`PLAY`): 10 fields the config above does not name
+
+| Field | The game's name |
+|---|---|
+| `PPGA` | PLYR_PROGRESSGAMES |
+| `PLDC` | PLYR_DRILLS_COMPLETED |
+| `PLCD` | PLYR_CURRENT_DRILL |
+| `PIRE` | PLYR_INACTIVEREASON |
+| `PLFH` | PLYR_FLAGHIDDEN |
+| `PVAL` | PLYR_VALUE |
+| `PWIN` | PLYR_WEEKSINJURED |
+| `PLDP` | PLYR_UNSPENT_POINTS |
+| `PYRP` | PLYR_YEARSPRO |
+| `PPSP` | PLYR_PROGRESSSTATPOINTS |
+
+### Coaches (`COCH`): 32 fields the config above does not name
+
+| Field | The game's name |
+|---|---|
+| `CODA` | COACH_OLDFLAGDRAFT |
+| `COFA` | COACH_OLDFLAGFASIGNING |
+| `CSPA` | COACH_SEASPOINTSAGAINST |
+| `CRSA` | COACH_S |
+| `CSPF` | COACH_SEASPOINTSFOR |
+| `CPAG` | COACH_CAREERPOINTSAGAINST |
+| `CSTI` | COACH_SEASTIES |
+| `CSWI` | COACH_SEASWINS |
+| `CRYL` | COACH_RETIREYRSLEFT |
+| `CBLM` | COACH_CAREERBIGLOSSMARGIN |
+| `CSLM` | COACH_SEASBIGLOSSMARGIN |
+| `CBWM` | COACH_CAREERBIGWINMARGIN |
+| `CSWM` | COACH_SEASBIGWINMARGIN |
+| `CSLO` | COACH_SEASLOSSES |
+| `COAP` | COACH_AWARDPOINTS |
+| `CODP` | COACH_OLDFLAGSIGNDRAFTPICKS |
+| `CORP` | COACH_OLDFLAGRESIGNPLAYERS |
+| `COFR` | COACH_OLDFLAGFILLROSTER |
+| `CCPR` | COACH_CAREERPOINTSFOR |
+| `CORR` | COACH_OLDFLAGREORDERROSTER |
+| `CSBS` | COACH_SUPERBOWLWINSTREAK |
+| `CCLS` | COACH_CAREERLONGWINSTREAK |
+| `CSLS` | COACH_SEASLONGWINSTREAK |
+| `CDWS` | COACH_DIVPLAYOFFWINSTREAK |
+| `CPWS` | COACH_CONFPLAYOFFWINSTREAK |
+| `CRWS` | COACH_REGULARWINSTREAK |
+| `CSWS` | COACH_SEASWINSTREAK |
+| `CWWS` | COACH_WCPLAYOFFWINSTREAK |
+| `CRAT` | COACH_RATING |
+| `CLCT` | COACH_LASTCONTRACTTEAM |
+| `CWST` | COACH_WINSEASSTREAK |
+| `COEX` | COACH_OLDFLAGEXPANSIONDRAFT |
+
+### Teams (`TEAM`): 49 fields the config above does not name
+
+| Field | The game's name |
+|---|---|
+| `TCP0` | TEAM_CURRSALCAPPENALTY |
+| `TCP1` | TEAM_NEXTSALCAPPENALTY |
+| `TFCA` | TEAM_CHECKACTIVEPLAYERCOUNT |
+| `TCPA` | TEAM_SEASCONFPOINTSAGAINST |
+| `TDPA` | TEAM_SEASDIVPOINTSAGAINST |
+| `TSPA` | TEAM_SEASPOINTSAGAINST |
+| `TMRE` | TEAM_RELOCATED |
+| `TCPF` | TEAM_SEASCONFPOINTSFOR |
+| `TDPF` | TEAM_SEASDIVPOINTSFOR |
+| `TSPF` | TEAM_SEASPOINTSFOR |
+| `TSTI` | TEAM_SEASTIES |
+| `TSWI` | TEAM_SEASWINS |
+| `TNCL` | TEAM_SEASNONCONFLOSSES |
+| `JJNM` | TEAM_JERSEYNUMMASK |
+| `TSLO` | TEAM_SEASLOSSES |
+| `TCWP` | TEAM_SEASCONFWINPCT |
+| `TDWP` | TEAM_SEASDIVWINPCT |
+| `TFCR` | TEAM_CHECKROSTERPLAYERCOUNT |
+| `TDER` | TEAM_PREVWEEKDEFRANK |
+| `TOFR` | TEAM_PREVWEEKOFFRANK |
+| `TPCS` | TEAM_PREVSEASCONFSTANDING |
+| `TSCS` | TEAM_SEASCURRSTREAK |
+| `TPDS` | TEAM_PREVSEASDIVSTANDING |
+| `TSDS` | TEAM_SEASDIVSTANDING |
+| `SPMS` | TEAM_SEASONPROMISE |
+| `TPNS` | TEAM_PREVSEASNFLSTANDING |
+| `TMPS` | TEAM_PLAYOFFSTATUS |
+| `TNCT` | TEAM_SEASNONCONFTIES |
+| `TFET` | TEAM_EXPORTEDTEAM |
+| `TUFT` | TEAM_USEDFRANCHISETAG |
+| `TNCW` | TEAM_SEASNONCONFWINS |
+| `TSLW` | TEAM_SEASLONGWINSTREAK |
+| `TWPc` | TEAM_SEASWINPCT |
+| `tsdi` | TEAM_SEASDIVTIES |
+| `tsal` | TEAM_SEASAWAYLOSSES |
+| `tsbl` | TEAM_SEASBIGLOSSMARGIN |
+| `tscl` | TEAM_SEASCONFLOSSES |
+| `tsdl` | TEAM_SEASDIVLOSSES |
+| `tshl` | TEAM_SEASHOMELOSSES |
+| `tscs` | TEAM_SEASCONFSTANDING |
+| `tsns` | TEAM_SEASNFLSTANDING |
+| `tsat` | TEAM_SEASAWAYTIES |
+| `tsct` | TEAM_SEASCONFTIES |
+| `tsht` | TEAM_SEASHOMETIES |
+| `tsaw` | TEAM_SEASAWAYWINS |
+| `tsbw` | TEAM_SEASBIGWINMARGIN |
+| `tscw` | TEAM_SEASCONFWINS |
+| `tsdw` | TEAM_SEASDIVWINS |
+| `tshw` | TEAM_SEASHOMEWINS |
+
+### Draft picks (`DRPK`): 8 fields the config above does not name
+
+| Field | The game's name |
+|---|---|
+| `DPID` | DRAFTPICK_CURRTEAMID |
+| `DPOD` | DRAFTPICK_ORIGTEAMID |
+| `DPUD` | DRAFTPICK_TRADEDUP |
+| `RSPF` | RESERVED_PICK_FLAG |
+| `RSPK` | RESERVED_PICK_PLYR_ID |
+| `DPDN` | DRAFTPICK_TRADEDDOWN |
+| `DPYO` | DRAFTPICK_YEAROFFSET |
+| `DPIX` | DRAFTPICK_ID |
+
+### Coach development (`CSKL`): 6 fields the config above does not name
+
+| Field | The game's name |
+|---|---|
+| `SKID` | COACH_SKILLINTANGIBLES_DEV |
+| `SKLD` | COACH_SKILLLEARNING_DEV |
+| `SKPD` | COACH_SKILLPHYSICAL_DEV |
+| `SKIM` | COACH_SKILLINTANGIBLES_DEV_MAX |
+| `SKLM` | COACH_SKILLLEARNING_DEV_MAX |
+| `SKPM` | COACH_SKILLPHYSICAL_DEV_MAX |
+
+### Schedule (`SCHD`): 7 fields the config above does not name
+
+| Field | The game's name |
+|---|---|
+| `SSTA` | SEAS_STAGE |
+| `GASC` | GAME_AWAYSCORE |
+| `GHSC` | GAME_HOMESCORE |
+| `SGMD` | SEAS_GAMEID |
+| `GUTE` | GAME_USERTEAM |
+| `GFOT` | GAME_FLAGOT |
+| `GFHU` | GAME_FLAGHUMAN |
+
+The enumerations behind the value lists (approval groups, philosophies, injury types and so on) and the names the game gives its other tables are not repeated here.
