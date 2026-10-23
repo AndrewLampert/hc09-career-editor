@@ -40,6 +40,10 @@ Offensive sets by personnel (running backs and tight ends, then receivers): 11 (
 
 `SPKF` / `SPKG` are the Quick Sub packages ("Backup QB", "WR Swap", "HB Slot", "TE Slot", ...): per set, a name and a few slots with their own `EPos` / `DPos`. They override single slots when the user picks a package and are **not** changed by the tool.
 
+## The names the playbooks give their plays
+
+The play's name in the master (`PBPL.name`) is not always the one the game's play-call screen shows. The shipped database (`qkl_boot.ast` entry 46, table `PPPN`, 9,166 rows: playbook `BOKL`, play `PLYL`, name `PPPM`) lists, for 88 playbooks, the name each one shows for a play; about half of those entries differ from the master name (for example playbook 252 shows play 183, "Deep Attack", as "Liz Lft Deep Attack", and "QB Sneak" as "Q Sneak"). The play designer shows the playbook's own name when one playbook is chosen in its list (and says what the playbooks call a play when they differ), and Team Playbooks' copy window labels a play with the playbook's name followed by the master name. Plays a playbook does not rename, and plays made in-game, keep the master name; without the table (no game files found) the editor shows the master names everywhere.
+
 ## What was checked in the game
 
 Set 32 ("5WR", Shotgun, three receivers on the right, no back) had its fifth receiver (slot 2) changed from WR5 to TE1 in the four copies that hold it (boot 40 and 42, fe2ig 1675 and 1676). In a quick game as the Cowboys the shotgun showed #82, Jason Witten, in the inner right slot where Miles Austin (#19, their WR5) would line up, with no running back, receivers #81 and #17 beside him on the right and #83 and Patrick Crayton on the left. So same-size edits to these entries reach RPCS3 (unlike the preset weights in the shipped database, which the game ignored, see `hc09_position_presets.md`). Which of the four copies the game reads was not separated, so the tool edits every copy that holds a set.
