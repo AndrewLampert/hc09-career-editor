@@ -161,7 +161,8 @@ MC02_MAGIC = b"MC02"
 MC02_HEADER_SIZE = 28
 TDB_SIGNATURE = b"DB\x00\x08\x01\x00\x00\x00"   # how the databases of this game start
 CAREER_MIN_TABLES = 150                         # 208 in a career save
-PROFILE_MAX_TABLES = 80                         # 43 in a profile save
+PROFILE_MIN_TABLES = 30                         # 43 in a profile save; a roster save has only 16 (it is neither a career nor a profile)
+PROFILE_MAX_TABLES = 80
 MIN_SAVE_SIZE = 50 * 1024                       # smaller files are not saves (headers, thumbnails)
 
 
@@ -308,11 +309,11 @@ def db_table_count(path):
 
 
 def classify_save(path):
-    """("career" | "profile" | "other", table count): a career has 208 tables and a profile 43."""
+    """("career" | "profile" | "other", table count): a career has 208 tables and a profile 43; anything else, a roster save (16 tables) for one, is "other"."""
     n = db_table_count(path)
     if n is None:
         return "other", None
-    return ("career" if n >= CAREER_MIN_TABLES else "profile" if n <= PROFILE_MAX_TABLES else "other"), n
+    return ("career" if n >= CAREER_MIN_TABLES else "profile" if PROFILE_MIN_TABLES <= n <= PROFILE_MAX_TABLES else "other"), n
 
 
 def _save_files(title_folder):
