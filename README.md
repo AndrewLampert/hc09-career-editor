@@ -107,7 +107,7 @@ data in a `TDB`-format binary database. This project has two pieces:
 
 - **`guiHC09.py`** — the Tkinter GUI where you actually browse/edit players, trades,
   contracts, staff, playbooks, and the salary cap (with `hc09_plays.py` beside it, which
-  reads the game's plays for the play creator).
+  reads the game's plays for the play creator, and `hc09_reference.py` for the Game reference window).
 - **`hc09-bridge/`** — a small headless Node.js CLI that reads/writes that binary
   format via [`madden-file-tools`](https://www.npmjs.com/package/madden-file-tools)
   (the same library used by [bep713/hc09-editor](https://github.com/bep713/hc09-editor)).

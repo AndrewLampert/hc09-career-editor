@@ -4227,7 +4227,7 @@ class GameReferenceDialog(tk.Toplevel):
         f = self._tab(nb, "Contract talks",
                       "LPCN, the table the game consults when you make or counter an offer to a player, gives the chance (percent) that he accepts, walks away or sets an ultimatum. It is keyed by "
                       "your head coach's approval, the player's overall, how many counter offers have been made and how far your package is from the one he wants (in package steps). Two more keys "
-                      "(a negotiation type with 3 values and a player trait with 5) are not named in the game's data, so each figure is the average over them with their lowest and highest "
+                      "(a negotiation type with 3 values and a player trait with 5) have no names for their values in the game's data, so each figure is the average over them with their lowest and highest "
                       "value beside it. The table is read here; how closely the game follows it in a negotiation has not been tested.")
         self.ct = {"approval": tk.StringVar(value="70"), "overall": tk.StringVar(value="80"), "counters": tk.StringVar(value="0"), "gap": tk.StringVar(value="3")}
         self._inputs(f, [("Head coach approval (0-99)", self.ct["approval"], None, 8), ("Player overall (0-99)", self.ct["overall"], None, 8),
