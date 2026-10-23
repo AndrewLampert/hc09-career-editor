@@ -4015,6 +4015,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
 # -----------------------------
 PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
+PLAYBOOK_PLAYNAMES_FILE = "pppn.csv"     # the names each playbook gives its plays (PPPN); optional: without it the master names are shown
 PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB"]
 # The four tables that make up a playbook's contents, in CSV column order.
 PLAYBOOK_TABLE_HEADERS = {
@@ -4026,6 +4027,14 @@ PLAYBOOK_TABLE_HEADERS = {
 PLAYBOOK_PLAY_CAP = 200   # in-game limit per playbook (200 offensive or 200 defensive), special teams not counted
 PLAYBOOK_CREATED_FORMATIONS = {"8190", "8191"}   # the per-save "Created Plays" formations (offense / defense)
 PLAYBOOK_SPECIAL_FORMATIONS = {"kickoff", "safety punt", "special teams", "kick return", "safety kick return", "special"}
+
+
+def cut_at_control(text):
+    """A string out of the game's database as it should read: the pool the strings sit in runs on past the text, so everything from the first control character on is dropped."""
+    for i, ch in enumerate(text or ""):
+        if ord(ch) < 32:
+            return text[:i].strip()
+    return (text or "").strip()
 
 
 def read_csv_dicts(path):
@@ -5610,9 +5619,10 @@ class PlayDesignerDialog(tk.Toplevel):
                 continue
             if self.opt_var.get() and not r["option"]:
                 continue
-            if text and text not in r["name"].lower() and text not in r["set"].lower() and text not in r["form"].lower():
+            shown_name = self.lib.name_in_book(r["plyl"], want_book) if want_book is not None else r["name"]       # in one playbook, the name that playbook shows
+            if text and text not in r["name"].lower() and text not in shown_name.lower() and text not in r["set"].lower() and text not in r["form"].lower():
                 continue
-            self.tree.insert("", tk.END, iid=str(r["plyl"]), values=(r["name"], r["form"], r["set"], "yes" if r["option"] else ""))
+            self.tree.insert("", tk.END, iid=str(r["plyl"]), values=(shown_name, r["form"], r["set"], "yes" if r["option"] else ""))
             shown += 1
         self.lbl_count.configure(text=f"{shown} plays")
 
@@ -5629,6 +5639,14 @@ class PlayDesignerDialog(tk.Toplevel):
         self.align_override = {}
         self.base_family = self.types.family_of_play(self.plyl) if self.types is not None else None
         self._show()
+
+    def _books_text(self, books):
+        """"In 63 playbooks." and, when the playbooks do not all call the play the same, what they call it ("called 'Deep Attack' in 40, 'Liz Lft Deep Attack' in 3")."""
+        called = self.lib.names_across_books(self.plyl)
+        text = f"In {len(books)} playbooks"
+        if len(called) > 1:
+            text += " (called " + ", ".join(f"'{n}' in {c}" for n, c in called[:3]) + (", ..." if len(called) > 3 else "") + ")"
+        return text + "."
 
     def _is_pass(self):
         """Does the play (as it is now) have pass reads: it is a pass kind, or the game's play is a pass and nothing says otherwise."""
@@ -5776,7 +5794,7 @@ class PlayDesignerDialog(tk.Toplevel):
         books = sorted(self.books.get(b, (f"playbook {b}", ""))[0] for b in self.lib.books_of_play.get(self.plyl, ()))
         self.lbl_info.configure(text=f"{p['name']}  -  {self.lib.form_names.get(d['set']['form'], '')} / {d['set']['name']}, play type {p['plyt']}"
                                      f"{', OPTION' if d['option'] else ''}.   " + ("; ".join(extras) + ". " if extras else "") +
-                                     (f"In {len(books)} playbooks." if books else ""))
+                                     (self._books_text(books) if books else ""))
         self._refresh_make()
         self._refresh_kind()
         self._slot_selected()
@@ -7656,7 +7674,7 @@ class PlaybookCopyDialog(tk.Toplevel):
                 plays = d.set_plays.get((src, st), [])
                 snode = self.tree.insert(fnode, tk.END, iid=f"S|{f}|{st}", text=f"{d.set_label(st)}  ({len(plays)} plays)")
                 for pl, _tp in plays:
-                    self.tree.insert(snode, tk.END, iid=f"P|{f}|{st}|{pl}", text=d.play_label(st, pl))
+                    self.tree.insert(snode, tk.END, iid=f"P|{f}|{st}|{pl}", text=d.play_label(st, pl, src))
         self._on_pick()
 
     def _select_play(self, setl, plyl):
@@ -7863,6 +7881,12 @@ class PlaybookData:
         for r in g("pbpl") + prof["pbpl"] + v("pbpl"):
             self.play_info[((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip())] = (
                 (r.get("name") or "").strip(), (r.get("PLYT") or "").strip())
+        self.book_play_name = {}                    # (BOKL, PLYL) -> the name that playbook shows for the play (PPPN; the master name is in play_info)
+        for r in g("pppn"):
+            name = cut_at_control(r.get("PPPM") or "")
+            bokl, plyl = (r.get("BOKL") or "").strip(), (r.get("PLYL") or "").strip()
+            if name and bokl and plyl:
+                self.book_play_name[(bokl, plyl)] = name
 
         # The four content tables are kept as editable row lists; everything
         # below is an index over them, rebuilt after each edit.
@@ -8227,8 +8251,11 @@ class PlaybookData:
     def set_label(self, setl):
         return self.set_name.get(setl) or f"Set {setl}"
 
-    def play_label(self, setl, plyl):
-        return self.play_info.get((setl, plyl), ("", ""))[0] or f"Play {plyl}"
+    def play_label(self, setl, plyl, bokl=None):
+        """The master name of a play; given a playbook, the name that playbook shows for it, with the master name after it when they differ."""
+        master = self.play_info.get((setl, plyl), ("", ""))[0] or f"Play {plyl}"
+        own = self.book_play_name.get((bokl, plyl)) if bokl is not None else None
+        return f"{own}  ({master})" if own and own != master else master
 
     # ---- tables for the UI
     def books(self):
@@ -9520,6 +9547,8 @@ class App(tk.Tk):
             if boot_ast:
                 self._extract_playbook_names(boot_ast)
             game = {os.path.splitext(f)[0]: read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES}
+            if self._ensure_book_play_names(boot_ast):
+                game["pppn"] = read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE))
             tmp = tempfile.mkdtemp(prefix="hc09_playbooks_")
             try:
                 self.model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", ",".join(PLAYBOOK_SAVE_TABLES)])
@@ -9663,6 +9692,23 @@ class App(tk.Tk):
                                "--require-fields", "PBGI,BNAM", "--require-rows", "--out-dir", out])
         self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PBFM,SETL,PBPL",
                                "--out-dir", out])
+        self._ensure_book_play_names(boot_ast)
+
+    def _ensure_book_play_names(self, boot_ast=""):
+        """Best effort (worker thread, bridge only): the names each playbook gives its plays (table PPPN of qkl_boot.ast) into the playbook cache, if they are not there yet.
+        Without them the editor shows the master names. True if the file is there afterwards."""
+        path = os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE)
+        if os.path.isfile(path) and os.path.getsize(path) > 200:        # a file with only the header row (an entry without rows) does not count
+            return True
+        boot_ast = boot_ast or self.ui_prefs.get("boot_ast_path") or ""
+        if not (boot_ast and os.path.isfile(boot_ast)):
+            return False
+        try:
+            res = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows",
+                                         "--out-dir", PLAYBOOK_CACHE_DIR])
+        except Exception:
+            return False
+        return bool(res.get("records")) and os.path.isfile(path)
 
     def _pb_selected_tid(self):
         name = self.pb_team_var.get()
@@ -11305,6 +11351,11 @@ class App(tk.Tk):
         tabs["FORM"] = list(forms.values())
         lib = PlayLibrary(tabs)
         lib._master = master             # which archive entry it was read from (the Route test writes there)
+        try:                              # the names the playbooks give their plays, if they can be read (the master names are shown otherwise)
+            if self._ensure_book_play_names(archives[0]):
+                lib.set_book_play_names(read_csv(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE)))
+        except Exception:
+            pass
         return lib
 
     def load_play_art(self, boot_ast):
