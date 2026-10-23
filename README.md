@@ -65,6 +65,14 @@ export/import through HC09Editor required.
   and adds them with one button, then takes your answers in the same window, and **Route test (testers)...**
   changes the numbers of one route a step at a time for the tests that show what they mean; the order of the
   tests and how to write the results down is in [docs/hc09_test_guide.md](docs/hc09_test_guide.md).
+- **Game reference...** (toolbar) - four read-only panels from the game's own tables, read from your game
+  files once: what the injury table gives for a position, an Injury rating, a hurt body part and a hard hit
+  (a level from 0 to 4, not a percentage); the draft pick value chart with a small calculator that adds up
+  the picks you type; the chances a player accepts, walks away or sets an ultimatum from head coach
+  approval, his overall, the counter offers so far and the gap to his package; and which ratings an
+  injured leg, arm, head or torso lowers for each position. Nothing is changed in a save, and none of the
+  tables has been checked against a match yet; see
+  [docs/hc09_gamedata_findings.md](docs/hc09_gamedata_findings.md).
 - **Toolbar** - *Trade Players (Safe Swap)*, *Sign Free Agent...*, *Player Type Fit...*
   (rebuilds each player's overall under one of the game's team position presets,
   such as Cover 2 or Man Coverage CB, with the game's own formulas, and ranks them; select a

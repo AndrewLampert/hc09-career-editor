@@ -56,6 +56,11 @@ except ImportError:                  # without it only the Route test window is 
     RT = None
 
 try:
+    import hc09_reference as GREF
+except ImportError:                  # without it only the Game reference window is missing
+    GREF = None
+
+try:
     import hc09_playtest as PT
 except ImportError:                  # without it only the Test plays window is missing
     PT = None
@@ -1251,6 +1256,7 @@ def safe_int(s):
 # Where the game data read from the game's files is cached (gitignored). HC09_CACHE_DIR moves it, so that several copies of the editor (the tests, run side by side) do not wipe each other's data.
 GAMEDATA_CACHE = os.environ.get("HC09_CACHE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache")
 PHILOSOPHY_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "philosophies")
+REFERENCE_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "reference")      # the tables of the Game reference window (hc09_reference.py)
 PHILOSOPHY_WEIGHT_TABLES = ("PEAW", "PEIW", "PEOW", "PESW")
 BODY_WEIGHT_TABLE = "LPHC"     # body-part weights per position and hand, for the Durability grade
 BOOT_AST_FILENAME = "qkl_boot.ast"
@@ -4040,6 +4046,256 @@ def read_csv_dicts(path):
 def team_nickname(tid):
     name = TEAM_NAMES.get(tid, "")
     return name.split(" (")[0] if name else ""
+
+
+class GameReferenceDialog(tk.Toplevel):
+    """Game reference: what the game's own tables hold about injuries, draft pick values, contract talks and what an injured body part does to a player. Read-only (see
+    hc09_reference.py). It shows the game's DATA; how and when the game uses a table in a match is not confirmed, which the window says."""
+
+    def __init__(self, app, ref):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Game reference")
+        self.transient(app)
+        self.geometry("900x680")
+        self.minsize(720, 520)
+        self.ref = ref
+        ttk.Label(self, foreground="gray", wraplength=860, justify="left",
+                  text="Read-only. Each tab shows what one of the game's own tables holds, read from your game files. Whether and how the game uses a table during a match has not been "
+                       "checked in the game, so read these as the game's data, not as promises. Nothing here changes a save.").pack(anchor="w", padx=12, pady=(10, 4))
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        self._build_injuries(nb)
+        self._build_picks(nb)
+        self._build_contracts(nb)
+        self._build_body_parts(nb)
+        ttk.Button(self, text="Close", command=self.destroy).pack(anchor="e", padx=12, pady=(0, 12))
+
+    # ---- helpers
+    def _tab(self, nb, title, text):
+        f = ttk.Frame(nb)
+        nb.add(f, text=title)
+        ttk.Label(f, foreground="gray", wraplength=840, justify="left", text=text).pack(anchor="w", padx=10, pady=(8, 6))
+        return f
+
+    def _inputs(self, parent, fields):
+        """A row of labelled entries/choices: fields = [(label, StringVar, values or None, width)]; any change calls self._refresh_tab (set by the caller)."""
+        form = ttk.Frame(parent)
+        form.pack(anchor="w", padx=10, pady=(0, 6))
+        for i, (label, var, values, width) in enumerate(fields):
+            ttk.Label(form, text=label).grid(row=0, column=i, sticky="w", padx=(0 if i == 0 else 12, 0))
+            if values:
+                w = ttk.Combobox(form, state="readonly", width=width, textvariable=var, values=values)
+            else:
+                w = ttk.Entry(form, width=width, textvariable=var)
+            w.grid(row=1, column=i, sticky="w", padx=(0 if i == 0 else 12, 0))
+        return form
+
+    @staticmethod
+    def _number(var):
+        try:
+            return float(var.get().strip())
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _grid(parent, columns, height):
+        """A read-only table: columns = [(heading, width, anchor)]."""
+        frame = ttk.Frame(parent)
+        tree = ttk.Treeview(frame, columns=[f"c{i}" for i in range(len(columns))], show="headings", height=height, selectmode="none")
+        for i, (text, width, anchor) in enumerate(columns):
+            tree.heading(f"c{i}", text=text)
+            tree.column(f"c{i}", width=width, anchor=anchor, stretch=(i == 0))
+        tree.pack(side="left", fill="both", expand=True)
+        return frame, tree
+
+    @staticmethod
+    def _level_text(x):
+        return f"{x:.2f}".rstrip("0").rstrip(".") if x is not None else "-"
+
+    # ---- injuries
+    def _build_injuries(self, nb):
+        ref = self.ref
+        f = self._tab(nb, "Injuries",
+                      "LINC, the game's injury table, gives a chance LEVEL from 0 to 4 (not a percentage: the table does not say how likely a level is, only that a higher level is a "
+                      "higher chance) for a position and body part, from four things cut into three ranges each: the player's Injury rating, the health of the body part (1000 is "
+                      "healthy), fatigue and how hard the hit was (impact severity). Over the whole table: Injury rating 90+ is level 0 in all but 12 of 3,402 cases (receivers), 76-89 "
+                      "averages about 0.8 and 75 or less about 1.8; a hurt body part and a hard hit raise the level; fatigue changes almost nothing here (1 of 3,402 cases).")
+        self.inj = {"pos": tk.StringVar(value="QB"), "part": tk.StringVar(value="Any body part"), "rating": tk.StringVar(value="75"), "health": tk.StringVar(value="1000"),
+                    "fatigue": tk.StringVar(value="100"), "severity": tk.StringVar(value="5000")}
+        parts = ["Any body part"] + [GREF.BODY_PART_NAMES[k] for k in sorted(GREF.BODY_PART_NAMES)]
+        self._inputs(f, [("Position", self.inj["pos"], list(GREF.POSITION_NAMES), 7), ("Body part", self.inj["part"], parts, 14), ("Injury rating (0-99)", self.inj["rating"], None, 8),
+                         ("Body-part health (0-1000)", self.inj["health"], None, 8), ("Fatigue (0-100)", self.inj["fatigue"], None, 8), ("Impact severity (0-10000)", self.inj["severity"], None, 9)])
+        for v in self.inj.values():
+            v.trace_add("write", lambda *a: self._update_injuries())
+        self.lbl_inj = ttk.Label(f, font=("", 11, "bold"), justify="left", wraplength=840)
+        self.lbl_inj.pack(anchor="w", padx=10, pady=(4, 0))
+        self.lbl_inj_bins = ttk.Label(f, foreground="gray", justify="left", wraplength=840)
+        self.lbl_inj_bins.pack(anchor="w", padx=10, pady=(0, 8))
+        ttk.Label(f, text="Mean level for the position and body part chosen above, by Injury rating (rows) and body-part health (columns), over all fatigue and severity ranges:").pack(anchor="w", padx=10)
+        self._inj_health_order = sorted(ref.bins["Ebph"], key=lambda b: -b[0])
+        self._inj_rating_order = sorted(ref.bins["Eirt"], key=lambda b: -b[0])
+        cols = [("Injury rating", 120, "w")] + [(f"health {lo}-{hi}", 110, "center") for lo, hi, _ in self._inj_health_order]
+        frame, self.tree_inj = self._grid(f, cols, 3)
+        frame.pack(anchor="w", padx=10, pady=(2, 6))
+        self._update_injuries()
+
+    def _update_injuries(self):
+        ref = self.ref
+        nums = [self._number(self.inj[k]) for k in ("rating", "health", "fatigue", "severity")]
+        if None in nums or self.inj["pos"].get() not in GREF.POSITION_NAMES:
+            self.lbl_inj.config(text="Enter a number in each box.")
+            self.lbl_inj_bins.config(text="")
+            return
+        ppos = GREF.POSITION_NAMES.index(self.inj["pos"].get())
+        bdpt = next((k for k, n in GREF.BODY_PART_NAMES.items() if n == self.inj["part"].get()), None)
+        inrb, fatb, bpth, injs = ref.injury_bins(*nums)
+        level, n = ref.injury_average(ppos, bdpt, inrb, fatb, bpth, injs)
+        who = f"{self.inj['pos'].get()}, " + (self.inj["part"].get() if bdpt is not None else "average of the six body parts")
+        self.lbl_inj.config(text=f"Chance level in the table: {self._level_text(level)} (scale 0 to 4)   [{who}]")
+        b = ref.bins
+        self.lbl_inj_bins.config(text=f"Ranges used: Injury rating {GREF.bin_text(b['Eirt'], inrb)}, body-part health {GREF.bin_text(b['Ebph'], bpth)}, fatigue {GREF.bin_text(b['EFAT'], fatb)}, "
+                                      f"impact severity {GREF.bin_text(b['Eisv'], injs)}.")
+        self.tree_inj.delete(*self.tree_inj.get_children())
+        grid = ref.injury_grid(ppos, bdpt)
+        for lo, hi, irb in self._inj_rating_order:
+            self.tree_inj.insert("", tk.END, values=[f"{lo}-{hi}"] + [self._level_text(grid.get((irb, hv))) for _, _, hv in self._inj_health_order])
+
+    # ---- draft picks
+    def _build_picks(self, nb):
+        ref = self.ref
+        f = self._tab(nb, "Draft pick values",
+                      "The game's draft pick value chart (DVCD) gives each of the 224 picks a value: pick 1 is 30,000 and pick 32 is 5,900. Next year's picks are worth a flat figure per round. "
+                      "'Player value' (DVCP, DVFP) is a second table with one column for each way a team can be built, through the draft or through free agency. The calculator on the right "
+                      "adds up the chart's values for picks you list; it is a sum on the game's chart, not a prediction of what a team would accept (how the CPU weighs a trade is not decoded).")
+        body = ttk.Frame(f)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="both", expand=True)
+        d0, d1 = GREF.PHILOSOPHY_NAMES[0], GREF.PHILOSOPHY_NAMES[1]
+        cols = [("Pick", 60, "center"), ("Round", 50, "center"), ("In round", 60, "center"), ("Value", 80, "center"), (f"Player value ({d0.lower()})", 150, "center"), (f"Player value ({d1.lower()})", 170, "center")]
+        frame, tree = self._grid(left, cols, 14)
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        frame.pack(fill="both", expand=True)
+        for n in sorted(ref.pick_values):
+            rnd, k = ref.pick_round(n)
+            tree.insert("", tk.END, values=(n, rnd, k, f"{ref.pick_values[n]:,}", ref.pick_player_values.get((n, 0), ""), ref.pick_player_values.get((n, 1), "")))
+        ttk.Label(left, text="Next year's picks, by round").pack(anchor="w", pady=(6, 0))
+        cols = [("Round", 60, "center"), (f"Value ({d0.lower()})", 150, "center"), (f"Value ({d1.lower()})", 170, "center"), ("Player value (draft / free agency)", 200, "center")]
+        frame, tree2 = self._grid(left, cols, 7)
+        frame.pack(fill="x")
+        for rnd in range(1, GREF.ROUNDS + 1):
+            tree2.insert("", tk.END, values=(rnd, f"{ref.future_value(rnd, 0):,}", f"{ref.future_value(rnd, 1):,}",
+                                              f"{ref.future_player_values.get((rnd, 0), '')} / {ref.future_player_values.get((rnd, 1), '')}"))
+        right = ttk.Frame(body)
+        right.pack(side="left", fill="y", padx=(12, 0))
+        ttk.Label(right, text="Trade calculator", font=("", 10, "bold")).pack(anchor="w")
+        ttk.Label(right, foreground="gray", wraplength=240, justify="left",
+                  text="Type picks separated by spaces or commas: a number is an overall pick of this draft (1-224); n2 is next year's round 2.").pack(anchor="w", pady=(0, 6))
+        self.tr = {"give": tk.StringVar(), "get": tk.StringVar(), "phil": tk.StringVar(value=d0)}
+        for label, key in (("You give", "give"), ("You get", "get")):
+            ttk.Label(right, text=label).pack(anchor="w")
+            ttk.Entry(right, width=32, textvariable=self.tr[key]).pack(anchor="w", pady=(0, 6))
+        ttk.Label(right, text="Next year's picks valued as a team that builds").pack(anchor="w")
+        ttk.Combobox(right, state="readonly", width=30, textvariable=self.tr["phil"], values=[d0, d1]).pack(anchor="w", pady=(0, 6))
+        for v in self.tr.values():
+            v.trace_add("write", lambda *a: self._update_trade())
+        self.lbl_trade = ttk.Label(right, justify="left", wraplength=250)
+        self.lbl_trade.pack(anchor="w", pady=(4, 0))
+        self._update_trade()
+
+    def _update_trade(self):
+        ref = self.ref
+        ph = 1 if self.tr["phil"].get() == GREF.PHILOSOPHY_NAMES[1] else 0
+        give, bad1 = ref.parse_picks(self.tr["give"].get())
+        get, bad2 = ref.parse_picks(self.tr["get"].get())
+        tg, tt = ref.picks_total(give, ph)[0], ref.picks_total(get, ph)[0]
+        lines = [f"You give: {tg:,}", f"You get: {tt:,}", f"Difference for you: {tt - tg:+,}"]
+        if tg != tt:
+            near = ref.closest_pick(abs(tt - tg))
+            lines.append(f"The difference is about the value of pick {near} ({ref.pick_value(near):,}).")
+        if bad1 or bad2:
+            lines.append("Not understood: " + ", ".join(bad1 + bad2))
+        self.lbl_trade.config(text="\n".join(lines))
+
+    # ---- contract talks
+    def _build_contracts(self, nb):
+        f = self._tab(nb, "Contract talks",
+                      "LPCN, the table the game consults when you make or counter an offer to a player, gives the chance (percent) that he accepts, walks away or sets an ultimatum. It is keyed by "
+                      "your head coach's approval, the player's overall, how many counter offers have been made and how far your package is from the one he wants (in package steps). Two more keys "
+                      "(a negotiation type with 3 values and a player trait with 5) are not named in the game's data, so each figure is the average over them with their lowest and highest "
+                      "value beside it. The table is read here; how closely the game follows it in a negotiation has not been tested.")
+        self.ct = {"approval": tk.StringVar(value="70"), "overall": tk.StringVar(value="80"), "counters": tk.StringVar(value="0"), "gap": tk.StringVar(value="3")}
+        self._inputs(f, [("Head coach approval (0-99)", self.ct["approval"], None, 8), ("Player overall (0-99)", self.ct["overall"], None, 8),
+                         ("Counter offers so far", self.ct["counters"], None, 8), ("Gap to his package (steps)", self.ct["gap"], None, 8)])
+        for v in self.ct.values():
+            v.trace_add("write", lambda *a: self._update_contracts())
+        self.lbl_ct = ttk.Label(f, font=("", 10, "bold"), justify="left", wraplength=840)
+        self.lbl_ct.pack(anchor="w", padx=10, pady=(4, 0))
+        self.lbl_ct_bins = ttk.Label(f, foreground="gray", justify="left", wraplength=840)
+        self.lbl_ct_bins.pack(anchor="w", padx=10, pady=(0, 8))
+        self.lbl_ct_grid = ttk.Label(f, text="Mean chance to accept (%) for that approval and overall, by gap (rows) and counter offers so far (columns):")
+        self.lbl_ct_grid.pack(anchor="w", padx=10)
+        b = self.ref.bins
+        self._ct_ncob = sorted(b["NCOB"])
+        self._ct_pcpg = sorted(b["PCPG"])
+        cols = [("Gap to his package", 160, "w")] + [(f"{lo}-{hi} counters" if hi < 100 else f"{lo}+ counters", 120, "center") for lo, hi, _ in self._ct_ncob]
+        frame, self.tree_ct = self._grid(f, cols, 3)
+        frame.pack(anchor="w", padx=10, pady=(2, 6))
+        self._update_contracts()
+
+    def _update_contracts(self):
+        ref = self.ref
+        nums = [self._number(self.ct[k]) for k in ("approval", "overall", "counters", "gap")]
+        if None in nums:
+            self.lbl_ct.config(text="Enter a number in each box.")
+            self.lbl_ct_bins.config(text="")
+            return
+        odds = ref.contract_odds(*nums)
+        def fmt(t):
+            return "-" if t is None else f"{t[1]:.0f}%  (lowest {t[0]}%, highest {t[2]}%)"
+        self.lbl_ct.config(text=f"Accepts: {fmt(odds['accept'])}\nWalks away: {fmt(odds['leave'])}\nUltimatum: {fmt(odds['ultimatum'])}")
+        hcab, pogb, ncob, pcpg = ref.contract_bins(*nums)
+        b = ref.bins
+        self.lbl_ct_bins.config(text=f"Ranges used: head coach approval {GREF.bin_text(b['EHCB'], hcab)}, player overall {GREF.bin_text(b['POGB'], pogb)}, counter offers "
+                                     f"{GREF.bin_text(b['NCOB'], ncob, open_top=True)}, gap {GREF.bin_text(b['PCPG'], pcpg)} steps; averaged over {odds['rows']} table rows.")
+        self.tree_ct.delete(*self.tree_ct.get_children())
+        grid = ref.contract_grid(nums[0], nums[1])
+        for lo, hi, gv in self._ct_pcpg:
+            self.tree_ct.insert("", tk.END, values=[f"{lo}-{hi} steps"] + [self._level_text(grid.get((nv, gv))) + "%" for _, _, nv in self._ct_ncob])
+
+    # ---- injured body parts
+    def _build_body_parts(self, nb):
+        f = self._tab(nb, "Injured body parts",
+                      "PHAE lists, for each position group and body part, the ratings an injury to that body part lowers. It says WHICH ratings, not by how much: the amount is not in this "
+                      "table. A leg injury lowers the speed ratings for every position, a head injury Awareness for every position. Which of the two legs or arms has which id is not "
+                      "known, so they are shown by id.")
+        self.bp_pos = tk.StringVar(value="QB")
+        self._inputs(f, [("Position", self.bp_pos, list(GREF.POSITION_NAMES), 7)])
+        self.bp_pos.trace_add("write", lambda *a: self._update_body_parts())
+        self.lbl_bp = ttk.Label(f, foreground="gray")
+        self.lbl_bp.pack(anchor="w", padx=10)
+        cols = [("Rating", 200, "w")] + [(GREF.BODY_PART_NAMES[k], 90, "center") for k in sorted(GREF.BODY_PART_NAMES)]
+        frame, self.tree_bp = self._grid(f, cols, 16)
+        frame.pack(fill="both", expand=True, padx=10, pady=(2, 8))
+        self._update_body_parts()
+
+    def _update_body_parts(self):
+        ref = self.ref
+        if self.bp_pos.get() not in GREF.POSITION_NAMES:
+            return
+        pdrp = ref.group_for(GREF.POSITION_NAMES.index(self.bp_pos.get()))
+        self.tree_bp.delete(*self.tree_bp.get_children())
+        if pdrp is None:
+            self.lbl_bp.config(text="No position group found for this position.")
+            return
+        self.lbl_bp.config(text=f"Position group: {GREF.GROUP_NAMES[pdrp] if pdrp < len(GREF.GROUP_NAMES) else pdrp}")
+        for rid, parts in ref.ratings_by_part(pdrp).items():
+            self.tree_bp.insert("", tk.END, values=[GREF.RATING_NAMES.get(rid, f"Rating {rid}")] + ["x" if k in parts else "" for k in sorted(GREF.BODY_PART_NAMES)])
 
 
 class PhilosophyBreakdownDialog(tk.Toplevel):
@@ -8965,6 +9221,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
         ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Player Type Fit...", command=self.on_open_player_type_fit).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Game reference...", command=self.on_open_game_reference).pack(side="left", padx=(8, 0))
 
         # Packed before the status label (both docking to the right) so it
         # always claims its space regardless of how long the status text
@@ -11847,6 +12104,41 @@ class App(tk.Tk):
         if not PHILOSOPHY_MODEL and not self._extract_philosophy_weights_from_game():
             return
         PlayerTypeFitDialog(self, self.model)
+
+    def on_open_game_reference(self):
+        if GREF is None:
+            messagebox.showerror("Game reference", "The game reference needs hc09_reference.py next to guiHC09.py, and it was not found.")
+            return
+        ref = GREF.Reference.load(REFERENCE_CACHE_DIR)
+        if ref is None:
+            ref = self._extract_reference_tables_from_game()
+        if ref is not None:
+            GameReferenceDialog(self, ref)
+
+    def _extract_reference_tables_from_game(self):
+        """Pull the injury, draft pick, contract talk and injured-body-part tables out of the user's own qkl_boot.ast into the local cache. Returns the loaded Reference, or None."""
+        boot_ast = self._find_boot_ast(feature="Game reference", what="injury, draft pick, contract and health tables")
+        if not boot_ast:
+            return None
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            os.makedirs(REFERENCE_CACHE_DIR, exist_ok=True)
+            for args in GREF.extract_commands(boot_ast, REFERENCE_CACHE_DIR):
+                self.model.run_bridge(args)
+        except Exception as e:
+            messagebox.showerror("Couldn't read game data", str(e))
+            return None
+        finally:
+            self.config(cursor="")
+        ref = GREF.Reference.load(REFERENCE_CACHE_DIR)
+        if ref is None:
+            messagebox.showerror("Couldn't read game data", f"Extracted tables from {os.path.basename(boot_ast)} but these were missing or empty: "
+                                 + ", ".join(GREF.missing_tables(REFERENCE_CACHE_DIR)) + ". Make sure this is the NFL Head Coach 09 qkl_boot.ast.")
+            return None
+        self.ui_prefs["boot_ast_path"] = boot_ast
+        save_ui_prefs(self.ui_prefs)
+        return ref
 
     def _find_boot_ast(self, feature="Player Type Fit", what="team philosophies and their weights"):
         saved = self.ui_prefs.get("boot_ast_path") or ""
