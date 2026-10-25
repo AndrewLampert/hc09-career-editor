@@ -134,16 +134,19 @@ you always have the previous version to fall back to.
 ## Setup
 
 **Windows, the easy way:** double-click **`Start HC09 Editor.bat`**. It checks that Python 3.9+ (with Tk) and
-Node.js 18+ are installed (and tells you where to get them if not), runs `npm install` for the bridge the first
-time, and opens the editor without a console window. `"Start HC09 Editor.bat" --check` only reports what it found.
+Node.js 18+ are installed (and tells you where to get them if not), checks that the bridge starts, and opens the
+editor without a console window. `"Start HC09 Editor.bat" --check` only reports what it found.
 On Linux / macOS use `./start-hc09-editor.sh` (same checks, `--check` too).
+
+**Nothing has to be installed besides Python and Node.js:** the libraries the bridge uses are shipped in
+`hc09-bridge/vendor` (see `hc09-bridge/vendor/README.md`), so there is no `npm install`, no internet needed and no
+Visual Studio or build tools (an older version needed them through the `lz4` package, which compiles code; it is now
+a small plain-JavaScript stand-in). If you saw a Visual Studio or `npm` error, update the editor (download it
+again) and start it again; an old `hc09-bridge/node_modules` folder is simply not used any more.
 
 By hand:
 
 ```bash
-cd hc09-bridge
-npm install
-cd ..
 python guiHC09.py
 ```
 
@@ -186,7 +189,7 @@ above the tabs: **What's new...** lists what changed, **Skip this version** hide
 something newer, **Dismiss** hides it for now. If your copy is a git clone on `main` with no changes
 of your own, the *What's new* window also offers **Update now** (a `git pull --ff-only`, then a
 restart); otherwise it tells you how to update (`git pull`, or download the zip again; run
-`npm install` in `hc09-bridge` if `package.json` changed). A zip download is recognised by comparing
+nothing to install: the bridge's libraries ship in the repository). A zip download is recognised by comparing
 its files with the ones on GitHub, a clone by the commit it is on, so nobody has to bump a version
 number. **Options... > Check for a newer version when the editor starts** turns the check off, and
 **Check for updates now** asks immediately. The check is in `hc09_update.py`.

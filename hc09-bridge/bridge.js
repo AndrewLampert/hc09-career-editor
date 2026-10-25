@@ -6,6 +6,10 @@ const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const os = require('os');
+// The libraries the bridge needs (madden-file-tools and what it uses) are shipped in vendor/node_modules, so no `npm install`, no internet and no compiler are needed.
+// They are looked up there first. See vendor/README.md.
+const vendorDir = path.join(__dirname, 'vendor', 'node_modules');
+if (fs.existsSync(vendorDir)) module.paths.unshift(vendorDir);
 const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 const HC09Helper = require('madden-file-tools/helpers/HC09Helper');
 const TDBParser = require('madden-file-tools/streams/TDBParser');
@@ -1207,6 +1211,9 @@ async function main() {
             await cmdPlaySetsScan(args);
         } else if (cmd === 'ui-assets') {
             await cmdUiAssets(args);
+        } else if (cmd === 'selftest') {
+            // The libraries above loaded, or this line would not be reached. Used by the launchers.
+            console.log(JSON.stringify({ ok: true, node: process.version, vendored: fs.existsSync(vendorDir) }));
         } else if (cmd === 'entry-patch') {
             args._mode = rest.find((a) => !a.startsWith('--'));
             if (!['apply', 'dry', 'restore'].includes(args._mode)) throw new Error('entry-patch needs apply, dry or restore as its first argument');
@@ -1225,6 +1232,7 @@ async function main() {
             console.error('  node bridge.js play-sets-scan --asts <qkl_boot.ast>,<qkl_fe2ig.ast> --out-dir <dir> [--tables SETL,PLYS,...]');
             console.error('  node bridge.js ui-assets --ast <qkl_interface.ast> --out-dir <dir> [--top-index <N>]');
             console.error('  node bridge.js entry-patch <apply|dry|restore> --config <json>');
+            console.error('  node bridge.js selftest');
             process.exit(1);
         }
     } catch (err) {
