@@ -657,9 +657,14 @@ STAFF_SKILL_MAX_VALUE = 5
 # direct in-game test: writing 18 distinct values (1-5) across these fields
 # and doing a full RPCS3 restart still showed the original, unchanged
 # Potential Evaluation numbers in-game. These fields are NOT what drives that
-# UI. What they actually do is unknown - left here unlabeled/unmaxed rather
-# than removed, since they're still real, safely-editable fields in the file;
-# just don't assume the position-name guesses below mean anything.
+# UI. The game's own names for them (found later in its field list) say what
+# they are: CB_MINPHILOSOPHY, QB_MINPHILOSOPHY ... are the GM's per-position
+# roster-minimum philosophy (the same settings as Team Philosophy > Roster
+# minimums: an index into three choices, e.g. QB 0 / 1 / 2 = keep 2 / 3 / 4),
+# and GSMP is GM_SPENDINGMONEYPHILOSOPHY, not a position at all (4 choices).
+# They are labelled below (GM_PHILOSOPHY_LABELS). The 0-5 range check in
+# STAFF_NUMERIC_FIELDS is unchanged, although the real choices are 0-2 (K and
+# P 0-1 / 0-2, GM spending 0-3): they are indexes, not skill levels.
 GM_SCOUTING_FIELDS = [
     "CBMP", "FBMP", "HBMP", "QBMP", "GDMP", "DEMP", "TEMP", "KKMP", "TKMP",
     "MLMP", "OLMP", "KPMP", "CRMP", "WRMP", "FSMP", "GSMP", "SSMP", "DTMP",
@@ -840,11 +845,17 @@ STAFF_FIELD_LABELS = {
     "POVS": "Overall",  # POVS also appears on GMVW/TRVW rows, not just COCH
     "SKPA": "Perf. Input A", "SKPF": "Perf. Input B",
     "COPS": "Position",
-    # GM_SCOUTING_FIELDS (CBMP, FBMP, etc.) intentionally have NO label here -
-    # disproven as "Potential Evaluation" (see comment above), true purpose
-    # unknown. Shown by raw field code via the STAFF_FIELD_LABELS.get(h, h)
-    # fallback wherever they're displayed.
+    # GM_SCOUTING_FIELDS (CBMP, FBMP, etc.): disproven as "Potential Evaluation"
+    # (see the comment above); labelled below from the game's own names.
 }
+# The GM's roster-minimum and spending philosophies, named by the game itself (see the note above GM_SCOUTING_FIELDS).
+GM_PHILOSOPHY_LABELS = {
+    "QBMP": "QB Roster Min", "HBMP": "HB Roster Min", "FBMP": "FB Roster Min", "WRMP": "WR Roster Min", "TEMP": "TE Roster Min",
+    "TKMP": "OT Roster Min", "GDMP": "OG Roster Min", "CRMP": "C Roster Min", "DEMP": "DE Roster Min", "DTMP": "DT Roster Min",
+    "OLMP": "OLB Roster Min", "MLMP": "MLB Roster Min", "CBMP": "CB Roster Min", "FSMP": "FS Roster Min", "SSMP": "SS Roster Min",
+    "KKMP": "K Roster Min", "KPMP": "P Roster Min", "GSMP": "GM Spending",
+}
+STAFF_FIELD_LABELS.update(GM_PHILOSOPHY_LABELS)
 # Confirmed Potential Evaluation + Rookie Scouting columns (from GMSK).
 for _b in GM_POTENTIAL_EVAL_BUCKETS:
     STAFF_FIELD_LABELS[f"PE_{_b}_C"] = f"{_b} PE Cur"
@@ -12700,8 +12711,8 @@ class App(tk.Tk):
 
     def refresh_gm(self):
         # Show TGID, SKPT, and confirmed skill fields (Trade/Contract Negotiation).
-        # GM_SCOUTING_FIELDS (CBMP/FBMP/etc.) deliberately NOT shown by default -
-        # confirmed to have no effect on anything, just clutters the view.
+        # GM_SCOUTING_FIELDS (CBMP/FBMP/etc., the GM's roster-minimum philosophies by the game's own names) deliberately NOT shown by default -
+        # they do not drive Potential Evaluation (tested in game) and clutter the view; whether they affect roster building is untested.
         desired = ["TGID", "SKPT", "SKTD", "SKTM", "SKNG", "SKNM"]
         headers = [h for h in desired if h in (self.model.gm_headers or [])]
         if not headers:
