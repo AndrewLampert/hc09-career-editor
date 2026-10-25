@@ -7482,7 +7482,7 @@ class RouteTestDialog(tk.Toplevel):
             var = tk.StringVar()
             self.vars[key] = var
             if options:
-                w = ttk.Combobox(form, textvariable=var, values=list(options), state="readonly", width=44)
+                w = ttk.Combobox(form, textvariable=var, values=list(options), state="readonly", width=64 if key == "route" else 44)
             else:
                 w = ttk.Entry(form, textvariable=var, width=46 if key == "notes" else 14)
             w.grid(row=i, column=1, sticky="w", padx=8, pady=2)
@@ -11784,7 +11784,7 @@ class App(tk.Tk):
                 ranks.append(sum(1 for sx in same if abs(sx) > abs(x) + 1e-6))
                 who.append(RT.receiver_text(sl["label"], x, y, ranks[-1], len(same)))
             if who:
-                entries.append({"plyl": plyl, "name": play["name"], "set": d["set"]["name"], "form": lib.form_names.get(d["set"]["form"], str(d["set"]["form"])), "who": who, "books": sorted(books), "read": read, "option": bool(d["option"]), "rank": min(ranks) if ranks else 0, "cap": pool.get(plyl)})
+                entries.append({"plyl": plyl, "name": play["name"], "set": d["set"]["name"], "form": lib.form_names.get(d["set"]["form"], str(d["set"]["form"])), "who": who, "books": sorted(books), "called": {b: lib.name_in_book(plyl, b) for b in books}, "read": read, "option": bool(d["option"]), "rank": min(ranks) if ranks else 0, "cap": pool.get(plyl)})
         entries.sort(key=lambda x: (-len(x["books"]), x["name"], x["plyl"]))           # the plays in the most playbooks first
         holders = {}
         my_book = None
@@ -11796,7 +11796,7 @@ class App(tk.Tk):
             except (TypeError, ValueError):
                 my_book = None
         pick = RT.choose_play(entries, book_names, holders, team_nickname(team_id) if team_id else "", my_book)
-        lines = [RT.watch_line(x["name"], x["plyl"], x["set"], x["form"], x["who"], [book_names.get(b, f"playbook {b}") for b in x["books"]]) for x in entries]
+        lines = [RT.watch_line(x["name"], x["plyl"], x["set"], x["form"], x["who"], [book_names.get(b, f"playbook {b}") for b in x["books"]], [x["called"].get(b) for b in x["books"]]) for x in entries]
         archives = list(archives or [boot])
         return {"boot": boot, "archives": archives, "copies": self.route_test_scan(archives), "copy": lib._master, "rows": rows, "plays": sorted(((n, len(b)) for n, b in plays.items()), key=lambda x: (-x[1], x[0])),
                 "uses": e["uses"] if e else 0, "books": len({b for bs in plays.values() for b in bs}), "watch": lines, "pick": pick,
