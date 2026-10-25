@@ -1,6 +1,6 @@
 @echo off
-rem Double-click to start the HC09 editor. Checks that Python 3.9+ (with Tk) and Node.js 18+ are installed, installs the bridge's
-rem dependencies the first time, then opens the editor without a console window.
+rem Double-click to start the HC09 editor. Checks that Python 3.9+ (with Tk) and Node.js 18+ are installed, checks that the
+rem bridge starts (its libraries ship with the editor: nothing is installed), then opens the editor without a console window.
 rem   "Start HC09 Editor.bat" --check   only reports what is installed (nothing is installed or started); exit code 0 = ready
 setlocal
 cd /d "%~dp0"
@@ -41,31 +41,14 @@ if errorlevel 1 (
 
 if defined PROBLEM goto :problem
 
-rem ---- the bridge's dependencies (first start only). They need no compiler and no Visual Studio. A folder left by a failed or older install that does not
-rem      load is thrown away and installed again.
-set "BRIDGE_OK="
-if exist "hc09-bridge\node_modules\madden-file-tools\package.json" (
-  node -e "require('./hc09-bridge/node_modules/madden-file-tools')" >nul 2>nul
-  if not errorlevel 1 set "BRIDGE_OK=1"
+rem ---- the bridge's libraries ship with the editor (hc09-bridge\vendor): nothing to install, no npm, no internet, no Visual Studio. Check that the bridge starts.
+node hc09-bridge\bridge.js selftest >nul 2>nul
+if errorlevel 1 (
+  echo [FAILED] The bridge does not start. To see why, run:  node hc09-bridge\bridge.js selftest
+  echo          ^(The folder hc09-bridge\vendor has to be there: download the editor again if it is missing.^)
+  goto :problem
 )
-if defined BRIDGE_OK (
-  echo [ok] The bridge's dependencies are installed
-) else (
-  if defined CHECK_ONLY (
-    echo [info] The bridge's dependencies will be installed on the first start ^(npm install^)
-  ) else (
-    echo Installing the bridge's dependencies ^(first start only, needs internet^)...
-    if exist "hc09-bridge\node_modules" rmdir /s /q "hc09-bridge\node_modules"
-    pushd hc09-bridge
-    call npm install --no-audit --no-fund
-    popd
-    node -e "require('./hc09-bridge/node_modules/madden-file-tools')" >nul 2>nul
-    if errorlevel 1 (
-      echo [FAILED] npm install did not finish. Check your internet connection and run this again. ^(No Visual Studio is needed: if npm asks for it, you have an old copy of the editor, download the current one.^)
-      goto :problem
-    )
-  )
-)
+echo [ok] The bridge starts
 
 if defined CHECK_ONLY (
   echo Ready: the editor would start with: %PYGUI% guiHC09.py

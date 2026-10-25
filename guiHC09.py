@@ -9222,7 +9222,7 @@ class App(tk.Tk):
                ("To update a git clone, run `git pull` in the editor's folder" + (f" ({why})" if why else "") + ". "
                 if info.get("kind") == "git" else
                 "Download the latest zip from GitHub and replace the files here (your settings files starting with .hc09_ stay). ")
-               + "If hc09-bridge/package.json changed, also run `npm install` in the hc09-bridge folder.")
+               + "The bridge's libraries are part of the update: there is nothing else to install.")
         ttk.Label(dlg, text=how, wraplength=580, justify="left", foreground="gray", padding=(14, 0, 14, 8)).pack(anchor="w")
         btn = ttk.Frame(dlg)
         btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
@@ -9251,7 +9251,7 @@ class App(tk.Tk):
             self.ui_prefs["update_info"] = None
             save_ui_prefs(self.ui_prefs)
             self._hide_update_banner()
-            note = "\n\nThe bridge's dependencies changed: run `npm install` in the hc09-bridge folder before restarting." if res["npm"] else ""
+            note = ""                     # the bridge's libraries ship in hc09-bridge/vendor: a changed package.json needs no npm install
             if self.dirty:
                 messagebox.showinfo("Updated", "Updated. You have unsaved changes, so restart the editor yourself after saving." + note)
             elif messagebox.askyesno("Updated", "Updated. Restart the editor now?" + note):
