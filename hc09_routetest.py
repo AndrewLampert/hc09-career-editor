@@ -18,44 +18,58 @@ STOCK = ((0, 8, 68, 32, 254), (1, 9, 2, 1, 0), (2, 8, 200, 42, 254), (3, 10, 0, 
 ROW_NAMES = {0: "the first leg (the stem)", 1: "the cut (the break)", 2: "the second leg"}
 COLUMN_NAMES = {"val1": "first number", "val2": "second number", "val3": "third number"}
 
-# A test: id, title, the changes {step: {column: new value}}, what it asks, what to watch for. What the numbers are comes from the game's own route data (not yet seen in the
-# game, which is what these tests check): a leg's first number is its length in yards, (n >> 3) + (n & 7) / 7 (68 = 8.6, 136 = 17, 200 = 25, 60 = 7.6), its second number a heading
-# in degrees, n x 2.8125 (32 = 90, straight upfield; 42 = 118; 16 = 45; 64 = 180, back along the line) and its third a speed, n / 255 (254 = full, 127 = half); a cut's first
-# number is the side (1 right, 2 left) and its second the size of the turn (1 about 45 degrees, 2 about 90, 7 and 14 about 135; 5 does not occur in the data).
+# A test: id, title, the changes {step: {column: new value}}, what it asks, what to watch for. What the numbers are comes from the game's own code and route data. A leg's first number
+# is its length in yards, (n >> 3) + (n & 7) / 7 (68 = 8.6, 136 = 17, 200 = 25, 60 = 7.6), its second number a heading in degrees, n x 2.8125 (0 = to the right, 32 = 90 = straight upfield,
+# 42 = 118, 16 = 45, 64 = 180 = to the left, 96 = 270 = back toward the quarterback), its third a movement intensity, n / 255 (254 = full, 127 = half; capped at full). A cut's first number is the
+# side its animation turns to (1 right, 2 left) and its second picks the turn angle of that ANIMATION (1 and 23 = 45 degrees, 2 and 14 = 90, 3 = 22, 4 = 67, 22 = 135, 5 and most other numbers = a
+# full turn back, about 180); the cut does not move the receiver along the route: the leg after it does, by its own heading. A tester's first results (master copy, quick game) confirmed the
+# lengths and headings and showed that a cut that does not match the next leg gives a glitchy "two cuts in a row" route; tests B11 to B14 were added for what was left open.
 TESTS = (
     {"id": "B0", "phase": 1, "title": "Stock route (control)", "changes": {},
-     "asks": "How does the route run before any change? This is what the others are compared with. By the numbers it is a first leg of about 9 yards, a cut to the left of about 45 degrees, then a long second leg (25 yards) at a steep angle.",
-     "watch": "How many yards past the line of scrimmage does the receiver run before he breaks (about 9 by the numbers)? Which way does he break (toward the middle, toward the sideline, straight on, back)? How many yards past the line is he when he is thrown to or stops?"},
+     "asks": "How does the route run before any change? This is what the others are compared with. By the numbers it is a first leg of about 9 yards, a cut to the left of about 45 degrees, then a long second leg (25 yards) heading up and toward the middle. The picture of the play on the play-call screen will show the stock Mid Post in EVERY test (it is drawn from separate data): judge by watching the play run, not by the picture.",
+     "watch": "How many yards past the line of scrimmage does the receiver run before he breaks (about 9 by the numbers)? Which way does he break? Which route is it (the stock one is a Post)?"},
     {"id": "B1", "phase": 1, "title": "Longer stem: first leg, first number 68 -> 136", "changes": {0: {"val1": 136}},
-     "asks": "Does the game use the edited file at all, and is the leg's first number its length in yards (68 = about 8.6 yards, 136 = 17)?",
-     "watch": "If the receiver now runs about twice as far before he breaks (about 17 yards instead of 9), both are yes. If nothing is different, the game is not reading this file for routes (tell us, this decides everything)."},
+     "asks": "Does the game use the edited file at all, and is the leg's first number its length in yards (68 = about 8.6 yards, 136 = 17)? A tester has seen it: the break moved to 17 yards. Repeat it if you can, it is quick.",
+     "watch": "Does the receiver now run about twice as far before he breaks (about 17 yards instead of 9)? If nothing is different, tell us right away: that decides everything."},
     {"id": "B2", "phase": 1, "title": "Heading of the second leg: second number 42 -> 16", "changes": {2: {"val2": 16}},
-     "asks": "Is a leg's second number a heading in degrees (number x 2.8125, so 42 = 118 degrees, 16 = 45 degrees, 32 = straight upfield)?",
-     "watch": "Does the receiver break at about 45 degrees (a flatter, wider break toward one sideline) instead of the stock steeper angle? Which side of the field does he head for, roughly what angle?"},
+     "asks": "The second leg's heading goes from 118 degrees (up and toward the middle) to 45 degrees (up and toward the sideline), but the cut still plants for a 45-degree cut to the left. A tester saw a GLITCHY route: the normal post plant, then a fast turn to the outside like a Corner. Does yours do the same?",
+     "watch": "Where does the receiver end up heading? Does he plant one way and then run the other (a glitch is a good result: say what the two halves look like)?"},
     {"id": "B3", "phase": 1, "title": "Heading of the second leg: second number 42 -> 64", "changes": {2: {"val2": 64}},
-     "asks": "Which way do larger numbers turn the leg (compare with B2)? By the numbers 64 is 180 degrees, back along the line.",
-     "watch": "Does the receiver now run sideways along the line (or back toward the quarterback's side) instead of upfield? Is it opposite to B2?"},
+     "asks": "The heading becomes 180 degrees: straight across to the middle. A tester saw an In/Dig (flat across), a little less sharp than the game's own In. Does it match?",
+     "watch": "Does the receiver run flat across the field toward the middle after the break instead of up and in? Which route does it look like?"},
     {"id": "B4", "phase": 1, "title": "Side of the cut: first number 2 -> 1", "changes": {1: {"val1": 1}},
-     "asks": "Is the cut's first number the side it turns to (2 = left, 1 = right)?",
-     "watch": "Does the receiver turn to the other side (toward the sideline instead of the middle, or the other way round)?"},
+     "asks": "The cut's animation turns to the other side (right instead of left) but the next leg still heads up toward the middle. A tester saw a glitchy 'Corner Post': a break to the outside, then an awkward post cut. Does yours?",
+     "watch": "Which way does he plant, and where does he run after it? Describe both halves."},
     {"id": "B5", "phase": 1, "title": "Sharpness of the cut: second number 1 -> 5", "changes": {1: {"val2": 5}},
-     "asks": "How big a turn does the code 5 give? The game's data only uses 1, 2, 3, 4, 7, 14 and a few others, so this is a code nobody has seen.",
-     "watch": "Is the turn sharper or rounder than the stock one, roughly how many degrees? Or does the receiver stop first? Describe what you see."},
+     "asks": "The code 5 is a full reversal in the game's code (about 180 degrees), so the cut should look like a stop and turn back. A tester saw a 'Curl Post': he runs, stops, then makes the post break. Does yours?",
+     "watch": "Does he stop and turn back toward the quarterback before the post break? How big does the turn look?"},
     {"id": "B6", "phase": 2, "title": "Shorter second leg: first number 200 -> 60", "changes": {2: {"val1": 60}},
-     "asks": "Is the second leg's first number also a length in yards (200 = 25 yards, 60 = about 7.6)?",
-     "watch": "Does the receiver stop about 7-8 yards after the break instead of running about 25?"},
+     "asks": "Is the second leg's first number also a length in yards (200 = 25 yards, 60 = about 7.6)? A tester could not tell: the QB threw before the receiver got far past his break. DO NOT THROW: hold the ball (a team with a strong line, like the Cowboys, gives you the time) and watch the receiver run the whole route; use the replay.",
+     "watch": "Where does the receiver stop after the break: about 7-8 yards past it instead of about 25?"},
     {"id": "B7", "phase": 2, "title": "Heading of the first leg: second number 32 -> 16", "changes": {0: {"val2": 16}},
-     "asks": "Does the heading work the same way on the stem (32 = straight upfield, 16 = 45 degrees)?",
-     "watch": "Does the receiver now start off at about 45 degrees instead of straight upfield? Which way?"},
+     "asks": "Does the heading work the same way on the stem (32 = straight upfield, 16 = 45 degrees)? A tester has seen it: an angle-type diagonal start, about 5 yards upfield at the break.",
+     "watch": "Does the receiver start off at about 45 degrees instead of straight upfield? Which way?"},
     {"id": "B8", "phase": 2, "title": "Third number of the second leg: 254 -> 127", "changes": {2: {"val3": 127}},
-     "asks": "Is the third number a speed (254 = full speed, 127 = half)?",
-     "watch": "Does the receiver run the second leg at about half speed, so he covers less ground in the same time? Nothing is also a fine answer."},
+     "asks": "Is the third number how hard the receiver runs the leg (254 = full, 127 = half)? A tester saw no change, but the QB threw before the second leg was run. DO NOT THROW: hold the ball and watch the receiver run the whole route; use the replay.",
+     "watch": "Does he run the second leg at about half effort (slower, covering less ground in the same time)? Nothing is also a fine answer."},
     {"id": "B9", "phase": 2, "title": "Sharpness of the cut: second number 1 -> 2", "changes": {1: {"val2": 2}},
-     "asks": "Compare with B5: does the code 2 give about a 90-degree turn where the stock code 1 gives about 45?",
-     "watch": "Is the break about twice as sharp as in the stock route, and different from B5? How?"},
+     "asks": "The cut animation becomes a 90-degree turn while the next leg is unchanged. A tester saw a glitchy route: a 90-degree cut to the inside, then a quick post cut. Does yours?",
+     "watch": "Is the plant sharper than in the stock route, and does he then run the stock second leg? Describe both halves."},
     {"id": "B10", "phase": 1, "title": "Stock again (control after putting the route back)", "changes": {},
      "asks": "Did putting the route back work? The route should run exactly as in B0.",
      "watch": "Does the route run the same as in B0?"},
+    {"id": "B11", "phase": 2, "title": "Speed of the first leg: first leg third number 254 -> 127", "changes": {0: {"val3": 127}},
+     "asks": "The stem is where the speed number can be seen best (B8 changes the second leg, which is hardly run before the throw). At half effort the receiver should reach the break later. DO NOT THROW until he has broken; use the replay to compare with B0.",
+     "watch": "Does he take clearly longer to reach the break than in B0 (he should cover the same 9 yards more slowly)? About how much longer?"},
+    {"id": "B12", "phase": 2, "title": "A clean Corner: cut side 2 -> 1 and second leg heading 42 -> 16", "changes": {1: {"val1": 1}, 2: {"val2": 16}},
+     "asks": "B2 and B4 each gave a glitch because the cut and the next leg disagreed. Here both change together: the cut turns right by 45 degrees and the second leg heads 45 degrees toward the sideline. If the cut and the leg only have to agree, this should be a clean Corner route with no double cut.",
+     "watch": "Is it a clean Corner (one break to the outside, no second cut)? Or still glitchy? Say which."},
+    {"id": "B13", "phase": 2, "title": "A clean In: cut second number 1 -> 2 and second leg heading 42 -> 64", "changes": {1: {"val2": 2}, 2: {"val2": 64}},
+     "asks": "The cut turns left by 90 degrees and the second leg heads 180 degrees (straight across to the middle). Cut and leg agree, so this should be a clean In/Dig with one sharp break.",
+     "watch": "Is it a clean In (up, one sharp break, flat across)? Or glitchy?"},
+    {"id": "B14", "phase": 2, "title": "A clean Curl: cut second number 1 -> 5, second leg heading 42 -> 96 and length 200 -> 24", "changes": {1: {"val2": 5}, 2: {"val1": 24, "val2": 96}},
+     "asks": "The cut is a full reversal (about 180 degrees) and the second leg heads 270 degrees (back toward the quarterback) for 3 yards (24 = 3.0 yards). Cut and leg agree, so this should be a clean Curl/Hitch: up about 9 yards, stop, turn and come back about 3 yards.",
+     "watch": "Is it a clean Curl or Hitch (stops, turns, comes back a few yards)? Or glitchy? How far does he come back?"},
 )
 TEST_BY_ID = {t["id"]: t for t in TESTS}
 
@@ -73,6 +87,7 @@ ROUTE_CHOICES = (
     "Corner: runs up, then angles toward the sideline",
     "Flat: goes straight to the sideline, close to the line",
     "He stopped or stood still",
+    "A mix of two routes, or a glitchy turn (describe below)",
     "Something else (describe below)",
 )
 LEGACY_FIELDS = {"direction": "Which way did he break (earlier form)"}      # answers saved by an earlier version of the form still show up in the report
@@ -82,7 +97,7 @@ LEGACY_FIELDS = {"direction": "Which way did he break (earlier form)"}      # an
 GOOD_TEAMS = ("Cowboys",)
 
 RESULT_FIELDS = (
-    ("changed", "Did the route change from the stock route?", ("", "no change at all", "yes, it changed (describe below)", "the game crashed or froze", "I could not call the play")),
+    ("changed", "Did the route change from the stock route?", ("", "no change at all", "yes, it changed (describe below)", "yes, but glitchy: it does two different things (describe below)", "the game crashed or froze", "I could not call the play")),
     ("stem", "Yards past the line before the break (a number, 0 if you cannot tell)", None),
     ("route", "Which route did the receiver run? (the closest name)", ROUTE_CHOICES),
     ("after", "Yards he ran after the break (a number)", None),
