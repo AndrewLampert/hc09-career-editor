@@ -14,12 +14,14 @@ else
   echo "[MISSING] Node.js 18 or newer (https://nodejs.org/)."; problem=1
 fi
 [ "$problem" -ne 0 ] && exit 1
-if [ -f hc09-bridge/node_modules/madden-file-tools/package.json ]; then
+# The bridge's dependencies need no compiler. A folder left by a failed or older install that does not load is thrown away and installed again.
+if [ -f hc09-bridge/node_modules/madden-file-tools/package.json ] && node -e "require('./hc09-bridge/node_modules/madden-file-tools')" >/dev/null 2>&1; then
   echo "[ok] The bridge's dependencies are installed"
 elif [ "$1" = "--check" ]; then
   echo "[info] The bridge's dependencies will be installed on the first start (npm install)"
 else
   echo "Installing the bridge's dependencies (first start only, needs internet)..."
+  rm -rf hc09-bridge/node_modules
   (cd hc09-bridge && npm install --no-audit --no-fund) || { echo "[FAILED] npm install did not finish."; exit 1; }
 fi
 if [ "$1" = "--check" ]; then echo "Ready: the editor would start with: $py guiHC09.py"; exit 0; fi

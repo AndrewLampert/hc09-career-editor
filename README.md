@@ -136,7 +136,10 @@ you always have the previous version to fall back to.
 **Windows, the easy way:** double-click **`Start HC09 Editor.bat`**. It checks that Python 3.9+ (with Tk) and
 Node.js 18+ are installed (and tells you where to get them if not), runs `npm install` for the bridge the first
 time, and opens the editor without a console window. `"Start HC09 Editor.bat" --check` only reports what it found.
-On Linux / macOS use `./start-hc09-editor.sh` (same checks, `--check` too).
+On Linux / macOS use `./start-hc09-editor.sh` (same checks, `--check` too). Nothing needs a compiler: the install
+asks for no Visual Studio or build tools (an older version did, through the `lz4` package, which is now a small
+plain-JavaScript stand-in in `hc09-bridge/shims/lz4`). If you saw that error, update the editor, delete the
+`hc09-bridge/node_modules` folder if it is there, and start it again.
 
 By hand:
 

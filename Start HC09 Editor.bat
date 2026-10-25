@@ -41,19 +41,27 @@ if errorlevel 1 (
 
 if defined PROBLEM goto :problem
 
-rem ---- the bridge's dependencies (first start only)
+rem ---- the bridge's dependencies (first start only). They need no compiler and no Visual Studio. A folder left by a failed or older install that does not
+rem      load is thrown away and installed again.
+set "BRIDGE_OK="
 if exist "hc09-bridge\node_modules\madden-file-tools\package.json" (
+  node -e "require('./hc09-bridge/node_modules/madden-file-tools')" >nul 2>nul
+  if not errorlevel 1 set "BRIDGE_OK=1"
+)
+if defined BRIDGE_OK (
   echo [ok] The bridge's dependencies are installed
 ) else (
   if defined CHECK_ONLY (
     echo [info] The bridge's dependencies will be installed on the first start ^(npm install^)
   ) else (
     echo Installing the bridge's dependencies ^(first start only, needs internet^)...
+    if exist "hc09-bridge\node_modules" rmdir /s /q "hc09-bridge\node_modules"
     pushd hc09-bridge
     call npm install --no-audit --no-fund
     popd
-    if not exist "hc09-bridge\node_modules\madden-file-tools\package.json" (
-      echo [FAILED] npm install did not finish. Check your internet connection and run this again.
+    node -e "require('./hc09-bridge/node_modules/madden-file-tools')" >nul 2>nul
+    if errorlevel 1 (
+      echo [FAILED] npm install did not finish. Check your internet connection and run this again. ^(No Visual Studio is needed: if npm asks for it, you have an old copy of the editor, download the current one.^)
       goto :problem
     )
   )

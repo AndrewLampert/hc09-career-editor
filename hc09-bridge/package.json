@@ -6,10 +6,19 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["hc09", "madden", "tdb", "save-editor"],
+  "keywords": [
+    "hc09",
+    "madden",
+    "tdb",
+    "save-editor"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "madden-file-tools": "2.4.13"
+    "madden-file-tools": "2.4.13",
+    "lz4": "file:shims/lz4"
+  },
+  "overrides": {
+    "lz4": "$lz4"
   }
 }

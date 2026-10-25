@@ -1,0 +1,7 @@
+{
+  "name": "lz4",
+  "version": "0.6.5",
+  "description": "Compiler-free stand-in for the lz4 package: decodeBlock in plain JavaScript (the only function madden-file-tools uses), no native add-on, so npm install needs no Visual Studio.",
+  "main": "index.js",
+  "license": "MIT"
+}
