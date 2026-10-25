@@ -165,6 +165,11 @@ python guiHC09.py
    such as `CAREER-ME/CAREER-ME`) and checked only against copies of our own saves: Xenia Canary and Xenia Edge are the ones meant (a portable copy, with `content` next to the
    program, can be anywhere: the editor also asks Windows where a running Xenia is). If yours are elsewhere, pick the files by hand (Details... in the save windows). Back up the files first. Xbox 360 files taken straight out of a console package (STFS) have to be
    extracted first (for example with Modio), and PS3 files decrypted, as the community guides say.
+   **HC09 for PC** (the Xbox 360 game recompiled to run natively, such as ibukun5588/nfl-head-coach-09-pc and tools81/nfl-head-coach-09-static-recomp) keeps the same MC02 saves in a
+   flat folder, `Documents\NFL Head Coach 09\Saves\1.0` and `\1.2` (one folder per save, named `CAREER-<name>`, holding a file of the same name), or under `build\userdata\content`
+   in the other port's install folder. **Saves...** looks there too, marks the careers *(HC09 PC 1.2)*, leaves the `Backups` folder out and pairs a career with the profile
+   of the same game version; **Look in another folder...** takes the `Saves` folder (or the folder that holds it). This was written from the two projects' README pages and
+   not checked against a real install, and whether the PC versions accept an edited save is untested: close the game first and back up the folder.
    The first time you load a save it asks which team is yours and remembers the answer;
    switch teams any time from the list on the left.
 2. Edit players, stats, contracts, trades, picks, staff, playbooks, or the salary cap.

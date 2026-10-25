@@ -5353,7 +5353,7 @@ class PersonnelDialog(tk.Toplevel):
     # ---- writing
     def _check_closed(self):
         if rpcs3_running():
-            messagebox.showerror("Close the emulator", "RPCS3 or Xenia is running. Close it first: the game files can't be written reliably while it has them open.")
+            messagebox.showerror("Close the emulator", "RPCS3, Xenia or HC09 for PC is running. Close it first: the game files can't be written reliably while it has them open.")
             return False
         return True
 
@@ -5606,10 +5606,10 @@ class SavesDialog(tk.Toplevel):
         if self.saves:
             self.tree.selection_set("0")
             self.lbl_note.configure(text="Newest first. Double-click a save, or select it and press Open. The editor looks in the folders your "
-                                         "recent saves live in, the ones you add, and the usual RPCS3 and Xenia places.")
+                                         "recent saves live in, the ones you add, and the usual RPCS3, Xenia and HC09 for PC places.")
         else:
             self.lbl_note.configure(text="No career saves found yet. Use Look in another folder... and pick RPCS3's folder (the one that holds dev_hdd0) "
-                                         "or its savedata folder, or Xenia's folder (the one that holds content), or Search this computer.")
+                                         "or its savedata folder, or Xenia's folder (the one that holds content), or the Saves folder of HC09 for PC (in Documents\\NFL Head Coach 09), or Search this computer.")
         self.btn_open.configure(state="normal" if self.saves else "disabled")
 
     def _selected(self):
@@ -5635,7 +5635,7 @@ class SavesDialog(tk.Toplevel):
             messagebox.showerror("Show folder", str(e))
 
     def _add_folder(self):
-        folder = filedialog.askdirectory(title="Pick RPCS3's folder (the one that holds dev_hdd0), a savedata folder, or Xenia's folder (the one that holds content)", parent=self)
+        folder = filedialog.askdirectory(title="Pick RPCS3's folder (the one that holds dev_hdd0), a savedata folder, Xenia's folder (the one that holds content), or the Saves folder of HC09 for PC", parent=self)
         if not folder:
             return
         extra = list(self.app.ui_prefs.get("extra_rpcs3_dirs", []))
@@ -7186,7 +7186,7 @@ class CustomPlayDialog(tk.Toplevel):
                             f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
 
     def _uninstall(self):
-        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 and Xenia must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
+        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3, Xenia and HC09 for PC must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
                                            "No: put back your files from before the LAST install only.\nCancel: do nothing.", parent=self)
         if answer is None:
             return
@@ -7373,7 +7373,7 @@ class TestPlaysDialog(tk.Toplevel):
         app.run_in_thread_with_busy("Making the test plays..." if only_first else "Making the seven test plays (about a minute)...", work, done, error_title="Test plays")
 
     def _uninstall(self):
-        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3 and Xenia must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
+        answer = messagebox.askyesnocancel("Put my saves back", "RPCS3, Xenia and HC09 for PC must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
                                            "No: put back your files from before the LAST install only.\nCancel: do nothing.", parent=self)
         if answer is None:
             return
@@ -8118,9 +8118,9 @@ PLAYBOOK_NAME_MATCH = 0.8   # a custom playbook is named only if this share of i
 
 def find_profile_saves(career_db_path):
     """Profile saves of the same game sitting next to a career save: RPCS3's savedata/<TITLE>-PROFILE-*/USR-DATA, or, for a Xenia (Xbox 360) career, the profile saves in the same
-    title folder (found by what is in them, not by name)."""
+    title folder, or, for a PC version, the ones in the same game version's saves folder (found by what is in them, not by name)."""
     if hc09_detect is not None:
-        xenia = hc09_detect.xenia_profiles_for(career_db_path)
+        xenia = hc09_detect.xenia_profiles_for(career_db_path) or hc09_detect.pcport_profiles_for(career_db_path)
         if xenia:
             return xenia
     folder = os.path.dirname(os.path.abspath(career_db_path))
@@ -10663,15 +10663,26 @@ class App(tk.Tk):
         roots = [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")] if search else []
         return hc09_detect.candidate_xenia_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
 
+    def _detect_pcport_roots(self):
+        if hc09_detect is None:
+            return []
+        return hc09_detect.candidate_pcport_roots(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []))
+
     def detected_saves(self, search=False):
-        """The career saves found in RPCS3's savedata folders and in Xenia's content folders (those of the recent saves, any the user added, the usual places and, if asked,
-        a bounded search of the usual drives' folders), newest first. A Xenia save is marked "(Xenia)" in its name."""
+        """The career saves found in RPCS3's savedata folders, in Xenia's content folders (those of the recent saves, any the user added, the usual places and, if asked,
+        a bounded search of the usual drives' folders) and in the saves folders of the PC versions of the Xbox 360 game, newest first. A Xenia save is marked "(Xenia)" in its name,
+        a PC version's "(HC09 PC)" with the game version when it has one."""
         if hc09_detect is None:
             return []
         found = hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))
         for sv in hc09_detect.list_xenia_saves(self._detect_xenia_dirs(search)):
             if sv["kind"] == "career":
                 found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"]})
+        have = {os.path.normcase(os.path.abspath(f["path"])) for f in found}
+        for sv in hc09_detect.list_pcport_saves(self._detect_pcport_roots()):
+            if sv["kind"] == "career" and os.path.normcase(os.path.abspath(sv["path"])) not in have:
+                found.append({"name": f"{sv['name']} (HC09 PC{' ' + sv['version'] if sv['version'] else ''})", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"],
+                              "size": sv["size"], "root": sv["root"]})
         return sorted(found, key=lambda s: -s["mtime"])
 
     def _detected_game_file(self, name):
@@ -11808,7 +11819,7 @@ class App(tk.Tk):
         plan = RT.plan_edits(test_id, self.route_test_scan(info["archives"]), where)
         if plan:
             if self._rpcs3_running():
-                raise RuntimeError("RPCS3 or Xenia is running. Close it first (it can hold the game file open), then press the button again.")
+                raise RuntimeError("RPCS3, Xenia or HC09 for PC is running. Close it first (it can hold the game file open), then press the button again.")
             targets = [{"ast": c["ast"], "index": c["index"], "start": c["start"], "size": c["size"], "edits": edits} for c, edits in plan]
             try:
                 apply_personnel_targets(self.model, targets, backup_dir=self._personnel_backup_dir())
@@ -11834,8 +11845,8 @@ class App(tk.Tk):
 
     @staticmethod
     def _rpcs3_running():
-        """True if an emulator that plays the game seems to be running: RPCS3 (PS3) or Xenia (Xbox 360). It holds the saves open, and rewrites them when it closes."""
-        names = ("rpcs3", "xenia", "xenia_canary", "xenia_edge", "xenia-edge")
+        """True if something that plays the game seems to be running: RPCS3 (PS3), Xenia (Xbox 360) or a PC version of the Xbox 360 game (HC09 for PC). It holds the saves open, and rewrites them when it closes."""
+        names = ("rpcs3", "xenia", "xenia_canary", "xenia_edge", "xenia-edge") + (hc09_detect.PCPORT_PROGRAMS if hc09_detect is not None else ("hc09", "hc09-launcher"))
         try:
             if os.name == "nt":
                 out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=15)
@@ -11883,7 +11894,7 @@ class App(tk.Tk):
         """Put the profile and the career back from a backup install_custom_play made: "newest" (the files from before the last install) or "oldest" (from before the first one,
         so every test play is gone). Returns its info dict."""
         if self._rpcs3_running():
-            raise RuntimeError("RPCS3 or Xenia is running. Close it first, then try again.")
+            raise RuntimeError("RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.")
         if not os.path.isdir(self.TEST_BACKUP_DIR):
             raise RuntimeError("There is no backup to put back.")
         folders = sorted(d for d in os.listdir(self.TEST_BACKUP_DIR) if os.path.isfile(os.path.join(self.TEST_BACKUP_DIR, d, "info.json")))
@@ -11903,7 +11914,7 @@ class App(tk.Tk):
     def install_blocker(self, career_path):
         """Why custom plays cannot be put into the game right now (a sentence), or None."""
         if self._rpcs3_running():
-            return "RPCS3 or Xenia is running. Close it first (it rewrites the saves when it closes), then press the button again."
+            return "RPCS3, Xenia or HC09 for PC is running. Close it first (it rewrites the saves when it closes), then press the button again."
         if self._career_open(career_path) and self.dirty:
             return "The career that is open in the editor has unsaved changes. Save them (Save to File) or throw them away (Reload from File), then press the button again."
         return None
