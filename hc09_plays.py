@@ -64,6 +64,14 @@ def signed(value, bits):
     return value - (1 << bits) if value >= (1 << (bits - 1)) else value
 
 
+def cut_at_control(text):
+    """A string out of the game's database as it should read: the pool the strings sit in runs on past the text, so everything from the first control character on is dropped."""
+    for i, ch in enumerate(text or ""):
+        if ord(ch) < 32:
+            return text[:i].strip()
+    return (text or "").strip()
+
+
 def read_csv(path):
     try:
         with open(path, newline="", encoding="utf-8-sig") as f:
@@ -199,7 +207,31 @@ class PlayLibrary:
         self.books_of_play = collections.defaultdict(set)
         for r in t["PBAI"]:
             self.books_of_play[int(r["PBPL"])].add(int(r["BOKL"]))
+        self.book_play_names = {}                            # {BOKL: {PLYL: the name that playbook shows for the play}}, see set_book_play_names
         self._usage = None
+
+    def set_book_play_names(self, rows):
+        """The names the playbooks give their plays (table PPPN of the shipped database: BOKL, PLYL, PPPM). The game's play-call screen shows these, not the master names in
+        PBPL (about four in five differ, e.g. "Deep Attack" is "Liz Lft Deep Attack" in one playbook). Rows that do not parse are skipped."""
+        out = collections.defaultdict(dict)
+        for r in rows:
+            try:
+                name = cut_at_control(r["PPPM"])
+                if name:
+                    out[int(r["BOKL"])][int(r["PLYL"])] = name
+            except (KeyError, ValueError):
+                continue
+        self.book_play_names = dict(out)
+
+    def name_in_book(self, plyl, bokl):
+        """The name a playbook shows for a play: its own name for it when it has one, else the master name."""
+        own = self.book_play_names.get(bokl, {}).get(plyl)
+        return own or (self.plays[plyl]["name"] if plyl in self.plays else f"Play {plyl}")
+
+    def names_across_books(self, plyl):
+        """[(name, number of playbooks)], the most common first: what the playbooks that hold a play call it."""
+        counts = collections.Counter(self.name_in_book(plyl, b) for b in self.books_of_play.get(plyl, ()))
+        return counts.most_common()
 
     def _table_of(self, s):
         """Which assignment tables a set's plays use, "offense" (PSLO, ARTO) or "defense" (PSLD, ARTD): the side for offensive and defensive sets; for the special-teams
