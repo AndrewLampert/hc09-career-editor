@@ -26,7 +26,7 @@ COLUMN_NAMES = {"val1": "first number", "val2": "second number", "val3": "third 
 # lengths and headings and showed that a cut that does not match the next leg gives a glitchy "two cuts in a row" route; tests B11 to B14 were added for what was left open.
 TESTS = (
     {"id": "B0", "phase": 1, "title": "Stock route (control)", "changes": {},
-     "asks": "How does the route run before any change? This is what the others are compared with. By the numbers it is a first leg of about 9 yards, a cut to the left of about 45 degrees, then a long second leg (25 yards) heading up and toward the middle.",
+     "asks": "How does the route run before any change? This is what the others are compared with. By the numbers it is a first leg of about 9 yards, a cut to the left of about 45 degrees, then a long second leg (25 yards) heading up and toward the middle. The picture of the play on the play-call screen will show the stock Mid Post in EVERY test (it is drawn from separate data): judge by watching the play run, not by the picture.",
      "watch": "How many yards past the line of scrimmage does the receiver run before he breaks (about 9 by the numbers)? Which way does he break? Which route is it (the stock one is a Post)?"},
     {"id": "B1", "phase": 1, "title": "Longer stem: first leg, first number 68 -> 136", "changes": {0: {"val1": 136}},
      "asks": "Does the game use the edited file at all, and is the leg's first number its length in yards (68 = about 8.6 yards, 136 = 17)? A tester has seen it: the break moved to 17 yards. Repeat it if you can, it is quick.",
