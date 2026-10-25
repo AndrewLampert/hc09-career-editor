@@ -57,10 +57,32 @@ TESTS = (
 )
 TEST_BY_ID = {t["id"]: t for t in TESTS}
 
+# The routes a tester can name, with what each looks like. "Go" is the one with no break at all (straight upfield); a Hitch or Curl is also straight at first but then turns round and comes back toward the
+# quarterback. Out and In turn sharply (about 90 degrees) to the sideline / the middle, Corner and Post turn at a shallower angle (about 45 degrees) to the sideline / the middle.
+ROUTE_CHOICES = (
+    "",
+    "Go: straight upfield, no break at all",
+    "Hitch or Curl: runs up, stops and turns back toward the quarterback",
+    "Comeback: runs deep, then comes back toward the sideline",
+    "Out: runs up, then turns sharply (about 90 degrees) toward the sideline",
+    "In or Dig: runs up, then turns sharply (about 90 degrees) toward the middle",
+    "Slant: a short stem, then a diagonal toward the middle",
+    "Post: runs up, then angles toward the middle (the stock route)",
+    "Corner: runs up, then angles toward the sideline",
+    "Flat: goes straight to the sideline, close to the line",
+    "He stopped or stood still",
+    "Something else (describe below)",
+)
+LEGACY_FIELDS = {"direction": "Which way did he break (earlier form)"}      # answers saved by an earlier version of the form still show up in the report
+
+# Teams whose offense is best to watch a route with: a strong offensive line that holds the rush until the receiver has broken (a weak line gives sacks and hurried throws instead of a route to look at).
+# The tester found the Cowboys much better than the Bears, whose line "can barely hold the rush before the receiver breaks". Nicknames as the Playbooks tab shows them, best first.
+GOOD_TEAMS = ("Cowboys",)
+
 RESULT_FIELDS = (
     ("changed", "Did the route change from the stock route?", ("", "no change at all", "yes, it changed (describe below)", "the game crashed or froze", "I could not call the play")),
     ("stem", "Yards past the line before the break (a number, 0 if you cannot tell)", None),
-    ("direction", "Which way did he break?", ("", "toward the middle", "toward the sideline", "straight upfield", "back toward the quarterback", "no break", "other (describe below)")),
+    ("route", "Which route did the receiver run? (the closest name)", ROUTE_CHOICES),
     ("after", "Yards he ran after the break (a number)", None),
     ("notes", "What you saw, in your own words (angle, speed, anything odd)", None),
 )
@@ -79,33 +101,50 @@ def receiver_text(label, x, y, rank=0, n=1):
     return f"{label}, wide on the {side}, about {abs(x):.0f} yards {side} of the middle and {back}" + (f" ({place})" if n > 1 else "")
 
 
-def watch_line(play, plyl, set_name, formation, who, book_names):
-    """"WR Post (PLYL 1159) - Normal, I Form - WR1, wide on the right, ... - 7 playbooks: Reid All Passing, Zorn West Coast, and 5 more": a play that uses the route, with its id (PLYL), set and
-    formation (several sets are called "Normal"), the receiver (receiver_text) and the playbooks that have it. who: [receiver_text]."""
+def book_label(book, called, play):
+    """A playbook with the name it gives the play when that is not the master name: 'Bears Power Run (calls it "22 Z Post")'."""
+    return f'{book} (calls it "{called}")' if called and called != play else book
+
+
+def watch_line(play, plyl, set_name, formation, who, book_names, called=None):
+    """"WR Post (PLYL 1159) - Normal, I Form - WR1, wide on the right, ... - 7 playbooks: Reid All Passing (calls it "22 Scat Z Post"), Zorn West Coast, and 5 more": a play that uses the route, with its id (PLYL),
+    set and formation (several sets are called "Normal"), the receiver (receiver_text) and the playbooks that have it. who: [receiver_text]. play is the master name; called: the name each of those playbooks
+    gives the play, in the same order (the game's play-call screen shows these, and none of them need be the master name)."""
     names = list(book_names)
-    shown = ", ".join(names[:2]) + (f", and {len(names) - 2} more" if len(names) > 2 else "")
+    called = list(called) if called else [None] * len(names)
+    shown = ", ".join(book_label(n, c, play) for n, c in list(zip(names, called))[:2]) + (f", and {len(names) - 2} more" if len(names) > 2 else "")
     return f"{play} (PLYL {plyl}) - {set_name}, {formation} - {' and '.join(who)} - {len(names)} playbook{'s' if len(names) != 1 else ''}" + (f": {shown}" if names else "")
 
 
-def choose_play(entries, book_names, holders, my_team="", my_book=None):
+def choose_play(entries, book_names, holders, my_team="", my_book=None, strong=GOOD_TEAMS):
     """The one play and team a tester should use. entries: [{"plyl", "name", "set", "form", "who", "books": [playbook ids], "read": the route runner's place in the quarterback's reads
     (0 when the play is not a pass or he is not a read), "option": an option play} with the plays in the most playbooks first; book_names: {playbook id: name}; holders: {playbook id: [teams
     that play it]}; my_team / my_book: the team chosen in the editor and the playbook it plays. An ordinary pass that throws to the route runner is the easiest to watch (a run play only uses him
     as a decoy, an option play is hard to follow): the tester's own team when its playbook has such a play, else the best such play and a team that plays one of its playbooks, then worse plays the
-    same way. Returns {"entry", "team", "playbook", "others": [(team, playbook)]} or None."""
+    same way, except that a team of `strong` (a good offensive line, see GOOD_TEAMS) that plays such a play comes first. An entry may carry "called": {playbook id: the name that playbook gives the play}.
+    Returns {"entry", "team", "playbook", "called" (the name in the chosen playbook), "others": [(team, playbook)], "other_names": [the name in each of those playbooks]} or None."""
     if not entries:
         return None
     name_of = lambda b: book_names.get(b, f"playbook {b}")
 
+    def name_in(e, b):
+        return e.get("called", {}).get(b) or e["name"]
+
     def build(e, book, team):
-        others = []
+        others, other_names = [], []
         for b in sorted(e["books"], key=name_of):
             for t in holders.get(b, ()):
                 if t != team and all(t != o[0] for o in others) and len(others) < 3:
                     others.append((t, name_of(b)))
-        return {"entry": e, "team": team, "playbook": name_of(book) if book is not None else "", "others": others}
+                    other_names.append(name_in(e, b))
+        return {"entry": e, "team": team, "playbook": name_of(book) if book is not None else "", "called": name_in(e, book) if book is not None else e["name"], "others": others, "other_names": other_names}
 
     tiers = [[e for e in entries if e.get("read") and not e.get("option")], [e for e in entries if e.get("read")], entries]
+    for team in strong:
+        for e in tiers[0]:
+            for b in sorted(e["books"], key=name_of):
+                if team in holders.get(b, ()):
+                    return build(e, b, team)
     if my_book is not None:
         for tier in tiers[:1]:
             for e in tier:
@@ -129,9 +168,15 @@ def play_text(pick):
         start = f"Start a quick game (Play Now) with a team whose base playbook is {pick['playbook']} and play offense."
     else:
         start = "Start a quick game (Play Now) and play offense."
-    text = f"{start} Call {e['name']} (PLYL {e['plyl']}): the {e['form']} formation, the {e['set']} set. Watch {' and '.join(e['who'])}. Use this same play for every test."
+    called = pick.get("called") or e["name"]
+    what = f'"{called}" (PLYL {e["plyl"]}; the master list calls it {e["name"]})' if called != e["name"] else f"{e['name']} (PLYL {e['plyl']})"
+    text = f"{start} Call {what}: the {e['form']} formation, the {e['set']} set. Watch {' and '.join(e['who'])}. Use this same play for every test."
     if pick["others"]:
-        text += " If you cannot use that team: " + "; ".join(f"the {t} ({b})" for t, b in pick["others"]) + " have it too."
+        names = pick.get("other_names") or [None] * len(pick["others"])
+        text += " If you cannot use that team: " + "; ".join(f"the {t} ({book_label(b, n, e['name'])})" for (t, b), n in zip(pick["others"], names)) + " have it too."
+    text += " Playbooks name the same play differently, so go by the PLYL and the formation, not by the name."
+    if pick["team"] not in GOOD_TEAMS:
+        text += f" Pick a team with a strong offensive line if you can ({', '.join('the ' + t for t in GOOD_TEAMS)} work well): with a weak line the pass rush arrives before the receiver breaks and there is no route to watch."
     return text
 
 
@@ -158,10 +203,12 @@ def cap_text(pick):
 
 
 def full_list(entries, book_names):
-    """Every play that uses the route, for the chat: PLYL, name, set, formation, receiver, all its playbooks, and the name it has in Create-A-Play when it is in it."""
+    """Every play that uses the route, for the chat: PLYL, master name, set, formation, receiver, all its playbooks (with the name each gives the play when it is not the master one), and the name it
+    has in Create-A-Play when it is in it."""
     lines = [f"Plays that use the route (step list {PSAL}): {len(entries)} plays (PLYL = the play's id in the game files; the last part says which are in Create-A-Play)", ""]
     for e in entries:
-        names = [book_names.get(b, f"playbook {b}") for b in sorted(e["books"], key=lambda b: book_names.get(b, ""))]
+        books = sorted(e["books"], key=lambda b: book_names.get(b, ""))
+        names = [book_label(book_names.get(b, f"playbook {b}"), e.get("called", {}).get(b), e["name"]) for b in books]
         lines.append(f"PLYL {e['plyl']} | {e['name']} | set {e['set']} | {e['form']} | {' and '.join(e['who'])} | {len(names)} playbook(s): {'; '.join(names)}" + (f" | in Create-A-Play as {e['cap'].strip()}" if e.get("cap") else ""))
     return "\n".join(lines) + "\n"
 
@@ -306,5 +353,8 @@ def report(state, route_plays=None, game=""):
             v = (r.get(key) or "").strip()
             if v:
                 lines.append(f"- {label.split('(')[0].strip()}: {v}")
+        for key, label in LEGACY_FIELDS.items():
+            if (r.get(key) or "").strip():
+                lines.append(f"- {label}: {r[key].strip()}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
