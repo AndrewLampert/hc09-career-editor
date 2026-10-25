@@ -1,5 +1,5 @@
 """
-Find what the editor needs on this computer without asking: RPCS3's career saves and the game's files, and Xenia's saves (see the Xenia section at the end).
+Find what the editor needs on this computer without asking: RPCS3's career saves and the game's files, Xenia's saves and the saves of the PC versions of the Xbox 360 game (see the sections at the end).
 
 Standard library only, read-only. RPCS3 keeps the saves in <rpcs3>/dev_hdd0/home/<user>/savedata/<GAMEID>-CAREER-<NAME>/USR-DATA and
 the folder each installed game was added from in <rpcs3>/config/games.yml, so from any one save the game's own files
@@ -389,4 +389,157 @@ def candidate_xenia_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search
     if not out:
         for d in search_xenia_dirs(search_roots, budget=search_budget):
             add(d)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# HC09 for PC: the Xbox 360 game recompiled to run natively on Windows (ibukun5588/nfl-head-coach-09-pc and tools81/nfl-head-coach-09-static-recomp). WRITTEN FROM THEIR README PAGES,
+# NOT YET CHECKED AGAINST A REAL INSTALL: if the folders differ, change the constants below. The save itself is the same MC02 package as Xenia's (so classify_save works), but the
+# folders around it are not Xenia's content/<profile id>/<title id>/<type>/ tree:
+#   ibukun5588:  <Documents>\NFL Head Coach 09\Saves\<game version, 1.0 or 1.2>\<package>\<package>   (one folder per save, named CAREER-<name>, ROSTER-<name> or PROFILE-HeadCoach,
+#                holding one file of the same name; a <name>.name file sits beside it; replaced saves are copied to Saves\Backups first, which is not a save)
+#   tools81:     <install folder>\build\userdata\content\<type>\<package>\...   (packages are folders under the content type; the files inside are not described)
+# A package folder is therefore recognised by what is in it: a file of the same name as the folder that is a career or profile save.
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+PCPORT_DOCS_DIR = "NFL Head Coach 09"           # <Documents>\NFL Head Coach 09
+PCPORT_SAVES_DIR = "Saves"
+PCPORT_VERSIONS = ("1.0", "1.2")                # the game versions the ibukun5588 port keeps apart
+PCPORT_MAX_DEPTH = 4                            # how many levels below a saves folder a package folder may sit
+PCPORT_SKIP_DIRS = {"backups"}                  # folders whose saves are old copies, not saves to open
+TOOLS81_CONTENT = os.path.join("build", "userdata", "content")
+PCPORT_INSTALL_DIRS = (r"C:\Games\HC09Recomp", r"C:\HC09Recomp", r"D:\Games\HC09Recomp")      # the tools81 README suggests C:\Games\HC09Recomp
+PCPORT_PROGRAMS = ("hc09", "hc09-launcher")      # process names (without .exe) of the PC versions: they rewrite the saves they have open
+
+
+def documents_dirs():
+    """The user's Documents folders that exist: the one Windows says (it may be inside OneDrive) and the usual ones."""
+    home = os.path.expanduser("~")
+    cands = []
+    if os.name == "nt":
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(1024)
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0:          # CSIDL_PERSONAL = My Documents
+                cands.append(buf.value)
+        except (OSError, AttributeError, ImportError):
+            pass
+    cands += [os.path.join(home, "Documents")]
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        if os.environ.get(var):
+            cands.append(os.path.join(os.environ[var], "Documents"))
+    cands.append(os.path.join(home, "OneDrive", "Documents"))
+    out = []
+    for c in cands:
+        if c and os.path.isdir(c) and os.path.normcase(c) not in [os.path.normcase(o) for o in out]:
+            out.append(c)
+    return out
+
+
+def pcport_roots_in(path):
+    """The folders to look for PC-version saves in, given a folder the user (or a recent save) points at: the saves folder itself, or a folder above it that holds it
+    (the Documents folder, the NFL Head Coach 09 folder, a tools81 install folder). Nothing is guessed about other folders (a Xenia or RPCS3 folder gives none)."""
+    if not path or not os.path.isdir(path):
+        return []
+    path = os.path.abspath(path)
+    name = os.path.basename(path).lower()
+    parent = os.path.basename(os.path.dirname(path)).lower()
+    cands = []
+    if name == PCPORT_SAVES_DIR.lower() or (name == "content" and parent == "userdata") or (name in PCPORT_VERSIONS and parent == PCPORT_SAVES_DIR.lower()):
+        cands.append(path)
+    cands += [os.path.join(path, PCPORT_SAVES_DIR), os.path.join(path, PCPORT_DOCS_DIR, PCPORT_SAVES_DIR), os.path.join(path, TOOLS81_CONTENT), os.path.join(path, "userdata", "content")]
+    return [c for c in cands if os.path.isdir(c)]
+
+
+def common_pcport_roots():
+    """The usual places of the PC versions' saves that exist."""
+    out = []
+    for d in documents_dirs():
+        out += pcport_roots_in(os.path.join(d, PCPORT_DOCS_DIR))
+    for d in PCPORT_INSTALL_DIRS + (os.path.join(os.path.expanduser("~"), "HC09Recomp"),):
+        out += pcport_roots_in(d)
+    return out
+
+
+def pcport_root_of(path):
+    """The PC-version saves folder a save lies in (found by its shape on the way up), or None: <...>\\NFL Head Coach 09\\Saves, or <...>\\userdata\\content."""
+    cur = os.path.abspath(path)
+    for _ in range(8):
+        parent = os.path.dirname(cur)
+        name, pname = os.path.basename(cur).lower(), os.path.basename(parent).lower()
+        if name == PCPORT_SAVES_DIR.lower() and pname == PCPORT_DOCS_DIR.lower():
+            return cur
+        if name == "content" and pname == "userdata":
+            return cur
+        if parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def _pcport_package_files(root):
+    """The files of a saves folder that sit in a folder of the same name (the PC versions' packages), of a useful size, never inside a Backups folder."""
+    base_depth = root.rstrip("\\/").count(os.sep)
+    for cur, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d.lower() not in PCPORT_SKIP_DIRS]
+        if cur.count(os.sep) - base_depth >= PCPORT_MAX_DEPTH:
+            dirs[:] = []
+        folder = os.path.basename(cur).lower()
+        for name in files:
+            if name.lower() != folder:
+                continue
+            path = os.path.join(cur, name)
+            try:
+                if os.path.getsize(path) >= MIN_SAVE_SIZE:
+                    yield path
+            except OSError:
+                continue
+
+
+def list_pcport_saves(roots):
+    """Every career and profile save of the PC versions in the given saves folders, newest first: [{name, path, mtime, size, root, kind ("career" | "profile"), tables, package, version
+    ("1.0" or "1.2" for the ibukun5588 port, else "")}]. Roster saves and anything that is not a save are left out."""
+    out, seen = [], set()
+    for root in roots:
+        for path in _pcport_package_files(root):
+            key = os.path.normcase(os.path.abspath(path))
+            if key in seen:
+                continue
+            kind, tables = classify_save(path)
+            if kind == "other":
+                continue
+            seen.add(key)
+            package = os.path.basename(os.path.dirname(path))
+            group = os.path.basename(os.path.dirname(os.path.dirname(path)))
+            st = os.stat(path)
+            shown = re.sub(r"^(CAREER|PROFILE)-", "", package, flags=re.I)
+            out.append({"name": shown or package, "path": path, "mtime": st.st_mtime, "size": st.st_size, "root": os.path.dirname(os.path.dirname(path)), "kind": kind, "tables": tables,
+                        "package": package, "version": group if group in PCPORT_VERSIONS else ""})
+    return sorted(out, key=lambda s: -s["mtime"])
+
+
+def pcport_profiles_for(career_path):
+    """The profile saves that go with a career save of a PC version: the ones in the same folder (the game version's folder), newest first; [] when the career is not in a PC version's
+    saves folder."""
+    if not pcport_root_of(career_path):
+        return []
+    group = os.path.dirname(os.path.dirname(os.path.abspath(career_path)))
+    return [s["path"] for s in list_pcport_saves([group]) if s["kind"] == "profile"]
+
+
+def candidate_pcport_roots(recent_paths=(), extra_dirs=()):
+    """The saves folders of the PC versions to look at, best first: the ones the recent saves live in, the ones the user added (the saves folder or a folder that holds it), the usual
+    places."""
+    out = []
+
+    def add(d):
+        if d and os.path.isdir(d) and os.path.normcase(os.path.abspath(d)) not in [os.path.normcase(o) for o in out]:
+            out.append(os.path.abspath(d))
+
+    for p in recent_paths:
+        add(pcport_root_of(p))
+    for p in extra_dirs:
+        for d in pcport_roots_in(p):
+            add(d)
+    for d in common_pcport_roots():
+        add(d)
     return out
