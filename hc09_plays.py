@@ -664,6 +664,15 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
             row[f"rcv{k}"] = int(poso)
             row[f"per{k}"] = int(chance)
         rows["PLPD"] = [row]
+    # PBPL.vpos is the primary receiver: the slot of the read with the highest chance (checked in 1,170 of the game's 1,184 plays with pass reads, and in its custom plays), which the game
+    # shows as the one coloured route. A play keeps the one it was copied from otherwise, so reads set here must set it too (found in the first game test: reads that put the left
+    # receiver first still coloured the right receiver of the copied Slants).
+    if rows.get("PLPD"):
+        r0 = rows["PLPD"][0]
+        chances = [int(r0[f"per{k}"]) for k in range(1, 6)]
+        rows["PBPL"][0]["vpos"] = int(r0[f"rcv{chances.index(max(chances)) + 1}"])
+    elif plan is not None and plan.get("vpos") is not None:
+        rows["PBPL"][0]["vpos"] = plan["vpos"]
     summary = {"setl": new_setl, "plyl": new_plyl, "name": name, "plyt": ptype, "from": base["name"], "slots_changed": sorted(overrides), "slots_moved": sorted(moved),
                "rows": {k: len(v) for k, v in rows.items()}}
     return dict(rows), summary
@@ -689,7 +698,7 @@ def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None
     def mine(table, col, value):
         return [r for r in out[table] if int(r[col]) == value]
     pbpl = mine("PBPL", "PLYL", orig_plyl)[0]
-    pbpl["name"], pbpl["PLYT"] = new["PBPL"][0]["name"], new["PBPL"][0]["PLYT"]
+    pbpl["name"], pbpl["PLYT"], pbpl["vpos"] = new["PBPL"][0]["name"], new["PBPL"][0]["PLYT"], new["PBPL"][0]["vpos"]
     for nr in new["PLYS"]:
         row = next((r for r in mine("PLYS", "PLYL", orig_plyl) if int(r["poso"]) == int(nr["poso"])), None)
         if row is None:

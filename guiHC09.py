@@ -6099,6 +6099,10 @@ class PlayDesignerDialog(tk.Toplevel):
         self.lbl_valid.configure(text=("Works as a " + FAMILY_NAME[fam].lower() + ": every player does something the game gives that kind of play." if not issues else
                                        f"{len(issues)} player{'s' if len(issues) != 1 else ''} would not work in a {FAMILY_NAME[fam].lower()}: " + "; ".join(i[2] for i in issues[:3]) +
                                        ("; ..." if len(issues) > 3 else "") + ". Change play type... fixes this."))
+        warn = self.types.warnings_for(d["set"]["setl"], fam)
+        if warn:
+            had = self.lbl_valid.cget("text")
+            self.lbl_valid.configure(text=(had + "\n" if had else "") + "Warning: " + " ".join(warn))
 
     def _change_type(self):
         if self.detail is not None and self.types is not None:
@@ -6853,6 +6857,8 @@ class PlayTypeDialog(tk.Toplevel):
                                          "The other players keep what they do." + ("" if not plan["issues"] else " Still not working: " + "; ".join(i[2] for i in plan["issues"][:2])))
         else:
             self.lbl_plan.configure(text=("The play already is a " + row["name"].lower() + " and every player fits it." if same else "Nothing needs to change: every player already fits a " + row["name"].lower() + "."))
+        if plan.get("warnings"):
+            self.lbl_plan.configure(text=self.lbl_plan.cget("text") + "\n\nWarning: " + " ".join(plan["warnings"]))
         values = [str(v) for v in self.types.plyt_values(key)]
         self.cmb_plyt.configure(values=values)
         self.plyt_var.set(str(d.plyt_override if d.plyt_override is not None and str(d.plyt_override) in values else plan["plyt"]))
