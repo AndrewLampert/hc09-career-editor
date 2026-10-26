@@ -7,6 +7,7 @@ read from the game's own plays: every stock slot's assignment is named and count
 on that side of the field (a route's art is drawn from the player's own spot, so a left-side player needs the left-side version of a slant).
 """
 import collections
+import math
 
 from hc09_plays import steps_in_words
 from hc09_playtypes import FAMILIES, FAMILY_NAME, FAMILY_TEXT, ROLE_OF_EPOS, behavior, signature, qb_family
@@ -15,6 +16,49 @@ from hc09_routes import CENTER_X, ROUTE_ORDER, classify, depth_word
 OFFENSE_CATEGORIES = ("Routes", "Blocks", "Carry the ball", "Option and pitch", "Quarterback", "Other")
 DEFENSE_CATEGORIES = ("Pass rush", "Blitz", "Man coverage", "Zones", "Spy", "Other")
 SIDE_MARGIN = 8           # a player this close to the middle of the field is "in the middle"
+
+
+def _yards(v):
+    """A leg or move length in yards from its first number: whole yards in the upper bits, a 3-bit fraction in sevenths (see docs/hc09_play_data.md)."""
+    return (v >> 3) + (v & 7) / 7
+
+
+def qb_variant(steps):
+    """A more specific name for a quarterback's stock step list than the kind of play, for the two kinds where the game ships several: a dropback by how far he drops, and a quarterback who runs
+    to one side before he throws (a rollout, or a play-action boot). Read from the numbers the game stores: a move step is (yards, heading, effort) and the Scramble step (mode, yards,
+    heading), where mode 1 is a passer on the move and the heading is in steps of 2.8125 degrees (0 = to the right, 32 = upfield, 64 = to the left, 96 = back). None when the kind's name says it all."""
+    steps = [s for s in steps if s[0] != 255]
+    sig = tuple(s[0] for s in steps)
+    if qb_family(sig) not in ("dropback", "play_action") or sig[0] not in (3, 38):
+        return None
+    scramble = next((s for s in steps if s[0] == 7), None)
+    if scramble is None:
+        return None
+    fake = sig[:2] == (38, 40)
+    if scramble[1] == 1:                                     # on the move: which way is the heading of the Scramble step
+        c = math.cos(math.radians(scramble[3] * 2.8125))
+        way = "right" if c > 0.3 else ("left" if c < -0.3 else "straight ahead")
+        return f"Play-action boot {way}" if fake else f"Rollout {way}"
+    if fake:
+        return None                                          # a play-action pass that drops and throws is the kind itself
+    moves = [s for s in steps if s[0] in (3, 4)]
+    if not moves or any(not 240 <= (m[2] * 2.8125) % 360 <= 300 for m in moves):      # every move straight back (270 degrees)
+        return None
+    drop = sum(_yards(m[1]) for m in moves)
+    if drop < 1:
+        return "Dropback pass, stays in place (no drop)"
+    return f"Dropback pass, {'short drop' if drop < 4 else 'deep drop'} ({drop:.0f} yard{'s' if round(drop) != 1 else ''})"
+
+
+def qb_variant_text(label, steps):
+    """What a named quarterback option does, in a sentence (the text under the choice)."""
+    if label.startswith("Rollout"):
+        return f"the quarterback runs out to the {label.split(' ', 1)[1]} and throws on the move; the linemen pass block"
+    if label.startswith("Play-action boot"):
+        return f"the quarterback fakes the handoff, then runs out to the {label.rsplit(' ', 1)[1]} and throws on the move"
+    if "stays in place" in label:
+        return "the quarterback stays where he is and throws (the quickest throw); the linemen pass block"
+    return "the quarterback drops back a few steps and throws; the linemen pass block"
 
 
 def side_of(x):
@@ -39,6 +83,17 @@ class JobCatalog:
         self.info = {}                 # (label, category) -> {"name", "depth_word"}
         self._index()
 
+    def _fam_best(self):
+        """{kind: step list id of the entry the chooser offers for that kind}: those keep the kind's name; the other quarterback lists get a more specific one when they have it."""
+        if getattr(self, "_fb", None) is None:
+            self._fb = {}
+            if self.types is not None:
+                for key, *_ in FAMILIES:
+                    e = self.types.best_entry(key, 0)
+                    if e is not None:
+                        self._fb[key] = e[0]
+        return self._fb
+
     # ---- naming
     def label(self, table, epos, x, y, entry):
         """(label, category, extra) of an assignment for a player at (x, y): extra is {"name", "depth_word"} for routes."""
@@ -50,6 +105,9 @@ class JobCatalog:
         if table == "offense":
             if epos == 0:
                 fam = qb_family(sig)
+                variant = qb_variant(steps)
+                if variant and (fam not in self._fam_best() or self._fam_best()[fam] != psal):         # the kind's own entry keeps the kind's name
+                    return variant, "Quarterback", {}
                 return (f"{FAMILY_NAME[fam]}: {words}" if fam else words), "Quarterback", {}
             beh = behavior(sig)
             if beh == "route":
@@ -156,9 +214,25 @@ class JobCatalog:
             entry = self.types.best_entry(key, 0)
             if entry is None:
                 continue
+            if key == "dropback":
+                drop = sum(_yards(m[1]) for m in self.lib.steps_of("offense", entry[0]) if m[0] in (3, 4))
+                text += f" (this one drops {drop:.0f} yard{'s' if round(drop) != 1 else ''}; the other dropbacks are listed below)"
             out.append({"category": "Quarterback", "label": f"{name}: {steps_in_words(self.lib.steps_of('offense', entry[0]), 'offense', 0)}", "entry": entry,
                         "uses": len(self.types.members[key]), "words": text})
-        return out
+        kinds = {c["label"] for c in out}
+        merged = collections.defaultdict(collections.Counter)
+        for side in ("L", "C", "R"):
+            for key, entries in self.items.get(("offense", "QB", side), {}).items():
+                if key[1] == "Quarterback" and key[0] not in kinds:
+                    merged[key[0]].update(entries)
+        more = []
+        for label, entries in merged.items():
+            entry = self._pick(entries, "offense", 0)
+            if qb_variant(self.lib.steps_of("offense", entry[0])) != label:             # only the named options, not every other quarterback list of every kind
+                continue
+            more.append({"category": "Quarterback", "label": label, "entry": entry, "uses": sum(entries.values()), "words": qb_variant_text(label, self.lib.steps_of("offense", entry[0]))})
+        more.sort(key=lambda c: (c["label"].split(" ")[0] != "Dropback", c["label"].startswith("Play-action"), -c["uses"], c["label"]))      # dropbacks, then rollouts, then play-action boots
+        return out + more
 
     def label_of(self, table, epos, x, y, entry):
         """The label this catalogue gives an assignment for a player (to find the current choice in a list)."""
