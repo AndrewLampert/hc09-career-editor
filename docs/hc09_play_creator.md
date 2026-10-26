@@ -2,7 +2,7 @@
 
 What a play is in the game's files, what the editor's **Play creator** shows and builds from it, and what is known (and not known) about writing a custom play outside the game. Companion documents: `hc09_play_data.md` (sets and personnel), `hc09_custom_plays.md` (custom plays and playbooks in a save).
 
-**Status: prototype.** Reading and drawing the game's plays is checked against the game's own diagrams. Making a custom play writes rows that follow what the in-game Create-A-Play wrote, passes the bridge's structure check and reads back correctly, but **it has not been tried in the game yet** (a test plan is at the end).
+**Status: prototype.** Reading and drawing the game's plays is checked against the game's own diagrams. Making a custom play writes rows that follow what the in-game Create-A-Play wrote, passes the bridge's structure check and reads back correctly, **and works in the game (RPCS3, 2026-10-26: all nine test plays were listed, called and ran; the results are in [hc09_test_guide.md](hc09_test_guide.md), *First results of Part A*)**. Editing a play you made in place (*Plays I made*) has not been tried in the game yet.
 
 ## A play, table by table
 
@@ -112,7 +112,7 @@ What is written: the normal group's `x___` / `y___` of the moved player in the n
 
 The picture squeezes the field (a wide receiver 17.5 yards out is drawn 75 units from the middle, a tackle 3.3 yards out 24), so `YardMap` fits a curve between yards and the picture's units from where the game's own sets stand in both; it puts the game's own players within 2 units of their pictures for half of them and within 6 for nine in ten. The yards are exact; only the picture is drawn through the curve.
 
-**Not tried in the game.** What the game does with the profile's `SETG` is the question: test T7 in [hc09_test_guide.md](hc09_test_guide.md) moves one receiver. If he lines up at the new place, alignment can be edited this way; if he lines up where the stock set has him, the game takes the on-field alignment from its own sets and the same edit would have to be made in the game files (`SETG` of `qkl_boot.ast` entry 40 and the compact copy in entry 42), a test series of its own.
+**Tried in the game: it works.** Test T7 (2026-10-26, RPCS3) moved the wide receiver alone on the left from 15 to 9 yards from the middle in the new play's own `SETG` rows (profile and career copy): before the snap he stood about 9 yards from the middle and the play's diagram showed him moved. So alignment is edited in the play's own set, with no game file touched. Not tried: flipping the play (the game would not flip it) and the pre-snap motion groups. Two things the first runs showed about ids: a custom play's set, play, slot and group numbers must not be numbers the game's own play database uses (see *Ids* below), and the career needs its own copy of the play's definition rows (see [hc09_custom_plays.md](hc09_custom_plays.md)).
 
 ## The play creator (Playbooks tab, Play creator...)
 
