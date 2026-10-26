@@ -40,15 +40,15 @@ The nine plays are copies of **Slants** (formation Singleback, set Big) with one
 
 | Test | What it is | What to look at |
 |---|---|---|
-| **T1 Slants** | the control: nothing changed | does the game accept a custom play at all? Does it run like the original Slants? Where does WR1, the wide receiver on the right, stand before the snap? (write it down: this is what T7 is compared with) |
+| **T1 Slants** | the control: nothing changed | does the game accept a custom play at all? Does it run like the original Slants? Where does WR2, the wide receiver alone on the left, stand before the snap? (write it down: this is what T7 is compared with) |
 | **T2 Slants PA** | changed to a play-action pass | the quarterback turns and fakes the handoff, the linemen fire out as if to run block and then pass block, the back fakes taking the ball, the receivers run their routes and the quarterback throws |
 | **T3 Slants Run** | changed to a handoff run | the quarterback hands off, a back takes the ball and runs, the linemen run block, the receivers block downfield instead of running routes |
 | **T4 To Triple** | changed to a triple option (no triple option uses this set, so the assignments come from other formations) | the quarterback runs the option (rides, then keeps or pitches), a back takes a pitch; does anything stand still or run into the wrong place? |
-| **T5 WR Out** | one receiver's route: WR1 runs an out, medium | WR1 runs up the field, then toward the sideline |
-| **T6 Reads** | the quarterback's reads: WR1 first, TE1 second | on the play's diagram in the playbook the numbers 1 to 5 stand on the receivers in that order; with no pressure the quarterback looks to WR1 first |
-| **T7 Moved WR** (important) | one player's place: WR1 stands 7 yards from the middle instead of out by the sideline | before the snap WR1 stands about 7 yards from the middle of the field (near the hash marks, inside the numbers); the diagram shows him moved; if the game flips plays, the whole formation is the mirror image. **This is the one that matters most for what we can build next.** |
+| **T5 WR Out** | one receiver's route: WR2 (alone on the left) runs an out, medium | WR2 runs up the field, then toward the sideline |
+| **T6 Reads** | the quarterback's reads: WR2 first, TE2 (next to him) second | on the play's diagram in the playbook the numbers 1 to 5 stand on the receivers in that order; with no pressure the quarterback looks to WR2 first |
+| **T7 Moved WR** (important) | one player's place: WR2, the receiver alone on the left, stands 9 yards from the middle instead of 15 | before the snap WR2 stands about 9 yards from the middle of the field (between the hash marks and the numbers, about 4 yards outside the tight end); the diagram shows him moved; if the game flips plays, the whole formation is the mirror image. **This is the one that matters most for what we can build next.** |
 | **T8 QB Rollout Right** | the quarterback's named option "Rollout right" instead of the usual dropback (everything else as T1) | after the snap the quarterback runs out to the right and throws while moving; the receivers still run their slants. This is the "rollout" you can pick for the quarterback in the Play creator |
-| **T9 PA Boot Left** | a play-action pass (as T2) whose quarterback is "Play-action boot left" | the quarterback fakes the handoff, then runs out to the left (away from the side WR1 stands on) and throws on the move; the back fakes, the linemen fire out and then pass block |
+| **T9 PA Boot Left** | a play-action pass (as T2) whose quarterback is "Play-action boot left" | the quarterback fakes the handoff, then runs out to the left and throws on the move; the back fakes, the linemen fire out and then pass block |
 
 **In the game**, for every test play: is it listed, with its name and a diagram that looks like the original? Can you call it without the game crashing or freezing? Run it two or three times and look at what the table says. Anything odd (players standing still, wrong formation, missing players, strange camera)?
 

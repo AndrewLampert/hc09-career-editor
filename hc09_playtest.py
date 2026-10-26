@@ -8,9 +8,9 @@ each kind of change can be told apart:
     T2  the kind of play: play-action pass
     T3  the kind of play: handoff run
     T4  the kind of play: triple option, in a set that has no triple option (the assignments come from other formations)
-    T5  one receiver's route: WR1 runs an out, medium
-    T6  the quarterback's reads: WR1 first, TE1 second
-    T7  one player's place: WR1 stands 7 yards from the middle of the field (dragging a player on the field in the Play creator writes the same thing)
+    T5  one receiver's route: the receiver alone on the left (WR2 in Slants) runs an out, medium
+    T6  the quarterback's reads: that receiver first, the tight end next to him second
+    T7  one player's place: that receiver stands 9 yards from the middle of the field (dragging a player on the field in the Play creator writes the same thing)
     T8  the quarterback's named option: a rollout to the right
     T9  a play-action pass whose quarterback is the named option "Play-action boot left"
 
@@ -27,7 +27,7 @@ def count_word(n):
 
 BASE_PLAY = "Slants"
 BASE_SET = "Big"
-MOVED_TO = 7.0                      # T7: WR1 is moved to this many yards from the middle (on the side he stands on)
+MOVED_TO = 9.0                      # T7: the receiver is moved to this many yards from the middle (on the side he stands on): 6 yards in from where Slants has him, 4 yards from the tight end
 READ_CHANCES = (100, 20, 10, 5, 1)  # what the plays made in the game usually have, first read to last
 
 YES = ("", "yes", "partly", "no", "could not tell")
@@ -72,6 +72,17 @@ def _slot(detail, label):
     return next((s for s in detail["slots"] if s["label"] == label), None)
 
 
+def focus_receiver(detail, align):
+    """The receiver the tests T1, T5, T6 and T7 are about: a wide receiver who stands alone, on the left side if there is one (a tester could not tell the moved receiver from the others
+    when he stood in a group), else the most alone one. The most alone = the farthest from every other player. None when the play has no wide receiver."""
+    def gap(s):
+        a = align[s["poso"]]
+        return min(((a["x"] - align[o["poso"]]["x"]) ** 2 + (a["y"] - align[o["poso"]]["y"]) ** 2) ** 0.5 for o in detail["slots"] if o["poso"] != s["poso"] and o["poso"] in align)
+    wrs = [s for s in detail["slots"] if s["epos"] == 3 and s["poso"] in align]
+    pool = [s for s in wrs if align[s["poso"]]["x"] < 0] or wrs
+    return max(pool, key=lambda s: (round(gap(s), 3), -s["dpos"])) if pool else None
+
+
 def _yards(x):
     return f"{abs(x):.1f} yards {'right' if x > 0 else 'left'} of the center"
 
@@ -85,11 +96,15 @@ def build_tests(lib, types, catalog):
     where = lib.form_names.get(detail["set"]["form"], "")
     start = f"{BASE_PLAY} ({where}, set {BASE_SET})"
     align = lib.alignment(setl)
-    wr1, te1 = _slot(detail, "WR1"), _slot(detail, "TE1")
-    if wr1 is None or wr1["poso"] not in align:
-        raise RuntimeError("The test play has no WR1, so the test plays cannot be made.")
+    wr1 = focus_receiver(detail, align)
+    if wr1 is None:
+        raise RuntimeError("The test play has no wide receiver, so the test plays cannot be made.")
+    wl = wr1["label"]                                           # WR2 in Slants: the receiver alone on the left
     x0, y0 = align[wr1["poso"]]["x"], align[wr1["poso"]]["y"]
     side = "right" if x0 > 0 else "left"
+    tes = [sl for sl in detail["slots"] if sl["epos"] == 4 and sl["poso"] in align]
+    te1 = min(tes, key=lambda sl: abs(align[sl["poso"]]["x"] - x0)) if tes else None      # the tight end next to him
+    tl = te1["label"] if te1 is not None else "TE1"
 
     def spec(tid, name, title, changed, look, checks, overrides=None, plan=None, reads=None, alignment=None):
         return {"id": tid, "name": name, "title": title, "changed": changed, "look": look, "checks": checks, "plyl": base, "overrides": overrides or {}, "plan": plan, "reads": reads,
@@ -98,7 +113,7 @@ def build_tests(lib, types, catalog):
     tests = [spec("T1", "T1 Slants", "The control: a copy of Slants, nothing changed", f"Nothing: a copy of {start}.",
                   "It should look and run like the original Slants. This one shows whether the game accepts a custom play from the editor at all.",
                   _checks(("behaves", "Does it run like the original Slants (the receivers run slants, the quarterback throws)?", YES),
-                          ("wr_before", f"Before the snap, where does WR1, the wide receiver on the {side}, stand? (yards from the sideline or the hash marks, your own words)", None)))]
+                          ("wr_before", f"Before the snap, where does {wl}, the wide receiver alone on the {side} side, stand? (yards from the sideline or the hash marks, your own words)", None)))]
 
     ov, plan, first = kind_plan(lib, types, base, "play_action")
     tests.append(spec("T2", "T2 Slants PA", "The kind of play: play-action pass", f"{len(first['changes'])} players changed so that it works as a play-action pass ({first['source']}).",
@@ -119,9 +134,9 @@ def build_tests(lib, types, catalog):
     ch = catalog.choices("offense", wr1["epos"], wr1["dpos"], wr1["x"], kind=types.family_of_play(base), only_fitting=True)
     out = next((c for c in ch if c["label"] == "Out, medium"), None)
     if out is None:
-        raise RuntimeError("The route 'Out, medium' was not found for WR1, so test T5 cannot be made.")
-    tests.append(spec("T5", "T5 WR Out", "One receiver's route: WR1 runs an out", "WR1 now runs an out, medium (up the field, then toward the sideline).",
-                      "Watch WR1: up the field, then toward the sideline.", _checks(("out", "WR1 runs an out route (up the field, then toward the sideline)", YES)), overrides={wr1["poso"]: out["entry"]}))
+        raise RuntimeError(f"The route 'Out, medium' was not found for {wl}, so test T5 cannot be made.")
+    tests.append(spec("T5", "T5 WR Out", f"One receiver's route: {wl} runs an out", f"{wl} (the receiver alone on the {side}) now runs an out, medium (up the field, then toward the sideline).",
+                      f"Watch {wl}: up the field, then toward the sideline.", _checks(("out", f"{wl} runs an out route (up the field, then toward the sideline)", YES)), overrides={wr1["poso"]: out["entry"]}))
 
     own = [(int(detail["passing"][f"rcv{k}"]), int(detail["passing"][f"per{k}"])) for k in range(1, 6)] if detail["passing"] else []
     if len(own) != 5:
@@ -130,16 +145,16 @@ def build_tests(lib, types, catalog):
     order = first_reads + [p for p, _c in own if p not in first_reads]
     reads = [(poso, READ_CHANCES[k]) for k, poso in enumerate(order)]
     names = {s["poso"]: s["label"] for s in detail["slots"]}
-    tests.append(spec("T6", "T6 Reads", "The quarterback's reads: WR1 first, TE1 second", "The reads are in this order: " + ", ".join(names[p] for p in order) + ".",
-                      "On the play's diagram in the playbook the numbers 1 to 5 stand on the receivers in that order. With no pressure the quarterback looks to WR1 first.",
+    tests.append(spec("T6", "T6 Reads", f"The quarterback's reads: {wl} first, {tl} second", "The reads are in this order: " + ", ".join(names[p] for p in order) + ".",
+                      f"On the play's diagram in the playbook the numbers 1 to 5 stand on the receivers in that order. With no pressure the quarterback looks to {wl} first.",
                       _checks(("numbers", "On the diagram the numbers 1 to 5 stand on the receivers in this order: " + ", ".join(names[p] for p in order), YES),
-                              ("first", "With no pressure the quarterback looks to WR1 first", YES)), reads=reads))
+                              ("first", f"With no pressure the quarterback looks to {wl} first", YES)), reads=reads))
 
     x1 = MOVED_TO if x0 > 0 else -MOVED_TO
-    tests.append(spec("T7", "T7 Moved WR", f"One player's place: WR1 moved to {abs(x1):.0f} yards from the middle",
-                      f"WR1 stands {_yards(x1)} and {abs(y0):.1f} yards behind the line (in T1 he stands {_yards(x0)}).",
-                      f"Before the snap, WR1 should stand about {abs(x1):.0f} yards from the middle of the field (near the hash marks, inside the numbers) instead of out by the sideline like in T1.",
-                      _checks(("wr_after", "Before the snap, where does WR1 stand now? (yards from the middle, or near the hash marks, your own words)", None),
+    tests.append(spec("T7", "T7 Moved WR", f"One player's place: {wl} moved to {abs(x1):.0f} yards from the middle",
+                      f"{wl} (the receiver alone on the {side}) stands {_yards(x1)} and {abs(y0):.1f} yards behind the line (in T1 he stands {_yards(x0)}).",
+                      f"Before the snap, {wl} should stand about {abs(x1):.0f} yards from the middle of the field, between the hash marks and the numbers and about {abs(abs(x1) - abs(align[te1['poso']]['x'])) if te1 is not None else 0:.0f} yards outside the tight end, instead of out wide like in T1 ({abs(x0):.0f} yards).",
+                      _checks(("wr_after", f"Before the snap, where does {wl} stand now? (yards from the middle, or how far he is from the tight end, your own words)", None),
                               ("moved", f"He stands about {abs(x1):.0f} yards from the middle (not out by the sideline like in T1)", YES),
                               ("diagram", "The play's diagram in the playbook shows him moved", YES),
                               ("flip", "If the game lets you flip the play: the whole formation is the mirror image", ("", "yes", "no", "could not flip it"))), alignment={wr1["poso"]: (x1, y0)}))
@@ -162,7 +177,7 @@ def build_tests(lib, types, catalog):
     boot = {qb["poso"]: qb_options["Play-action boot left"]["entry"]}
     ov, plan, first = kind_plan(lib, types, base, "play_action", extra=boot)
     tests.append(spec("T9", "T9 PA Boot Left", "The quarterback's option: a play-action boot to the left", f"A play-action pass (as T2, {len(first['changes'])} players changed) whose quarterback fakes the handoff and then runs out to the left.",
-                      "The quarterback turns and fakes the handoff, then runs out to the left (away from the right-hand side where WR1 stands) and throws on the move. The back fakes, the linemen fire out and then pass block.",
+                      "The quarterback turns and fakes the handoff, then runs out to the left and throws on the move. The back fakes, the linemen fire out and then pass block.",
                       _checks(("fakes", "The quarterback fakes the handoff first", YES), ("boot", "Then he runs out to the left and not straight back", YES), ("throws", "He throws on the move", YES),
                               ("back", "The back fakes taking the ball", YES)), overrides=ov, plan=plan))
     for t in tests:
