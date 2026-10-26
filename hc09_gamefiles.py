@@ -1,0 +1,195 @@
+"""
+Changing a play of the game itself (a stock play) in the game's own files, so that the game treats it as a normal play: it can be flipped, hot-routed and audibled, the quarterback
+adjusts, and the CPU calls it with the chances the play already has. A custom play made in the profile and career is a "created play" for the game and has none of that.
+
+The game's play database has no free rows (every table is exactly full), so a play is changed IN PLACE: the same rows get other values. Nothing is added or taken out, which is also
+why a change that needs another number of rows (a pass made a run: pass reads give way to a run hole) is refused. The database is kept in several places (the master in qkl_boot.ast
+entry 40, a compact copy in entry 42, and subsets in the Create-A-Play databases of qkl_fe2ig.ast); every copy that holds the play gets the same change, like the Set personnel tool.
+
+Standard library only (no Tk). changes_for() works out what changes from the Play creator's state; targets_for() turns it into bridge entry-patch targets, one per copy.
+"""
+import csv
+import os
+
+import hc09_plays as P
+
+# columns of each table that a change may set
+PLYS_COLS = ("PSAL", "ARTL", "PLRR")
+PLPD_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "rcv"))
+PLCM_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "dir", "ply"))
+SCAN_TABLES = "PBPL,PLYL,PLYS,PLPD,PLRD,PLCM,SETP,SETG,SGFF,PBAI,PSAL,ARTL"
+
+
+def changes_for(lib, plyl, overrides, plan=None, reads=None, alignment=None):
+    """What has to change in the game's rows for the stock play plyl to be what the Play creator shows (overrides: {slot: (PSAL, ARTL, PLRR)}, plan: a kind conversion, reads: [(slot, chance)] x5,
+    alignment: {slot: (x, y)} yards). Returns {"plyl", "setl", "plys": {slot: {col: value}}, "play": {"PLYT": n, "vpos": n}, "plpd": {col: v}, "plrd": {col: v}, "plcm": {col: v},
+    "setp": {slot: {col: v}}, "setg": {slot: {col: v}}, "default_group", "shared_with": [(plyl, name)]} with only the values that differ from the stock rows. Raises ValueError for a play
+    that cannot be changed in place."""
+    d = lib.detail(plyl)
+    if d["side"] != "offense":
+        raise ValueError("Only offensive plays can be changed in the game files for now.")
+    play, st = d["play"], d["set"]
+    new, _summary = P.build_custom_play(lib, plyl, "x", overrides, {}, plan=plan, reads=reads, alignment=alignment)
+    out = {"plyl": plyl, "setl": st["setl"], "plys": {}, "play": {}, "plpd": {}, "plrd": {}, "plcm": {}, "setp": {}, "setg": {}, "default_group": None, "shared_with": []}
+    for nr in new["PLYS"]:
+        poso = int(nr["poso"])
+        old = lib.slot_rows[plyl][poso]
+        diff = {c: int(nr[c]) for c, o in (("PSAL", old["psal"]), ("ARTL", old["artl"]), ("PLRR", old["plrr"])) if int(nr[c]) != o}
+        if diff:
+            out["plys"][poso] = diff
+    nb = new["PBPL"][0]
+    if plan is not None and int(nb["PLYT"]) != play["plyt"]:
+        out["play"]["PLYT"] = int(nb["PLYT"])
+    if (reads is not None or plan is not None) and int(nb["vpos"]) != play["vpos"]:
+        out["play"]["vpos"] = int(nb["vpos"])          # the primary receiver follows the reads (see build_custom_play)
+    for key, table, stock, cols in (("plpd", "PLPD", lib.passing.get(plyl), PLPD_COLS), ("plcm", "PLCM", lib.combos.get(plyl), PLCM_COLS)):
+        want = (new.get(table) or [None])[0]
+        if (stock is None) != (want is None):
+            raise ValueError(f"Making the play this kind needs {'a' if want else 'no'} {table} row and the game's play has {'none' if stock is None else 'one'}: the game's tables have no free rows, so it cannot be done in place. "
+                             "Make it a custom play instead.")
+        if stock is not None:
+            diff = {c: int(want[c]) for c in cols if int(want[c]) != int(stock[c])}
+            if diff:
+                out[key] = diff
+    stock_run, want_run = lib.running.get(plyl) or [], new.get("PLRD") or []
+    if len(stock_run) != len(want_run):
+        raise ValueError("Making the play this kind needs another number of run-hole rows (PLRD) than the game's play has, so it cannot be done in place. Make it a custom play instead.")
+    if stock_run and int(want_run[0]["hole"]) != int(stock_run[0]["hole"]):
+        out["plrd"] = {"hole": int(want_run[0]["hole"])}
+    slots = {s["poso"]: s for s in st["slots"]}
+    stock_al = lib.alignment(st["setl"])
+    moved = {poso for poso, (x, y) in (alignment or {}).items() if poso in stock_al and (abs(float(x) - stock_al[poso]["x"]) > 0.001 or abs(float(y) - stock_al[poso]["y"]) > 0.001)}
+    for nr in new["SETP"]:
+        poso = int(nr["poso"])
+        if poso not in moved:
+            continue                          # only the diagram's place of a moved player (artx, arty); the formation columns (fmtx, fmty) are design-time values of the stock set and stay
+        sl = slots[poso]
+        diff = {c: int(nr[c]) for c, o in (("artx", sl["x"]), ("arty", sl["y"])) if int(nr[c]) != o}
+        if diff:
+            out["setp"][poso] = diff
+    dflt = next((int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == st["setl"] and g["dflt"] == "1"), None)
+    out["default_group"] = dflt
+    if dflt is not None and out["setp"]:
+        poso_of_new = {int(r["SETP"]): int(r["poso"]) for r in new["SETP"]}
+        new_dflt = next((int(g["SGF_"]) for g in new["SGFF"] if g["dflt"] == "1"), None)
+        setp_of = {s["setp"]: s["poso"] for s in st["slots"]}
+        stock_rows = {setp_of[int(r["SETP"])]: r for r in lib.tables["SETG"] if int(r["SGF_"]) == dflt and int(r["SETP"]) in setp_of}
+        for nr in new["SETG"]:
+            if int(nr["SGF_"]) != new_dflt:
+                continue
+            poso = poso_of_new[int(nr["SETP"])]
+            old = stock_rows.get(poso)
+            if old is None:
+                continue
+            diff = {c: int(nr[c]) for c in ("x___", "y___", "fx__", "fy__") if int(nr[c]) != int(old[c])}
+            if diff:
+                out["setg"][poso] = diff
+    out["shared_with"] = sorted(((q["plyl"], q["name"]) for q in lib.plays.values() if q["setl"] == st["setl"] and q["plyl"] != plyl), key=lambda t: (t[1].lower(), t[0]))
+    return out
+
+
+def is_empty(changes):
+    return not any(changes[k] for k in ("plys", "play", "plpd", "plrd", "plcm", "setp", "setg"))
+
+
+def _read(cache_dir, base, table):
+    path = os.path.join(cache_dir, f"{table.lower()}_{base}.csv")
+    if not os.path.isfile(path):
+        return None
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+
+def targets_for(copies, cache_dir, changes):
+    """Bridge entry-patch targets (one per copy of the play database that holds the play) for the changes of changes_for(), read from the scan the bridge made of the copies (play-sets-scan with
+    SCAN_TABLES, into cache_dir). Each edit carries the value the copy has now (expect) so that nothing is written over a row that is not what was read. Returns (targets, report) where
+    report is [(copy name, number of values)]. Raises ValueError when the master copy does not hold the play."""
+    plyl, setl, dflt = changes["plyl"], changes["setl"], changes["default_group"]
+    targets, report, master_has, skipped = [], [], False, []
+    for c in copies:
+        edits = []
+
+        def add(table, match, want, row):
+            want = {k: v for k, v in want.items() if k in row}            # a compact copy may lack some columns
+            cur = {k: int(row[k]) for k in want}
+            set_ = {k: int(v) for k, v in want.items() if int(v) != cur[k]}
+            if set_:
+                edits.append({"table": table, "match": {k: int(v) for k, v in match.items()}, "expect": {k: cur[k] for k in set_}, "set": set_})
+        play_table, play_rows = None, None
+        for table in ("PBPL", "PLYL"):
+            rows = _read(cache_dir, c["base"], table)
+            if rows is not None and rows and "PLYL" in rows[0]:
+                play_table, play_rows = table, rows
+                break
+        mine = next((r for r in (play_rows or []) if int(r["PLYL"]) == plyl), None)      # None: this copy does not hold the play (it may still hold its set)
+        if mine is not None and c["file"] == "qkl_boot.ast" and c["index"] == 40:
+            master_has = True
+        if mine is not None:
+            if changes["play"]:
+                add(play_table, {"PLYL": plyl}, changes["play"], mine)
+            plys = {(int(r["PLYL"]), int(r["poso"])): r for r in (_read(cache_dir, c["base"], "PLYS") or [])}
+            steps, arts = _read(cache_dir, c["base"], "PSAL"), _read(cache_dir, c["base"], "ARTL")
+            have_steps = {int(r["PSAL"]) for r in steps} if steps else None        # a Create-A-Play copy holds only some step lists and drawings: a play there must not point at one it lacks
+            have_arts = {int(r["ARTL"]) for r in arts} if arts else None
+            for poso, want in changes["plys"].items():
+                if (plyl, poso) in plys:
+                    if (have_steps is not None and "PSAL" in want and want["PSAL"] not in have_steps) or (have_arts is not None and "ARTL" in want and want["ARTL"] not in have_arts):
+                        skipped.append((f"{c['file']} #{c['index']}", poso))
+                        continue
+                    add("PLYS", {"PLYL": plyl, "poso": poso}, want, plys[(plyl, poso)])
+            for key, table in (("plpd", "PLPD"), ("plcm", "PLCM"), ("plrd", "PLRD")):
+                if changes[key]:
+                    rows = [r for r in (_read(cache_dir, c["base"], table) or []) if int(r["PLYL"]) == plyl]
+                    if len(rows) == 1:
+                        add(table, {"PLYL": plyl}, changes[key], rows[0])
+        setp_rows = {(int(r["SETL"]), int(r["poso"])): r for r in (_read(cache_dir, c["base"], "SETP") or [])}
+        setg_rows = {(int(r["SETP"]), int(r["SGF_"])): r for r in (_read(cache_dir, c["base"], "SETG") or [])}
+        for poso in sorted(set(changes["setp"]) | set(changes["setg"])):
+            row = setp_rows.get((setl, poso))
+            if row is None:
+                continue
+            art = {k: v for k, v in changes["setp"].get(poso, {}).items() if k in row}
+            if art:
+                add("SETP", {"SETL": setl, "poso": poso}, art, row)
+            yards = changes["setg"].get(poso, {})
+            if yards:
+                if "x___" in row:                                    # the compact copy holds the yards in the slot's own row
+                    add("SETP", {"SETL": setl, "poso": poso}, {k: v for k, v in yards.items() if k in ("x___", "y___")}, row)
+                elif "SETP" in row and dflt is not None and (int(row["SETP"]), dflt) in setg_rows:
+                    add("SETG", {"SETP": int(row["SETP"]), "SGF_": dflt}, yards, setg_rows[(int(row["SETP"]), dflt)])
+        if changes["play"] and mine is not None:
+            for r in (_read(cache_dir, c["base"], "PBAI") or []):
+                if int(r["PBPL"]) == plyl:
+                    add("PBAI", {k: r[k] for k in ("BOKL", "PBPL", "SETL", "AIGR", "prct")}, {k: v for k, v in changes["play"].items() if k in r}, r)
+        if edits:
+            targets.append({"ast": c["ast"], "index": c["index"], "start": c["start"], "size": c["size"], "edits": edits})
+            report.append((f"{c['file']} #{c['index']}", sum(len(e["set"]) for e in edits)))
+    if not master_has:
+        raise ValueError("The play is not in the master play database of the game files that were read.")
+    if skipped:
+        report.append(("not written (the copy lacks that step list or drawing): " + ", ".join(f"{n} slot {p}" for n, p in skipped), 0))
+    return targets, report
+
+
+def describe(lib, changes):
+    """The changes in words, one line each (for the window that asks before anything is written)."""
+    d = lib.detail(changes["plyl"])
+    label = {s["poso"]: s["label"] for s in d["slots"]}
+    lines = []
+    if changes["plys"]:
+        lines.append("What these players do: " + ", ".join(label[p] for p in sorted(changes["plys"])) + ".")
+    if changes["play"].get("PLYT") is not None:
+        lines.append(f"The kind of play (play type) becomes {changes['play']['PLYT']}.")
+    if changes["plpd"] or changes["play"].get("vpos") is not None:
+        lines.append("The pass reads and the first read change.")
+    if changes["plrd"]:
+        lines.append(f"The run hole becomes {changes['plrd']['hole']}.")
+    if changes["plcm"]:
+        lines.append("The play combination row changes.")
+    moved = sorted(changes["setp"])
+    if moved:
+        lines.append("Where these players line up: " + ", ".join(label[p] for p in moved) + ".")
+        n = len(changes["shared_with"])
+        lines.append(f"That is in the SET \"{d['set']['name']}\", which {n} other play{'s' if n != 1 else ''} also use{'' if n != 1 else 's'}: all of them line up that way (the set is the formation's alignment, not the play's)." if n else
+                     f"The set \"{d['set']['name']}\" has only this play, so nothing else changes.")
+    return lines
