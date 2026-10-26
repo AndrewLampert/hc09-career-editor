@@ -58,13 +58,10 @@ export/import through HC09Editor required.
   play works as that kind. Any slot can be given any of the game's assignments, and
   **Make custom play...** (offense only for now; it is switched off, with a note, for defense and special
   teams) writes the result as a custom play into *copies* of your profile and career saves. It has
-  been tried in RPCS3 (nine test plays ran, a moved receiver stood where the editor put him; see docs/hc09_test_guide.md), but it still writes your saves, so keep backups. **Plays I made** (second entry of the Playbook list) opens the custom plays of your profile so that you can change them (**Save changes...**: into the play itself, or as a new play next to it). **Pass reads...** sets the order the quarterback looks to his receivers, and **Move players...** puts the offensive players somewhere else on the field (both are written into the new play's own rows in your profile). See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
+  been tried in RPCS3 (nine test plays ran, a moved receiver stood where the editor put him; see docs/hc09_game_test_results.md), but it still writes your saves, so keep backups. **Plays I made** (second entry of the Playbook list) opens the custom plays of your profile so that you can change them (**Save changes...**: into the play itself, or as a new play next to it). **Pass reads...** sets the order the quarterback looks to his receivers, and **Move players...** puts the offensive players somewhere else on the field (both are written into the new play's own rows in your profile). See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
   **Add to my game** (the button of the save window) does it in one go: it makes the play, puts it into
   your profile and career after saving them, and picks the custom playbook your team plays (else the first);
-  **Put my saves back** undoes it. Testing it in the game: **Test plays (testers)...** makes nine test plays
-  and adds them with one button, then takes your answers in the same window, and **Route test (testers)...**
-  changes the numbers of one route a step at a time for the tests that show what they mean; the order of the
-  tests and how to write the results down is in [docs/hc09_test_guide.md](docs/hc09_test_guide.md).
+  **Put my saves back** undoes it. What the game tests of this found is in [docs/hc09_game_test_results.md](docs/hc09_game_test_results.md).
 - **Game reference...** (toolbar) - four read-only panels from the game's own tables, read from your game
   files once: what the injury table gives for a position, an Injury rating, a hurt body part and a hard hit
   (a level from 0 to 4, not a percentage); the draft pick value chart with a small calculator that adds up
@@ -163,7 +160,7 @@ python guiHC09.py
    keeps those inside its own `MC02` wrapper (a header and a metadata block before the database); the editor reads and writes the database in place and
    leaves the wrapper alone, as the community's MC02 <-> DB converter does. **Saves...** also looks for Xenia's `content` folder (in the folders of your
    recent saves, any folder you add with *Look in another folder...*, the usual places, or *Search this computer*), lists the careers it finds there marked
-   *(Xenia)*, and finds the profile that goes with a career by what is in it (a career has 208 tables, a profile 43), so Test plays can fill both in. This was written
+   *(Xenia)*, and finds the profile that goes with a career by what is in it (a career has 208 tables, a profile 43), so Add to my game can fill both in. This was written
    from how Xenia is known to lay out its files (`content/<profile id>/45410841/<type>/<package>/<file>`, each save one extensionless MC02 file in a folder of the same name,
    such as `CAREER-ME/CAREER-ME`) and checked only against copies of our own saves: Xenia Canary and Xenia Edge are the ones meant (a portable copy, with `content` next to the
    program, can be anywhere: the editor also asks Windows where a running Xenia is). If yours are elsewhere, pick the files by hand (Details... in the save windows). Back up the files first. Xbox 360 files taken straight out of a console package (STFS) have to be
