@@ -45,6 +45,11 @@ except ImportError:                  # the play designer needs hc09_plays.py nex
     PlayLibrary = None
 
 try:
+    import hc09_gamefiles as GF
+except ImportError:                  # without it only changing a play in the game files is missing
+    GF = None
+
+try:
     from hc09_playtypes import PlayTypes, FAMILY_NAME, FAMILY_TEXT, FAMILY_KIND
 except ImportError:                  # without it the play designer still works, only the play types are missing
     PlayTypes = None
@@ -5912,6 +5917,8 @@ class PlayDesignerDialog(tk.Toplevel):
         ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
         self.btn_make = ttk.Button(bottom, text="Make custom play...", style="Accent.TButton", command=self._make_custom)
         self.btn_make.pack(side="right", padx=(0, 8))
+        self.btn_files = ttk.Button(bottom, text="Make a game play...", command=self._open_game_files)
+        self.btn_files.pack(side="right", padx=(0, 8))
         self.lbl_make = ttk.Label(bottom, wraplength=500, justify="left", foreground="gray")
         self.lbl_make.pack(side="left")
         ttk.Button(bottom, text="All assignments (advanced)...", command=lambda: AssignmentPickerDialog(self.app, self, None, None)).pack(side="right", padx=(0, 8))
@@ -6177,6 +6184,7 @@ class PlayDesignerDialog(tk.Toplevel):
         else:
             state, note = "normal", ("This is one of your own plays: Save changes... puts the changes into it, or saves them as a new play." if self.is_mine() else "")
         self.btn_make.configure(state=state, text="Save changes..." if self.is_mine() else "Make custom play...")
+        self.btn_files.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
         self.lbl_make.configure(text=note)
 
     def _job_text(self, sl):
@@ -6294,6 +6302,11 @@ class PlayDesignerDialog(tk.Toplevel):
         self.align_override = {}
         if self.detail is not None:
             self._show()
+
+    def _open_game_files(self):
+        if self.detail is None or self.is_mine() or GF is None:
+            return
+        GameFilesDialog(self.app, self)
 
     def _make_custom(self):
         if self.detail is None:
@@ -7362,6 +7375,147 @@ class CustomPlayDialog(tk.Toplevel):
             messagebox.showerror("Put my saves back", str(e), parent=self)
             return
         messagebox.showinfo("Put my saves back", f"Done: your profile and career are the ones saved in {info['folder']} again.", parent=self)
+
+
+class GameFilesDialog(tk.Toplevel):
+    """Change in game files: the play shown in the designer, with the changes made there, written into the game's own play database (qkl_boot.ast and qkl_fe2ig.ast), in place, over the
+    play itself or over another play of the same set that is given up, with a new name, so that the game treats it as a normal play (flip, hot routes, adjustments, the CPU calls it). Every
+    team playbook that has the play gets it. The first time, each file entry is backed up and Put the game files back restores them."""
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Change in game files")
+        self.transient(designer)
+        self.geometry("820x640")
+        self.app, self.designer = app, designer
+        self.changes = None
+        d = designer.detail
+        self.base = designer.plyl
+        ttk.Label(self, text=f"Make {d['play']['name']} a play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=780, justify="left", padding=(14, 0, 14, 6),
+                  text="This puts the play into the game's own files, so the game treats it as a normal play (it can be flipped and hot-routed, the quarterback adjusts, the CPU calls it) with the name "
+                       "you give it. The game has no free room for a new play, so it takes the place of one: the play itself, or another play of the same set that you give up (it goes out of "
+                       "every playbook that has it). Close RPCS3 first. The first time, each changed file entry is saved in Documents\\hc09-game-file-backup, and Put the game files back restores "
+                       "them all (the Set personnel changes too). Not tried in the game yet.").pack(anchor="w")
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=14, pady=(0, 4))
+        ttk.Label(form, text="Name of the play (24 characters):").grid(row=0, column=0, sticky="w", pady=3)
+        self.name_var = tk.StringVar(value=d["play"]["name"][:24])
+        ent = ttk.Entry(form, width=30, textvariable=self.name_var)
+        ent.grid(row=0, column=1, sticky="w", padx=6)
+        self.name_var.trace_add("write", lambda *_a: self._recompute())
+        ttk.Label(form, text="Put it in the place of:").grid(row=1, column=0, sticky="w", pady=3)
+        self.target_var = tk.StringVar()
+        self.cmb_target = ttk.Combobox(form, state="readonly", width=60, textvariable=self.target_var)
+        self.cmb_target.grid(row=1, column=1, sticky="w", padx=6)
+        self.cmb_target.bind("<<ComboboxSelected>>", lambda e: self._recompute())
+        self._targets = {}
+        self.lbl_changes = ttk.Label(self, wraplength=780, justify="left", padding=(14, 4, 14, 4))
+        self.lbl_changes.pack(anchor="w")
+        self.lbl_result = ttk.Label(self, wraplength=780, justify="left", foreground="gray", padding=(14, 4, 14, 4))
+        self.lbl_result.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_apply = ttk.Button(btn, text="Put the play in the game files", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Put the game files back...", command=self._restore).pack(side="left")
+        self._load_targets()
+        self._recompute()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _args(self):
+        d = self.designer
+        return dict(overrides=dict(d.overrides), plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
+
+    def _load_targets(self):
+        try:
+            cands = GF.candidates(self.designer.lib, self.base, **self._args())
+        except ValueError as e:
+            cands = []
+            self.lbl_changes.configure(text=str(e))
+        labels = []
+        self._targets = {}
+        for plyl, name, n in cands:
+            books = f"{n} playbook{'s' if n != 1 else ''}" if n else "in no playbook: no team has it"
+            label = f"this play: {name} ({books})" if plyl == self.base else f"{name} ({books})"
+            labels.append(label)
+            self._targets[label] = plyl
+        self.cmb_target.configure(values=labels)
+        if labels:
+            self.target_var.set(labels[0])
+
+    def _recompute(self):
+        self.changes = None
+        self.btn_apply.configure(state="disabled")
+        target = self._targets.get(self.target_var.get())
+        if target is None:
+            return
+        try:
+            self.changes = GF.changes_for(self.designer.lib, self.base, target=target, name=self.name_var.get(), **self._args())
+        except ValueError as e:
+            self.lbl_changes.configure(text=str(e))
+            return
+        if GF.is_empty(self.changes):
+            self.lbl_changes.configure(text="Nothing is changed yet: change what a player does, drag a player or set the kind or the reads in the Play creator, or give the play a new name.")
+            return
+        self.lbl_changes.configure(text="\n".join(GF.describe(self.designer.lib, self.changes)))
+        self.btn_apply.configure(state="normal")
+
+    def _archives(self):
+        return self.app._personnel_archives()
+
+    def _apply(self):
+        app = self.app
+        changes = self.changes
+        if changes is None:
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Change in game files", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        archives = self._archives()
+        if not archives:
+            return
+        n = len(changes["shared_with"])
+        give_up = f"\n\nThe play \"{changes['target_name']}\" is given up." if changes["plyl"] != changes["base"] else ""
+        if not messagebox.askyesno("Change in game files", f"Put {self.name_var.get().strip() or self.designer.detail['play']['name']} in the game files?\n\nThis writes into qkl_boot.ast and qkl_fe2ig.ast of your game. The first time, each "
+                                   "changed entry is saved in Documents\\hc09-game-file-backup and Put the game files back restores it." + give_up +
+                                   (f"\n\nThe set is shared with {n} other play{'s' if n != 1 else ''}, and they change too." if changes["setg"] and n else ""), parent=self):
+            return
+
+        def work():
+            return app.game_file_apply(changes, archives)
+
+        def done(result):
+            targets, report = result
+            self.lbl_result.configure(text="Done: " + "; ".join(f"{name}: {n_} value{'s' if n_ != 1 else ''}" for name, n_ in report) + ". Start the game and look at the play. Reopen the Play creator to see it there.")
+            messagebox.showinfo("Change in game files", "Done. Start the game and look at the play (Play Now, a playbook that has it).\n\nPut the game files back (this window) restores the files as they were.", parent=self)
+
+        app.run_in_thread_with_busy("Changing the game files...", work, done, error_title="Change in game files")
+
+    def _restore(self):
+        app = self.app
+        if app._rpcs3_running():
+            messagebox.showerror("Put the game files back", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        archives = self._archives()
+        if not archives:
+            return
+        if not messagebox.askyesno("Put the game files back", "Put every play database entry that the editor changed (plays, Set personnel) back as it was before the first change?\n\nThe backups are in "
+                                   "Documents\\hc09-game-file-backup.", parent=self):
+            return
+
+        def work():
+            return app.game_file_restore(archives)
+
+        def done(result):
+            self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}.")
+            messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
+
+        app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
 
 
 class TeamPhilosophyDialog(tk.Toplevel):
@@ -11845,6 +11999,48 @@ class App(tk.Tk):
         return summary
 
     # ---- Set personnel (the positions in each set, edited in the game's own files; see PersonnelData)
+    GAMEFILE_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "gamefile_edit")
+
+    def game_file_copies(self, archives):
+        """Scan the game files (every copy of the play database) into the cache; returns (copies, folder)."""
+        shutil.rmtree(self.GAMEFILE_CACHE_DIR, ignore_errors=True)
+        scan = self.model.run_bridge(["play-sets-scan", "--asts", ",".join(archives), "--out-dir", self.GAMEFILE_CACHE_DIR, "--tables", GF.SCAN_TABLES])
+        return scan["copies"], self.GAMEFILE_CACHE_DIR
+
+    def game_file_apply(self, changes, archives, mode="apply"):
+        """Write the changes of hc09_gamefiles.changes_for into every copy of the play database that holds the play (bridge entry-patch: every entry is checked before the first is written,
+        each is backed up the first time). Returns (targets, [(copy, values)]). Raises when the play cannot be found or a row is not what was read."""
+        if GF.is_empty(changes):
+            raise RuntimeError("Nothing is changed in this play.")
+        copies, cache = self.game_file_copies(archives)
+        names_entry = names_rows = None
+        if changes["name"]:                       # the playbooks' own names for the play (PPPN) are in another entry of qkl_boot.ast
+            ex = self.model.run_bridge(["shipped-table-export", "--ast", archives[0], "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows", "--out-dir", cache])
+            loc = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(ex["entryIndex"])])
+            names_entry = {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"]}
+            names_rows = read_csv_dicts(os.path.join(cache, "pppn.csv"))
+        try:
+            targets, report = GF.targets_for(copies, cache, changes, names_entry, names_rows)
+        except ValueError as e:
+            raise RuntimeError(str(e))
+        if not targets:
+            raise RuntimeError("The game files already have these values.")
+        apply_personnel_targets(self.model, targets, self._personnel_backup_dir(), mode=mode)
+        return targets, report
+
+    def game_file_restore(self, archives):
+        """Write every backed-up entry of the play databases back (the Set personnel tool shares the backups); returns how many were put back."""
+        copies, _cache = self.game_file_copies(archives)
+        names = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(GF.NAMES_ENTRY)])      # the entry of the playbooks' own play names (backed up only if a rename was made)
+        copies = list(copies) + [{"ast": names["ast"], "index": names["index"], "start": names["start"], "size": names["size"], "file": names["file"]}]
+
+        class _Copies:
+            pass
+        holder = _Copies()
+        holder.copies = copies
+        res = restore_personnel_files(self.model, holder, self._personnel_backup_dir())
+        return sum(1 for r in res.get("results", []) if r.get("restored"))
+
     def _personnel_backup_dir(self):
         return self.ui_prefs.get("personnel_backup_dir") or PERSONNEL_BACKUP_DIR
 

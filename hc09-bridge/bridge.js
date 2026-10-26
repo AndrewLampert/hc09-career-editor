@@ -854,6 +854,12 @@ function checkEntryPlace(toc, target) {
     }
 }
 
+// A value of an entry-patch edit is a number or, for a text column (a play's name), a string: text is compared without the padding the game's fixed-width text carries.
+function sameValue(have, want) {
+    if (typeof want === 'string') return String(have).replace(/ +$/, '') === want;
+    return Number(have) === Number(want);
+}
+
 async function patchEntry(target, mode, backupDir) {
     const tocs = await readToc(target.ast);
     checkEntryPlace(tocs.find((t) => t.index === target.index), target);
@@ -869,11 +875,11 @@ async function patchEntry(target, mode, backupDir) {
         for (const e of target.edits) {
             const table = helper.file[e.table];
             if (table.records.length === 0) await table.readRecords();
-            const hits = table.records.filter((r) => Object.entries(e.match).every(([k, v]) => Number(r.fields[k].value) === Number(v)));
+            const hits = table.records.filter((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
             if (hits.length !== 1) throw new Error(`${e.table} ${JSON.stringify(e.match)}: ${hits.length} rows match (expected 1); nothing written`);
             const rec = hits[0];
             for (const [k, v] of Object.entries(e.expect || {})) {
-                if (Number(rec.fields[k].value) !== Number(v)) throw new Error(`${e.table} ${JSON.stringify(e.match)} ${k} is ${rec.fields[k].value}, expected ${v}; nothing written`);
+                if (!sameValue(rec.fields[k].value, v)) throw new Error(`${e.table} ${JSON.stringify(e.match)} ${k} is ${rec.fields[k].value}, expected ${v}; nothing written`);
             }
             const change = {};
             for (const [k, v] of Object.entries(e.set)) { change[k] = [rec.fields[k].value, v]; rec.fields[k].value = v; }
@@ -884,19 +890,42 @@ async function patchEntry(target, mode, backupDir) {
         if (patched.length !== raw.length) throw new Error('the patched entry has a different length; nothing written');
         const check = await openEntryBuffer(patched);
         try {
+            // A text column that the database keeps in a compressed string pool (a Huffman table) is written again as a whole, so most of the table's bytes change: every other value of the
+            // edited tables must then read back exactly as before.
+            const textTables = [...new Set(target.edits.filter((e) => Object.values(e.set).some((v) => typeof v === 'string')).map((e) => e.table))];
+            for (const name of textTables) {
+                const before = helper.file[name];
+                const after = check.helper.file[name];
+                await after.readRecords();
+                if (before.records.length !== after.records.length) throw new Error(`${name} has a different number of rows after the change; nothing written`);
+                const edited = new Map();
+                for (const e of target.edits.filter((x) => x.table === name)) {
+                    const hit = before.records.findIndex((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
+                    edited.set(hit, new Set(Object.keys(e.set)));
+                }
+                for (let i = 0; i < before.records.length; i++) {
+                    for (const k of Object.keys(before.records[i].fields)) {
+                        if (edited.has(i) && edited.get(i).has(k)) continue;
+                        const a = String(before.records[i].fields[k].value).replace(/ +$/, '');
+                        const b = String(after.records[i].fields[k].value).replace(/ +$/, '');
+                        if (a !== b) throw new Error(`${name} row ${i} ${k} would change from "${a}" to "${b}" without being edited; nothing written`);
+                    }
+                }
+            }
             for (const e of target.edits) {
                 const table = check.helper.file[e.table];
                 await table.readRecords();
-                const rec = table.records.find((r) => Object.entries(e.match).every(([k, v]) => Number(r.fields[k].value) === Number(v)));
+                const rec = table.records.find((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
                 for (const [k, v] of Object.entries(e.set)) {
-                    if (Number(rec.fields[k].value) !== Number(v)) throw new Error(`${e.table}.${k} did not read back as ${v}; nothing written`);
+                    if (!sameValue(rec.fields[k].value, v)) throw new Error(`${e.table}.${k} did not read back as ${v}; nothing written`);
                 }
             }
         } finally { try { fs.unlinkSync(check.tmp); } catch (x) { /* best effort */ } }
         const ranges = mergeRanges(raw, patched);
         const changed = ranges.reduce((n, r) => n + r.length, 0);
         const nValues = target.edits.reduce((n, e) => n + Object.keys(e.set).length, 0);
-        if (changed > 64 + 16 * nValues) throw new Error(`${changed} bytes would change for ${nValues} values; nothing written`);
+        const nText = target.edits.reduce((n, e) => n + Object.values(e.set).filter((v) => typeof v === 'string').length, 0);
+        if (nText === 0 && changed > 64 + 16 * nValues) throw new Error(`${changed} bytes would change for ${nValues} values; nothing written`);
         const result = { file: path.basename(target.ast), index: target.index, done, changedBytes: changed, written: false };
         if (mode === 'apply' && changed > 0) {
             fs.mkdirSync(backupDir, { recursive: true });
@@ -928,6 +957,111 @@ async function restoreEntry(target, backupDir) {
     writeIntoArchiveAt(target.ast, [{ position: info.start, buf: orig }]);
     const same = Buffer.compare(readEntryAt(target.ast, info.start, info.size), orig) === 0;
     return { file: path.basename(target.ast), index: target.index, restored: true, identical: same };
+}
+
+// ---------- EXPERIMENT: rows for tables that have no room (the game's play database is exactly full) ----------
+// entry-grow --in <entry.db> --out <grown.db> --grow PBPL=1,PLYS=11 [--fill rows.json]: gives each table that many more (zeroed) rows; --fill {table: [{column: value}, ...]} writes values into the new rows by making its record area bigger; the file gets bigger by that much and every
+// offset, size and checksum is rewritten. entry-relocate --ast <archive> --index <n> --in <entry.db>: puts a (bigger) entry at the end of the archive and points the table of contents at it
+// (an entry has no room to grow where it is: the archive's entries follow each other without a gap). Nothing here is used by the editor; the tests try it on scratch copies to find out whether
+// the game's tables CAN be given rows, and the game itself has to say whether it accepts the result.
+async function cmdEntryGrow(args) {
+    const raw = fs.readFileSync(args.in);
+    const { helper, tmp } = await openEntryBuffer(raw);
+    const report = { before: raw.length, tables: [] };
+    try {
+        for (const spec of String(args.grow).split(',').filter(Boolean)) {
+            const [name, n] = spec.split('=');
+            const k = Number(n);
+            const t = helper.file[name];
+            if (!t) throw new Error(`no table ${name}`);
+            await t.readRecords();
+            const h = t.header;
+            const lb = h.lengthBytes;
+            const area = lb * h.maxRecords;
+            report.tables.push({ table: name, allocation: h.dataAllocationType, lengthBytes: lb, maxRecords: h.maxRecords, currentRecords: h.currentRecords, indexCount: h.indexCount, indexBytes: t.indexBuffer ? t.indexBuffer.length : 0, grownBy: k });
+            t.dataBuffer = Buffer.concat([t.dataBuffer.slice(0, area), Buffer.alloc(lb * k), t.dataBuffer.slice(area)]);
+            h.maxRecords += k;
+            h.currentRecords += k;
+            t.headerBuffer.writeUInt16BE(h.maxRecords, 20);
+            t.headerBuffer.writeUInt16BE(h.currentRecords, 22);
+            if (t._extraDataBufferOffset >= 0) t._extraDataBufferOffset = lb * h.maxRecords;
+            rewriteHeaderCrc(t);
+            await t.readRecords();                                   // the records again, now with the new ones
+        }
+        if (args.fill) {
+            const fill = JSON.parse(fs.readFileSync(args.fill, 'utf8'));
+            for (const [name, rows] of Object.entries(fill)) {
+                const t = helper.file[name];
+                const grown = report.tables.find((r) => r.table === name);
+                if (!grown || rows.length > grown.grownBy) throw new Error(`${name}: ${rows.length} rows to fill but the table grew by ${grown ? grown.grownBy : 0}`);
+                const recs = t.records.slice(grown.currentRecords);
+                rows.forEach((row, i) => {
+                    for (const [k, v] of Object.entries(row)) recs[i].fields[k].value = v;
+                });
+            }
+        }
+        await helper.save(args.out);
+        report.after = fs.statSync(args.out).size;
+        const check = await openDb(args.out);
+        report.issues = verifyDbStructure(check);
+        report.rows = {};
+        for (const r of report.tables) {
+            const t = check.file[r.table];
+            await t.readRecords();
+            report.rows[r.table] = t.records.length;
+        }
+    } finally {
+        try { fs.unlinkSync(tmp); } catch (x) { /* best effort */ }
+    }
+    console.log(JSON.stringify(report));
+}
+
+async function cmdEntryRelocate(args) {
+    const tocs = await readToc(args.ast);
+    const t = tocs.find((x) => x.index === Number(args.index));
+    if (!t) throw new Error(`${path.basename(args.ast)} has no entry ${args.index}`);
+    const data = fs.readFileSync(args.in);
+    const fd = fs.openSync(args.ast, 'r+');
+    try {
+        const head = Buffer.alloc(0x30);
+        fs.readSync(fd, head, 0, 0x30, 0);
+        const shift = head.readInt8(33 + 5);
+        const unit = Math.pow(2, shift);
+        const sizes = [0, 1, 2, 3, 4].map((i) => head.readInt8(33 + i));       // widths of: unknown1, id, startPosition, fileSize, uncompressedSize
+        const tocStart = head.readInt32LE(16);
+        const additional = head.readInt8(40) * 4;
+        const descLen = head.readInt8(44);
+        const rowLen = sizes.reduce((a, b) => a + b, 0) + descLen + 1;
+        const rowStart = tocStart + additional + t.index * rowLen + 1;
+        const size = fs.fstatSync(fd).size;
+        const newStart = Math.ceil(size / unit) * unit;
+        if (newStart / unit >= Math.pow(256, sizes[2])) throw new Error('the new position does not fit the start position field of the table of contents');
+        fs.writeSync(fd, Buffer.alloc(newStart - size), 0, newStart - size, size);
+        fs.writeSync(fd, data, 0, data.length, newStart);
+        const put = (fieldIndex, value) => {
+            const off = rowStart + sizes.slice(0, fieldIndex).reduce((a, b) => a + b, 0);
+            const b = Buffer.alloc(sizes[fieldIndex]);
+            b.writeUIntLE(value, 0, sizes[fieldIndex]);
+            fs.writeSync(fd, b, 0, b.length, off);
+        };
+        put(2, newStart / unit);
+        put(3, data.length);
+        put(4, data.length);
+        fs.fsyncSync(fd);
+        console.log(JSON.stringify({ index: t.index, oldStart: t.startPositionInFile, oldSize: t.fileSizeInt, newStart, newSize: data.length, shift, widths: sizes }));
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+// entry-locate --ast <archive> --index <n> [--out file]: where entry n is (start, size) so that entry-patch can address it; with --out the entry is written out as a database file.
+async function cmdEntryLocate(args) {
+    const tocs = await readToc(args.ast);
+    const t = tocs.find((x) => x.index === Number(args.index));
+    if (!t) throw new Error(`${path.basename(args.ast)} has no entry ${args.index}`);
+    const res = { file: path.basename(args.ast), ast: args.ast, index: t.index, start: t.startPositionInFile, size: t.fileSizeInt };
+    if (args.out) fs.writeFileSync(args.out, readEntryAt(args.ast, res.start, res.size));
+    console.log(JSON.stringify(res));
 }
 
 // entry-patch <apply|dry|restore> --config file.json
@@ -1214,6 +1348,12 @@ async function main() {
         } else if (cmd === 'selftest') {
             // The libraries above loaded, or this line would not be reached. Used by the launchers.
             console.log(JSON.stringify({ ok: true, node: process.version, vendored: fs.existsSync(vendorDir) }));
+        } else if (cmd === 'entry-locate') {
+            await cmdEntryLocate(args);
+        } else if (cmd === 'entry-grow') {
+            await cmdEntryGrow(args);
+        } else if (cmd === 'entry-relocate') {
+            await cmdEntryRelocate(args);
         } else if (cmd === 'entry-patch') {
             args._mode = rest.find((a) => !a.startsWith('--'));
             if (!['apply', 'dry', 'restore'].includes(args._mode)) throw new Error('entry-patch needs apply, dry or restore as its first argument');
@@ -1232,6 +1372,7 @@ async function main() {
             console.error('  node bridge.js play-sets-scan --asts <qkl_boot.ast>,<qkl_fe2ig.ast> --out-dir <dir> [--tables SETL,PLYS,...]');
             console.error('  node bridge.js ui-assets --ast <qkl_interface.ast> --out-dir <dir> [--top-index <N>]');
             console.error('  node bridge.js entry-patch <apply|dry|restore> --config <json>');
+            console.error('  node bridge.js entry-locate --ast <archive> --index <n> [--out <file>]');
             console.error('  node bridge.js selftest');
             process.exit(1);
         }
