@@ -4066,12 +4066,14 @@ PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
 PLAYBOOK_PLAYNAMES_FILE = "pppn.csv"     # the names each playbook gives its plays (PPPN); optional: without it the master names are shown
 PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB"]
-# The four tables that make up a playbook's contents, in CSV column order.
+# The tables that make up a playbook's contents, in CSV column order. PLAB is the playbook's own row: a career that plays a custom playbook (one from the profile) holds the
+# definition of it, put there by the game when the playbook is chosen (checked in every career that has one); without it the game shows the team no plays at all.
 PLAYBOOK_TABLE_HEADERS = {
     "PGPL": ["BOKL", "SETL", "PLYL", "PLTP"],   # plays in a playbook
     "PGFM": ["BOKL", "PBFM", "SRFM"],           # formations in a playbook
     "PGSS": ["BOKL", "SETL"],                   # sets in a playbook
     "PGSL": ["BOKL", "SETL", "PBFM"],           # which formation each set sits under
+    "PLAB": ["PI34", "BGID", "BORD", "BOFF", "PBGI", "BNAM", "PBAN", "PBPR"],   # the playbooks themselves (a career only has the custom ones it plays)
 }
 PLAYBOOK_PLAY_CAP = 200   # in-game limit per playbook (200 offensive or 200 defensive), special teams not counted
 PLAYBOOK_CREATED_FORMATIONS = {"8190", "8191"}   # the per-save "Created Plays" formations (offense / defense)
@@ -8307,6 +8309,7 @@ class PlaybookData:
         v = lambda t: save.get(t, [])
         prof = self._custom_names_only(game, profile or {})
         self.profile_bgids = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()) for r in prof["plab"]}
+        self.profile_plab = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()): dict(r) for r in prof["plab"]}   # the profile's definitions of its custom playbooks
 
         self.book_names = defaultdict(list)
         self.book_side = {}
@@ -8352,6 +8355,20 @@ class PlaybookData:
         self._index_structure()
 
         self.set_usage(coaches)
+
+    def career_has_book(self, side, bgid):
+        """Does the career hold the definition (PLAB row) of this playbook? Only custom playbooks need one there."""
+        return any((r.get("BOFF") or "").strip() == side and (r.get("BGID") or "").strip() == bgid for r in self.tables["PLAB"])
+
+    def ensure_custom_book(self, side, bgid):
+        """Put the profile's PLAB row of a custom playbook into the career when the career has none (what the game does when a custom playbook is chosen at New Career): True if a row was
+        added. Without it a team that plays the playbook has no plays in the game."""
+        row = self.profile_plab.get((side, bgid))
+        if row is None or self.career_has_book(side, bgid):
+            return False
+        self.tables["PLAB"].append({h: row.get(h, "") for h in PLAYBOOK_TABLE_HEADERS["PLAB"]})
+        self.dirty_tables.add("PLAB")
+        return True
 
     @staticmethod
     def _custom_names_only(game, profile):
@@ -10257,10 +10274,12 @@ class App(tk.Tk):
         if data is None or not tid:
             return
         for side, attr, coord in (("1", "off", "Offensive coordinator"), ("0", "def", "Defensive coordinator")):
-            _b, hc = data.team_book(self.model.coaches, tid, side)
+            hc_bgid, hc = data.team_book(self.model.coaches, tid, side)
             _b, co = data.team_book(self.model.coaches, tid, side, "coord")
             getattr(self, f"lbl_pb_{attr}").configure(text=hc or "-")
-            getattr(self, f"lbl_pb_{attr}_detail").configure(text=f"{coord}: {co or '-'}")
+            missing = (side, hc_bgid) in data.profile_bgids and not data.career_has_book(side, hc_bgid)
+            getattr(self, f"lbl_pb_{attr}_detail").configure(text=f"{coord}: {co or '-'}" + (
+                "     This career has no definition of the custom playbook, so the game shows no plays: press Change... and pick it again." if missing else ""))
 
     def on_change_team_playbook(self, side):
         data = self._playbook_data
@@ -10281,9 +10300,10 @@ class App(tk.Tk):
         if not dlg.result:
             return
         bgid, name, _bokl, bord = dlg.result
-        if bgid == current:
+        custom = (side, bgid) in data.profile_bgids
+        if bgid == current and not (custom and not data.career_has_book(side, bgid)):       # the same playbook again repairs a custom one that has no definition in the career
             return
-        if (side, bgid) in data.profile_bgids:
+        if custom:
             # A custom playbook: the game stores it on the head coach's row only (the coordinators keep a game
             # playbook), and in every career checked that side's Playbook Control was Head Coach, so it is set to
             # that too (it has no visible effect that anyone has found, but it is what the game's own state looks like).
@@ -10293,6 +10313,8 @@ class App(tk.Tk):
             self._set_pb_control(tid, side, "0")
             for c in hc_rows:
                 c[field] = bgid
+            if data.ensure_custom_book(side, bgid):
+                self.model.pb_pending = {t: data.tables[t] for t in data.dirty_tables}
         else:
             for c in team_rows:
                 c[field] = bgid
