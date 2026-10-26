@@ -7253,7 +7253,7 @@ class CustomPlayDialog(tk.Toplevel):
 
 
 class TestPlaysDialog(tk.Toplevel):
-    """Test plays: seven custom plays that settle what the game does with the editor's plays (see hc09_playtest.py). One button makes them all and adds them to the game in one go; then
+    """Test plays: nine custom plays that settle what the game does with the editor's plays (see hc09_playtest.py). One button makes them all and adds them to the game in one go; then
     each is tried in the game and the answers are written here and copied for the chat."""
 
     def __init__(self, app, lib, tests):
@@ -7273,9 +7273,9 @@ class TestPlaysDialog(tk.Toplevel):
         self.current = None
         self._loading = False
         ttk.Label(self, wraplength=1130, justify="left", padding=(14, 12, 14, 2), font=("", 11, "bold"),
-                  text="Seven test plays, one button: find out what the game does with the plays this editor makes.").pack(anchor="w")
+                  text=f"{PT.count_word(len(tests)).capitalize()} test plays, one button: find out what the game does with the plays this editor makes.").pack(anchor="w")
         ttk.Label(self, wraplength=1130, justify="left", foreground="gray", padding=(14, 0, 14, 4),
-                  text="Step 1 makes seven copies of the play Slants, each with one thing changed, and adds them all to your game (about a minute). Step 2: start the game, try each play and say what "
+                  text=f"Step 1 makes {PT.count_word(len(tests))} copies of the play Slants, each with one thing changed, and adds them all to your game (about a minute). Step 2: start the game, try each play and say what "
                        "you saw; the answers are saved as you go. Your own files are saved first in Documents\\hc09-test-backups, and Put my saves back puts everything back.").pack(anchor="w")
         box = ttk.LabelFrame(self, text=" 1. Add the test plays to my game ")
         box.pack(fill="x", padx=14, pady=(2, 4))
@@ -7283,7 +7283,7 @@ class TestPlaysDialog(tk.Toplevel):
         self.target.pack(fill="x", padx=8, pady=(6, 2))
         row = ttk.Frame(box)
         row.pack(fill="x", padx=8, pady=(2, 8))
-        self.btn_add = ttk.Button(row, text="Add the seven test plays to my game", style="Accent.TButton", command=self._add_all)
+        self.btn_add = ttk.Button(row, text=f"Add the {PT.count_word(len(tests))} test plays to my game", style="Accent.TButton", command=self._add_all)
         self.btn_add.pack(side="left")
         self.btn_add_one = ttk.Button(row, text="Add only T1 (the control)", command=lambda: self._add_all(True))
         self.btn_add_one.pack(side="left", padx=(8, 0))
@@ -7299,7 +7299,7 @@ class TestPlaysDialog(tk.Toplevel):
         main.pack(fill="both", expand=True, padx=14, pady=(2, 4))
         left = ttk.Frame(main)
         left.pack(side="left", fill="y", padx=(8, 0), pady=8)
-        self.tree = ttk.Treeview(left, columns=("id", "title", "state"), show="headings", selectmode="browse", height=7)
+        self.tree = ttk.Treeview(left, columns=("id", "title", "state"), show="headings", selectmode="browse", height=9)
         for c, (text, width) in zip(("id", "title", "state"), [("Test", 40), ("What it is", 280), ("Answers", 64)]):
             self.tree.heading(c, text=text)
             self.tree.column(c, width=width, anchor="w", stretch=False)
@@ -7373,16 +7373,16 @@ class TestPlaysDialog(tk.Toplevel):
         made = self.state.get("made")
         if made:
             ids = made.get("ids") or []
-            which = "T1 only" if ids == ["T1"] else "The seven test plays"
+            which = "T1 only" if ids == ["T1"] else f"The {PT.count_word(len(ids))} test plays"
             self.lbl_status.configure(text=f"{which}: added on {made.get('time', '?')} to custom playbook {made.get('playbook', '?')}. Now start the game.", foreground="#4caf50")
         else:
-            self.lbl_status.configure(text="Close RPCS3, then press the button. The editor makes and adds all seven plays; you confirm once. (If the game then will not load, Put my saves back and try T1 alone.)", foreground="")
+            self.lbl_status.configure(text=f"Close RPCS3, then press the button. The editor makes and adds all {PT.count_word(len(self.tests))} plays; you confirm once. (If the game then will not load, Put my saves back and try T1 alone.)", foreground="")
 
     # ---- actions
     def _add_all(self, only_first=False):
         app, t = self.app, self.target
         tests = self.tests[:1] if only_first else self.tests
-        what = "the control play T1 only" if only_first else "the seven test plays"
+        what = "the control play T1 only" if only_first else f"the {PT.count_word(len(tests))} test plays"
         why = t.problem() or app.install_blocker(t.career_var.get().strip())
         if why:
             messagebox.showerror("Test plays", why, parent=self)
@@ -7424,7 +7424,7 @@ class TestPlaysDialog(tk.Toplevel):
                                  "Team playbooks, choose your team, Change... next to Offense, pick that playbook, then Save to File.\n\n") +
                                 f"Your own files are saved in {dest}. Put my saves back puts them back.", parent=self)
 
-        app.run_in_thread_with_busy("Making the test plays..." if only_first else "Making the seven test plays (about a minute)...", work, done, error_title="Test plays")
+        app.run_in_thread_with_busy("Making the test plays..." if only_first else f"Making the {PT.count_word(len(tests))} test plays (about a minute)...", work, done, error_title="Test plays")
 
     def _uninstall(self):
         answer = messagebox.askyesnocancel("Put my saves back", "RPCS3, Xenia and HC09 for PC must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
@@ -12016,7 +12016,7 @@ class App(tk.Tk):
                 return pbgi
         return min(books) if books else None
 
-    # ---- Test plays (seven custom plays made and added in one go; see hc09_playtest.py)
+    # ---- Test plays (nine custom plays made and added in one go; see hc09_playtest.py)
     def play_test_state_path(self):
         return os.path.join(self.ROUTE_TEST_DIR, "play-test.json")
 
