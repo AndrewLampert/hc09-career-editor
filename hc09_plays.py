@@ -32,6 +32,10 @@ ART_BITS = {"10": (8, 3, 8, 7), "11": (2, 2, 8, 7), "12": (2, 2, 8, 5), "01": (9
             "04": (8, 8, 9, 8), "05": (8, 7, 8, 8), "06": (6, 8, 8, 8), "07": (4, 7, 8, 8), "08": (2, 2, 8, 8), "09": (2, 2, 8, 7)}
 POSITIONS = {0: "QB", 1: "HB", 2: "FB", 3: "WR", 4: "TE", 5: "LT", 6: "LG", 7: "C", 8: "RG", 9: "RT",
              10: "LE", 11: "RE", 12: "DT", 13: "LOLB", 14: "MLB", 15: "ROLB", 16: "CB", 17: "FS", 18: "SS"}
+# A profile's custom plays have ids of their own that can equal the game's (set 66, play 28 ...); mounted next to the game's plays they are moved up by these, which are above anything
+# the game or a profile can have (sets go up to 511 in a profile, plays up to 16,383).
+CUSTOM_OFFSETS = {"SETL": 10000, "PLYL": 100000, "SETP": 1000000, "SGF_": 1000000}
+CUSTOM_TABLES = ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM")
 CREATED_FORMATION = 8190          # "Created Plays": the formation the game files its custom plays under
 # The game's own formation names (its FORM table, which lives in qkl_fe2ig.ast). Used for the ids the editor cannot read names for, for example when it did not find that archive.
 FORMATION_NAMES = {1: "Shotgun", 2: "4-3", 3: "I Form", 4: "Strong I", 5: "Split Backs", 10: "Goal Line Offense", 11: "Singleback", 13: "Weak I", 14: "Near", 15: "Far", 16: "3-4",
@@ -163,28 +167,19 @@ class PlayLibrary:
         t = {k: tables.get(k, []) for k in ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PSLO", "PSLD", "ARTO", "ARTD", "PLPD", "PLRD", "PLCM", "PBAI", "FORM")}
         self.tables = t
         self.sets = {}
-        for r in t["SETL"]:
-            self.sets[int(r["SETL"])] = {"setl": int(r["SETL"]), "name": r["name"], "form": int(r["FORM"]), "motn": int(r["MOTN"]), "sett": int(r["SETT"]),
-                                         "sitt": int(r["SITT"]), "slots": []}
-        for r in sorted(t["SETP"], key=lambda r: (int(r["SETL"]), int(r["poso"]))):
-            s = self.sets.get(int(r["SETL"]))
-            if s is not None:
-                s["slots"].append({"setp": int(r["SETP"]), "poso": int(r["poso"]), "epos": int(r["EPos"]), "dpos": int(r["DPos"]), "x": int(r["artx"]), "y": int(r["arty"]),
-                                   "fmtx": int(r["fmtx"]), "fmty": int(r["fmty"]), "sgt": int(r["SGT_"]), "arti": int(r["arti"]), "tabo": int(r["tabo"])})
-        for s in self.sets.values():
-            epos = [x["epos"] for x in s["slots"]]
-            s["side"] = "offense" if 0 in epos else ("defense" if epos and all(10 <= e <= 18 for e in epos) else "other")
+        self.plays = {}
+        self.slot_rows = collections.defaultdict(dict)
+        self.passing = {}
+        self.running = collections.defaultdict(list)
+        self.combos = {}
+        self.custom = {}                                     # {mounted PLYL: {"plyl", "setl" (as in the profile), "name"}} of the profile's custom plays, see mount_custom
+        self._custom_rows = {}
+        self._index_sets(t["SETL"], t["SETP"])
         self.form_names = {int(r["FORM"]): r["name"] for r in t["FORM"]}
         self.form_names.setdefault(CREATED_FORMATION, "Created Plays")
         for fid, fname in FORMATION_NAMES.items():
             self.form_names.setdefault(fid, fname)
-        self.plays = {}
-        for r in t["PBPL"]:
-            self.plays[int(r["PLYL"])] = {"plyl": int(r["PLYL"]), "setl": int(r["SETL"]), "name": r["name"], "plyt": int(r["PLYT"]), "plf": int(r["PLF_"]), "risk": int(r["risk"]),
-                                          "motn": int(r["motn"]), "vpos": int(r["vpos"]), "sitt": int(r["SITT"])}
-        self.slot_rows = collections.defaultdict(dict)
-        for r in t["PLYS"]:
-            self.slot_rows[int(r["PLYL"])][int(r["poso"])] = {"psal": int(r["PSAL"]), "artl": int(r["ARTL"]), "plrr": int(r["PLRR"])}
+        self._index_plays(t["PBPL"], t["PLYS"], t["PLPD"], t["PLRD"], t["PLCM"])
         self.steps = {"offense": {}, "defense": {}}          # side -> {PSAL: [(code, val1, val2, val3), ...]}: the two tables share id numbers
         for side, rows in (("offense", t["PSLO"]), ("defense", t["PSLD"])):
             by = collections.defaultdict(list)
@@ -199,16 +194,102 @@ class PlayLibrary:
         self.shared_ids = {psal for psal, lst in self.steps["offense"].items() if self.steps["defense"].get(psal) == lst}
         for s in self.sets.values():
             s["table"] = self._table_of(s)
-        self.passing = {int(r["PLYL"]): r for r in t["PLPD"]}
-        self.running = collections.defaultdict(list)
-        for r in t["PLRD"]:
-            self.running[int(r["PLYL"])].append(r)
-        self.combos = {int(r["PLYL"]): r for r in t["PLCM"]}
         self.books_of_play = collections.defaultdict(set)
         for r in t["PBAI"]:
             self.books_of_play[int(r["PBPL"])].add(int(r["BOKL"]))
         self.book_play_names = {}                            # {BOKL: {PLYL: the name that playbook shows for the play}}, see set_book_play_names
         self._usage = None
+
+    def _index_sets(self, setl_rows, setp_rows):
+        """Add sets (SETL rows) and their slots (SETP rows) to self.sets; returns the new set ids."""
+        new = []
+        for r in setl_rows:
+            self.sets[int(r["SETL"])] = {"setl": int(r["SETL"]), "name": r["name"], "form": int(r["FORM"]), "motn": int(r["MOTN"]), "sett": int(r["SETT"]),
+                                         "sitt": int(r["SITT"]), "slots": []}
+            new.append(int(r["SETL"]))
+        new_set = set(new)
+        for r in sorted(setp_rows, key=lambda r: (int(r["SETL"]), int(r["poso"]))):
+            s = self.sets.get(int(r["SETL"]))
+            if s is not None and int(r["SETL"]) in new_set:
+                s["slots"].append({"setp": int(r["SETP"]), "poso": int(r["poso"]), "epos": int(r["EPos"]), "dpos": int(r["DPos"]), "x": int(r["artx"]), "y": int(r["arty"]),
+                                   "fmtx": int(r["fmtx"]), "fmty": int(r["fmty"]), "sgt": int(r["SGT_"]), "arti": int(r["arti"]), "tabo": int(r["tabo"])})
+        for setl in new:
+            s = self.sets[setl]
+            epos = [x["epos"] for x in s["slots"]]
+            s["side"] = "offense" if 0 in epos else ("defense" if epos and all(10 <= e <= 18 for e in epos) else "other")
+        return new
+
+    def _index_plays(self, pbpl, plys, plpd, plrd, plcm):
+        """Add plays (PBPL rows) with their slot rows (PLYS), pass reads (PLPD), run holes (PLRD) and combination rows (PLCM)."""
+        for r in pbpl:
+            self.plays[int(r["PLYL"])] = {"plyl": int(r["PLYL"]), "setl": int(r["SETL"]), "name": r["name"], "plyt": int(r["PLYT"]), "plf": int(r["PLF_"]), "risk": int(r["risk"]),
+                                          "motn": int(r["motn"]), "vpos": int(r["vpos"]), "sitt": int(r["SITT"])}
+        for r in plys:
+            self.slot_rows[int(r["PLYL"])][int(r["poso"])] = {"psal": int(r["PSAL"]), "artl": int(r["ARTL"]), "plrr": int(r["PLRR"])}
+        for r in plpd:
+            self.passing[int(r["PLYL"])] = r
+        for r in plrd:
+            self.running[int(r["PLYL"])].append(r)
+        for r in plcm:
+            self.combos[int(r["PLYL"])] = r
+
+    # ---- the profile's custom plays, mounted next to the game's own so that the Play creator can open and change them
+    def mount_custom(self, profile):
+        """Mount the custom plays of a profile save: profile is {table: [row dicts]} with PBPL, SETL, SETP, SETG, SGFF, PLYS, PLPD, PLRD and PLCM. A profile's ids can equal the
+        game's own, so every id of the mounted rows is moved up by CUSTOM_OFFSETS (the originals are kept in self.custom: {mounted PLYL: {"plyl", "setl", "name"}}); an earlier mount
+        is taken out first. Their step lists and art are the game's own (a custom play only names them). Returns the mounted play ids, in the profile's order."""
+        self.unmount_custom()
+        self.yard_map()                                       # fitted on the game's own sets only, before the custom ones are in
+        off = CUSTOM_OFFSETS
+
+        def move(rows, **cols):
+            return [{**r, **{c: str(int(r[c]) + off[k]) for c, k in cols.items()}} for r in rows]
+        rows = {
+            "SETL": move(profile.get("SETL", []), SETL="SETL"), "SETP": move(profile.get("SETP", []), SETL="SETL", SETP="SETP"), "SGFF": move(profile.get("SGFF", []), SETL="SETL", SGF_="SGF_"),
+            "SETG": move(profile.get("SETG", []), SETP="SETP", SGF_="SGF_"), "PBPL": move(profile.get("PBPL", []), SETL="SETL", PLYL="PLYL"), "PLYS": move(profile.get("PLYS", []), PLYL="PLYL"),
+            "PLPD": move(profile.get("PLPD", []), PLYL="PLYL"), "PLRD": move(profile.get("PLRD", []), PLYL="PLYL"), "PLCM": move(profile.get("PLCM", []), PLYL="PLYL")}
+        # only plays whose set is in the profile (a play of the game's own sets is not a custom play)
+        have = {int(r["SETL"]) for r in rows["SETL"]}
+        rows["PBPL"] = [r for r in rows["PBPL"] if int(r["SETL"]) in have]
+        kept = {int(r["PLYL"]) for r in rows["PBPL"]}
+        for t in ("PLYS", "PLPD", "PLRD", "PLCM"):
+            rows[t] = [r for r in rows[t] if int(r["PLYL"]) in kept]
+        for t, rs in rows.items():
+            self.tables[t].extend(rs)
+        self._custom_rows = rows
+        new_sets = self._index_sets(rows["SETL"], rows["SETP"])
+        self._index_plays(rows["PBPL"], rows["PLYS"], rows["PLPD"], rows["PLRD"], rows["PLCM"])
+        for setl in new_sets:
+            self.sets[setl]["table"] = self._table_of(self.sets[setl])
+        for r in rows["PBPL"]:
+            plyl = int(r["PLYL"])
+            self.custom[plyl] = {"plyl": plyl - off["PLYL"], "setl": int(r["SETL"]) - off["SETL"], "name": r["name"]}
+        self.__dict__.pop("_align_cache", None)
+        self.__dict__.pop("_setg_by_group", None)
+        return [int(r["PLYL"]) for r in rows["PBPL"]]
+
+    def unmount_custom(self):
+        """Take the mounted custom plays out again."""
+        if not self._custom_rows and not self.custom:
+            return
+        for plyl in list(self.custom):
+            self.plays.pop(plyl, None)
+            self.slot_rows.pop(plyl, None)
+            self.passing.pop(plyl, None)
+            self.running.pop(plyl, None)
+            self.combos.pop(plyl, None)
+        for setl in [k for k in self.sets if k >= CUSTOM_OFFSETS["SETL"]]:
+            del self.sets[setl]
+        for t, rows in self._custom_rows.items():
+            gone = {id(r) for r in rows}
+            self.tables[t][:] = [r for r in self.tables[t] if id(r) not in gone]
+        self._custom_rows, self.custom = {}, {}
+        self._usage = None
+        self.__dict__.pop("_align_cache", None)
+        self.__dict__.pop("_setg_by_group", None)
+
+    def is_custom(self, plyl):
+        return plyl in self.custom
 
     def set_book_play_names(self, rows):
         """The names the playbooks give their plays (table PPPN of the shipped database: BOKL, PLYL, PPPM). The game's play-call screen shows these, not the master names in
@@ -303,11 +384,12 @@ class PlayLibrary:
     def play_side(self, plyl):
         return self.sets[self.plays[plyl]["setl"]]["side"] if self.plays[plyl]["setl"] in self.sets else "other"
 
-    def play_list(self, side=None):
+    def play_list(self, side=None, custom=False):
+        """The plays of a side as rows; the game's own, or with custom=True only the mounted custom plays of a profile (mount_custom)."""
         out = []
         for plyl, p in self.plays.items():
             s = self.sets.get(p["setl"])
-            if s is None or (side and s["side"] != side):
+            if s is None or (side and s["side"] != side) or (plyl in self.custom) != bool(custom):
                 continue
             out.append({"plyl": plyl, "name": p["name"], "set": s["name"], "form": self.form_names.get(s["form"], f"formation {s['form']}"), "plyt": p["plyt"], "motn": p["motn"],
                         "option": self.play_is_option(plyl), "books": len(self.books_of_play.get(plyl, ())), "side": s["side"]})
@@ -362,7 +444,7 @@ class PlayLibrary:
             u = {}
             for plyl, slots in self.slot_rows.items():
                 s = self.sets.get(self.plays.get(plyl, {}).get("setl"))
-                if s is None:
+                if s is None or plyl in self.custom:
                     continue
                 side = s["table"]
                 epos = {x["poso"]: x["epos"] for x in s["slots"]}
@@ -555,6 +637,72 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
     summary = {"setl": new_setl, "plyl": new_plyl, "name": name, "plyt": ptype, "from": base["name"], "slots_changed": sorted(overrides), "slots_moved": sorted(moved),
                "rows": {k: len(v) for k, v in rows.items()}}
     return dict(rows), summary
+
+
+def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None, reads=None, alignment=None):
+    """Change a custom play of the profile in place: plyl is its MOUNTED id (lib.mount_custom), the other arguments are those of build_custom_play. Returns ({table: the whole table's rows
+    with the play's rows changed}, summary) for the profile save: only values change, no row is added or taken out, so the ids, the set and the playbook links stay as they are.
+    What changes: the play's name and play type, each slot's step list, art and role (PLYS), the players' places (SETP diagram columns and the yards of SETG), and the pass reads, run
+    holes and combination row (PLPD, PLRD, PLCM) when the play is made another kind. Raises ValueError when that needs rows the play does not have or has too many of (a pass made a run
+    play, say): make a new play from it then. summary["plyt"] is the play type to write into the playbook links (PGPL.PLTP)."""
+    info = lib.custom.get(plyl)
+    if info is None:
+        raise ValueError("That is not one of the profile's custom plays.")
+    orig_plyl, orig_setl = info["plyl"], info["setl"]
+    if not any(int(r["PLYL"]) == orig_plyl for r in profile.get("PBPL", [])):
+        raise ValueError("The play is not in the profile any more (it was changed since the editor read it). Open the plays again.")
+    # the rows the play would have if it were made new from itself, then copied over its own rows by place (slot number, group order)
+    scratch = {t: [dict(r) for r in rows] for t, rows in profile.items()}
+    new, summ = build_custom_play(lib, plyl, name, overrides, scratch, plyt=plyt, plan=plan, reads=reads, alignment=alignment)
+    out = {t: [dict(r) for r in profile.get(t, [])] for t in ("PBPL", "SETP", "SETG", "PLYS", "PLPD", "PLRD", "PLCM")}
+
+    def mine(table, col, value):
+        return [r for r in out[table] if int(r[col]) == value]
+    pbpl = mine("PBPL", "PLYL", orig_plyl)[0]
+    pbpl["name"], pbpl["PLYT"] = new["PBPL"][0]["name"], new["PBPL"][0]["PLYT"]
+    for nr in new["PLYS"]:
+        row = next((r for r in mine("PLYS", "PLYL", orig_plyl) if int(r["poso"]) == int(nr["poso"])), None)
+        if row is None:
+            raise ValueError("The play has no slot " + str(nr["poso"]) + " in the profile.")
+        row["PSAL"], row["ARTL"], row["PLRR"] = nr["PSAL"], nr["ARTL"], nr["PLRR"]
+    old_setp = {int(r["poso"]): r for r in mine("SETP", "SETL", orig_setl)}
+    new_setp = {int(r["poso"]): r for r in new["SETP"]}
+    for poso, nr in new_setp.items():
+        if poso not in old_setp:
+            raise ValueError("The set has no slot " + str(poso) + " in the profile.")
+        for c in ("artx", "arty", "fmtx", "fmty"):
+            old_setp[poso][c] = nr[c]
+    # SETG: the new rows are keyed by the new set's slots and groups; the old ones by theirs. Match slots by poso and groups by their order (default group first), as build_custom_play made them
+    new_poso = {int(r["SETP"]): int(r["poso"]) for r in new["SETP"]}
+    old_poso = {int(r["SETP"]): p_ for p_, r in old_setp.items()}
+    old_groups = [g for g in profile.get("SGFF", []) if int(g["SETL"]) == orig_setl]
+    old_groups.sort(key=lambda g: -int(g["dflt"]))
+    new_groups = [int(g["SGF_"]) for g in new["SGFF"]]
+    if len(old_groups) != len(new_groups):
+        raise ValueError("The play's alignment groups are not the ones of its set, so it cannot be changed in place.")
+    group_of_new = {ng: int(og["SGF_"]) for ng, og in zip(new_groups, old_groups)}
+    old_setg = {(old_poso[int(r["SETP"])], int(r["SGF_"])): r for r in out["SETG"] if int(r["SETP"]) in old_poso}
+    for nr in new["SETG"]:
+        key = (new_poso[int(nr["SETP"])], group_of_new[int(nr["SGF_"])])
+        row = old_setg.get(key)
+        if row is None:
+            raise ValueError("The play's alignment is not complete in the profile, so it cannot be changed in place.")
+        for c in ("SF__", "x___", "y___", "fx__", "fy__", "anm_", "dir_", "fanm", "fdir"):
+            row[c] = nr[c]
+    for table in ("PLPD", "PLRD", "PLCM"):
+        have = mine(table, "PLYL", orig_plyl)
+        want = new.get(table, [])
+        if len(have) != len(want):
+            word = {"PLPD": "pass-read", "PLRD": "run-hole", "PLCM": "play-combination"}[table]
+            raise ValueError(f"Making the play this kind needs {len(want)} {word} row{'' if len(want) == 1 else 's'} ({table}) and the play has {len(have)}, which cannot be changed in place. "
+                             "Use Save as a new play instead.")
+        for old_row, nr in zip(have, want):
+            for c in old_row:
+                if c != "PLYL" and c in nr:
+                    old_row[c] = nr[c]
+    summary = {"setl": orig_setl, "plyl": orig_plyl, "name": name, "plyt": int(new["PBPL"][0]["PLYT"]), "from": info["name"], "slots_changed": sorted(overrides),
+               "slots_moved": summ["slots_moved"], "mounted": plyl}
+    return out, summary
 
 
 def career_link_rows(career, bokl, new_setl, new_plyl, plyt):

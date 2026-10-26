@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -5807,6 +5807,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.align_override = {}     # {slot: (x, y) in yards} set in the Move players window
         self.plyl = None
         self.detail = None
+        self.my_profile = None       # the profile save whose custom plays are mounted in the library ("Plays I made"), or None
         self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
         self.books = {}
         try:
@@ -5837,7 +5838,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.book_var = tk.StringVar()
         self.cmb_book = ttk.Combobox(top, state="readonly", width=32, textvariable=self.book_var)
         self.cmb_book.pack(side="left", padx=(4, 12))
-        self.cmb_book.bind("<<ComboboxSelected>>", lambda e: self._fill())
+        self.cmb_book.bind("<<ComboboxSelected>>", lambda e: self._book_picked())
         ttk.Label(top, text="Find:").pack(side="left")
         self.find_var = tk.StringVar()
         ttk.Entry(top, width=18, textvariable=self.find_var).pack(side="left", padx=(4, 8))
@@ -5929,18 +5930,52 @@ class PlayDesignerDialog(tk.Toplevel):
                 nm, kind = self.books.get(b, (f"playbook {b}", ""))
                 if not kind or kind == side or side == "other":
                     names[nm] = b
-        self._book_values = {"Any playbook": None, **{n: b for n, b in sorted(names.items())}}
+        self._book_values = {"Any playbook": None, self.MINE: "mine", **{n: b for n, b in sorted(names.items())}}
         self.cmb_book.configure(values=list(self._book_values))
         self.book_var.set("Any playbook")
         self._fill()
 
+    MINE = "Plays I made (my profile)"
+
+    def _book_picked(self):
+        """A playbook was chosen; 'Plays I made' first reads the custom plays of the profile save."""
+        if self.book_var.get() == self.MINE and not self.reload_mine():
+            self.book_var.set("Any playbook")
+        self._fill()
+
+    def reload_mine(self, keep=None):
+        """Read the custom plays of the profile save again and mount them (the play creator opens them like any play); False after saying why not. keep: the mounted play to select again."""
+        profile = self.app.default_save_targets()["profile"]
+        if not profile or not os.path.isfile(profile):
+            messagebox.showinfo("Plays I made", "The editor could not find your profile save. Load your career first (Saves... or Load Save File); the profile is found next to it.", parent=self)
+            return False
+        try:
+            ids = self.app.load_my_plays(self.lib, profile)
+        except Exception as e:
+            messagebox.showerror("Plays I made", f"Could not read the plays of the profile: {e}", parent=self)
+            return False
+        self.my_profile = profile
+        if not ids:
+            messagebox.showinfo("Plays I made", "Your profile has no custom plays yet. Make one first (pick a play, Make custom play...).", parent=self)
+        self._fill()
+        if keep is not None and self.tree.exists(str(keep)):
+            self.tree.selection_set(str(keep))
+        return True
+
+    def is_mine(self):
+        """Is the play shown one of the profile's own custom plays (changes can be saved into it)?"""
+        return self.plyl is not None and self.lib.is_custom(self.plyl)
+
     def _fill(self):
         want_book = self._book_values.get(self.book_var.get())
+        mine = want_book == "mine"
+        if mine:
+            want_book = None
         text = self.find_var.get().strip().lower()
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         shown = 0
-        for r in self.lib.play_list(self._side()):
+        for r in self.lib.play_list(self._side(), custom=mine):
             if want_book is not None and want_book not in self.lib.books_of_play.get(r["plyl"], ()):
                 continue
             if self.opt_var.get() and not r["option"]:
@@ -6134,8 +6169,8 @@ class PlayDesignerDialog(tk.Toplevel):
         elif d["side"] != "offense":
             state, note = "disabled", "Only offensive plays can be saved as custom plays for now. You can look at this one and try changes, but they cannot be saved."
         else:
-            state, note = "normal", ""
-        self.btn_make.configure(state=state)
+            state, note = "normal", ("This is one of your own plays: Save changes... puts the changes into it, or saves them as a new play." if self.is_mine() else "")
+        self.btn_make.configure(state=state, text="Save changes..." if self.is_mine() else "Make custom play...")
         self.lbl_make.configure(text=note)
 
     def _job_text(self, sl):
@@ -7142,14 +7177,19 @@ class CustomPlayDialog(tk.Toplevel):
         self.geometry("760x560")
         self.app, self.designer = app, designer
         d = designer.detail
-        ttk.Label(self, text=f"Add {d['play']['name']} to my game as a custom play", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        self.mine = designer.is_mine()
+        ttk.Label(self, text=(f"Save changes to {d['play']['name']}" if self.mine else f"Add {d['play']['name']} to my game as a custom play"), font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=720, justify="left", padding=(14, 0, 14, 6),
-                  text="One button does it: the editor makes the play in copies of your profile save and your career save, checks them, saves your own two files in Documents\\hc09-test-backups "
-                       "and puts the copies in their place. Close RPCS3 first. Put my saves back undoes it. It has not been tried in the game yet: if the game refuses the play or shows "
-                       "something odd, that is what the test is for.").pack(anchor="w")
+                  text=("This is one of your own plays. Save changes to this play puts the changes into the play itself (the same set, the same playbook); Save as a new play keeps it as it is and "
+                        "adds the changed one next to it. Either way the editor works on copies of your profile save and career save, checks them, saves your own two files in "
+                        "Documents\\hc09-test-backups and puts the copies in their place. Close RPCS3 first. Put my saves back undoes it. Not tried in the game yet."
+                        if self.mine else
+                        "One button does it: the editor makes the play in copies of your profile save and your career save, checks them, saves your own two files in Documents\\hc09-test-backups "
+                        "and puts the copies in their place. Close RPCS3 first. Put my saves back undoes it. It has not been tried in the game yet: if the game refuses the play or shows "
+                        "something odd, that is what the test is for.")).pack(anchor="w")
         row = ttk.Frame(self)
         row.pack(fill="x", padx=14, pady=(0, 6))
-        ttk.Label(row, text="Name of the new play (24 characters):").pack(side="left")
+        ttk.Label(row, text=("Name of the play (24 characters):" if self.mine else "Name of the new play (24 characters):")).pack(side="left")
         self.name_var = tk.StringVar(value=d["play"]["name"][:24])
         ttk.Entry(row, width=30, textvariable=self.name_var).pack(side="left", padx=(6, 0))
         self.target = SaveTargetFrame(self, app, wrap=720)
@@ -7162,14 +7202,19 @@ class CustomPlayDialog(tk.Toplevel):
         btn = ttk.Frame(self)
         btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
-        self.btn_add = ttk.Button(btn, text="Add to my game", style="Accent.TButton", command=self._add)
+        if self.mine:
+            self.btn_update = ttk.Button(btn, text="Save changes to this play", style="Accent.TButton", command=self._update)
+            self.btn_update.pack(side="right", padx=(0, 8))
+            self.btn_add = ttk.Button(btn, text="Save as a new play", command=self._add)
+        else:
+            self.btn_add = ttk.Button(btn, text="Add to my game", style="Accent.TButton", command=self._add)
         self.btn_add.pack(side="right", padx=(0, 8))
         ttk.Button(btn, text="Put my saves back...", command=self._uninstall).pack(side="left")
         self._made = None
         ch = designer.overrides
         plan = designer.final_plan()
         self.lbl_changes.configure(text=("Changed slots: " + ", ".join(next(s["label"] for s in d["slots"] if s["poso"] == p_) for p_ in sorted(ch)) + "."
-                                         if ch else "No slot is changed: the custom play will be a copy of the original.") +
+                                         if ch else ("No slot's job is changed." if self.mine else "No slot is changed: the custom play will be a copy of the original.")) +
                                         (f"  It is made a {FAMILY_NAME[plan['family']].lower()} (play type {plan['plyt']}, with the {'pass reads' if plan['family'] in ('dropback', 'play_action', 'option_pass') else 'run hole'} of that kind)."
                                          if plan else ""))
 
@@ -7202,6 +7247,65 @@ class CustomPlayDialog(tk.Toplevel):
         self.lbl_result.configure(text=result["message"])
         self._made = result
         return result
+
+    def _update_files(self):
+        """Put the changes into the play itself, in copies of the profile and the career; the result, or None after telling why not."""
+        name = self.name_var.get().strip()
+        if not name or len(name) > 24:
+            messagebox.showerror("Save changes", "Give the play a name of 1 to 24 characters.", parent=self)
+            return None
+        why = self.target.problem()
+        if why:
+            messagebox.showerror("Save changes", why, parent=self)
+            return None
+        t, d = self.target, self.designer
+        profile = t.profile_var.get().strip()
+        if d.my_profile is None or os.path.abspath(profile) != os.path.abspath(d.my_profile):
+            messagebox.showerror("Save changes", "The plays were read from another profile save than the one in Details. Close this window, choose 'Plays I made' again and try again.", parent=self)
+            return None
+        self.config(cursor="watch")
+        self.lbl_result.configure(text="Changing the play ...")
+        self.update_idletasks()
+        try:
+            result = self.app.update_custom_play_files(d.lib, d.plyl, name, dict(d.overrides), profile, t.career_var.get().strip(), t.out_var.get().strip(),
+                                                       plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
+        except Exception as e:
+            self.lbl_result.configure(text="")
+            messagebox.showerror("Save changes", str(e), parent=self)
+            return None
+        finally:
+            self.config(cursor="")
+        self.lbl_result.configure(text=result["message"])
+        self._made = result
+        return result
+
+    def _update(self):
+        t, d = self.target, self.designer
+        why = t.problem()
+        if why:
+            messagebox.showerror("Save changes", why, parent=self)
+            return
+        profile, career = t.profile_var.get().strip(), t.career_var.get().strip()
+        why = self.app.install_blocker(career)
+        if why:
+            messagebox.showerror("Save changes", why, parent=self)
+            return
+        if not messagebox.askyesno("Save changes", f"Put the changes into your play \"{d.detail['play']['name']}\"?\n\nThis changes your profile save and your career save (the two USR-DATA files). Your own two files "
+                                   "are saved first in Documents\\hc09-test-backups, and Put my saves back undoes it.\n\n" + f"Profile: {profile}\nCareer: {career}", parent=self):
+            return
+        result = self._update_files()
+        if result is None:
+            return
+        try:
+            dest = self.app.install_custom_play(result, profile, career)
+        except Exception as e:
+            messagebox.showerror("Save changes", str(e), parent=self)
+            return
+        keep = d.plyl
+        d.reload_mine(keep=keep)
+        self.lbl_result.configure(text="The changes are in the play.")
+        messagebox.showinfo("Save changes", f"Done. Start the game, load the career and look at the play in custom playbook {result.get('bokl', '')}, under Created Plays.\n\n"
+                            f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
 
     def _make(self):
         """Only make the files: the two copies, for people who put them in place by hand."""
@@ -12129,6 +12233,81 @@ class App(tk.Tk):
         books = [r for r in t["PLAB"][1] if (r.get("BOFF") or "").strip() == "1" and 1 <= int(r["PBGI"]) <= 10]
         self._profile_book_bgids = {int(r["PBGI"]): (r.get("BGID") or "").strip() for r in books}
         return {int(r["PBGI"]): (r.get("BNAM") or "").strip() for r in books}
+
+    def load_my_plays(self, lib, profile_path):
+        """Mount the custom plays of a profile save in the play library (see PlayLibrary.mount_custom) and tell the kinds of play about them; returns the mounted play ids."""
+        t = self._export_tables(profile_path, list(CUSTOM_TABLES))
+        ids = lib.mount_custom({name: rows for name, (_h, rows) in t.items()})
+        types = getattr(lib, "_play_types", None)
+        if types is not None:
+            types.register_custom(ids)
+        return ids
+
+    def _replace_and_import(self, db_path, new_tables, tables_headers):
+        """Write whole tables ({table: [row dicts]}, the same number of rows as the save has) back with the bridge's import: only values change. Raises unless every table was written."""
+        tmp = tempfile.mkdtemp(prefix="hc09_replace_")
+        try:
+            names = [t for t in new_tables]
+            for t in names:
+                headers, _old = tables_headers[t]
+                with open(os.path.join(tmp, t.lower() + ".csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f, lineterminator="\r\n")
+                    w.writerow(headers)
+                    for r in new_tables[t]:
+                        w.writerow([r.get(h, "") for h in headers])
+            res = self.model.run_bridge(["import", "--db", db_path, "--in", tmp, "--tables", ",".join(names)])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
+        if bad:
+            raise RuntimeError("The bridge did not write every table: " + "; ".join(f"{r.get('table')}: {r.get('status')} {r.get('warnings') or ''}" for r in bad)[:400])
+        return res
+
+    def update_custom_play_files(self, lib, plyl, name, overrides, profile_path, career_path, out_dir, plan=None, reads=None, alignment=None):
+        """Change one of the profile's custom plays in place, in COPIES of the profile save and the career save (see update_custom_play); the originals are only read. plyl is the
+        play's mounted id (load_my_plays). Returns the same kind of result as make_custom_play_files, so install_custom_play puts the copies in place."""
+        if not profile_path or not os.path.isfile(profile_path):
+            raise RuntimeError("Pick the profile save.")
+        if not career_path or not os.path.isfile(career_path):
+            raise RuntimeError("Pick the career save.")
+        if not out_dir:
+            raise RuntimeError("Pick an output folder.")
+        out_profile, out_career = os.path.join(out_dir, "profile", "USR-DATA"), os.path.join(out_dir, "career", "USR-DATA")
+        if any(os.path.abspath(p_) in (os.path.abspath(profile_path), os.path.abspath(career_path)) for p_ in (out_profile, out_career)):
+            raise RuntimeError("The output folder would overwrite your own saves; pick another one.")
+        os.makedirs(os.path.dirname(out_profile), exist_ok=True)
+        os.makedirs(os.path.dirname(out_career), exist_ok=True)
+        shutil.copy2(profile_path, out_profile)
+        shutil.copy2(career_path, out_career)
+        names = list(CUSTOM_TABLES) + ["PGPL"]
+        prof = self._export_tables(out_profile, names)
+        try:
+            rows, summary = update_custom_play(lib, plyl, name, overrides, {t: prof[t][1] for t in names}, plan=plan, reads=reads, alignment=alignment)
+        except ValueError as e:
+            raise RuntimeError(str(e))
+        self._replace_and_import(out_profile, rows, prof)
+        # the playbook links hold the play type (PGPL.PLTP) in the profile and in the career
+        bokls = set()
+        for path in (out_profile, out_career):
+            t = prof if path == out_profile else self._export_tables(out_career, ["PGPL"])
+            links = [r for r in t["PGPL"][1] if int(r["PLYL"]) == summary["plyl"] and int(r["SETL"]) == summary["setl"]]
+            bokls.update(int(r["BOKL"]) for r in links)
+            if any(str(r["PLTP"]) != str(summary["plyt"]) for r in links):
+                for r in links:
+                    r["PLTP"] = str(summary["plyt"])
+                self._replace_and_import(path, {"PGPL": t["PGPL"][1]}, t)
+        for path in (out_profile, out_career):
+            ok = self.model.run_bridge(["verify-db", "--db", path])
+            if not ok.get("ok"):
+                raise RuntimeError(f"The structure check of {path} failed: {ok.get('issues')}")
+        book = ", ".join(str(b) for b in sorted(bokls))
+        summary.update({"profile": out_profile, "career": out_career, "bokl": book})
+        summary["message"] = (f"Changed the custom play \"{name}\" (set {summary['setl']}, play {summary['plyl']}) in place; it is in custom playbook {book or '?'}.\n\n"
+                              f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder and the career, copy these two "
+                              "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
+        with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
+            f.write(summary["message"] + "\n")
+        return summary
 
     def _append_and_import(self, db_path, new_rows, tables_headers, check_capacity=True):
         """Append rows ({table: [row dicts]}) to the tables of a save file with the bridge's append import; raises unless every table was written."""
