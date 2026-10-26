@@ -1,6 +1,6 @@
 # Testing guide: the Play creator and the route numbers
 
-For people helping to test, on their own copy of the game (PS3 USA in RPCS3). Everything is done from the editor; you never edit a file by hand. **Nothing here has been tried in the game yet, so your answers are the first.**
+For people helping to test, on their own copy of the game (PS3 USA in RPCS3). Everything is done from the editor; you never edit a file by hand. Part A has been run once (RPCS3, 2026-10-26, results below); Part B has first results too (see its section).
 
 Two parts. **Part A** tests the custom plays the Play creator makes (about 10 minutes in the editor and then the game; **T7, the moved player, is the one that matters most for what we can build next**). **Part B** tests what the numbers inside a route mean, which decides whether making your own routes is possible at all (about 40 minutes for the main tests, B1 to B5; B6 to B9 are a bonus). You can do Part A without Part B and the other way round.
 
@@ -55,6 +55,24 @@ The nine plays are copies of **Slants** (formation Singleback, set Big) with one
 **Write the answers in the window** (step 2 of the Test plays window): pick a test in the list and answer its questions with the drop-downs and the text lines. The answers are saved as you give them, so closing the editor loses nothing. When you are done press **Copy my answers for Discord** and paste into the chat (or **Save my answers to a file**: `Documents\hc09-test-results\play-test-results.txt`; the state is in `play-test.json` in the same folder). Screenshots of the playbook screen (Created Plays) and of anything odd are welcome.
 
 When you are done, close RPCS3 and press **Put my saves back...** in the Test plays window, then **Yes** to get your files from before the first install (if you want to keep the test plays, skip this).
+
+**First results of Part A (RPCS3, 2026-10-26, a new Cowboys career, custom playbook Collage).** All nine plays were listed under Created Plays, could be called and ran. Per test:
+
+| Test | Result |
+|---|---|
+| T1 control | works like Slants. WR2 (alone on the left, 15 yards out) stood "pretty close to the outside hash, about the same distance the receiver on the right is from his sideline". |
+| T2 play-action | the quarterback turns and fakes, the back fakes, the receivers run their routes and he throws. The linemen pass block and stay behind the line (they do not fire out first): they have the assignments of the game's own play-action play of that set, so the test's wording ("fire out as if to run block, then pass block") was an assumption, not a failure. |
+| T3 handoff run | everything as expected: handoff, a back runs, the linemen run block, the receivers block downfield. **A pass converted to a run works.** |
+| T4 triple option (a set with no triple option) | runs as an option (the quarterback rides the back and hands off or keeps to the right) but there is **no pitch man**: the set has one back, the option kind's pitch goes to a second back. The converter should warn when a set lacks the players a kind needs. |
+| T5 route | WR2 (the left receiver) runs an out. |
+| T6 reads | inconclusive: the tester could not read the numbers, and says the first read he saw was the receiver on the right (#81, WR1), not WR2. To settle it: open T6 in the in-game Create-A-Play and read the progression numbers; also note the game gives each number 1 to 5 to one receiver. |
+| T7 moved receiver | **works.** He stood about 9 yards from the middle, the diagram showed him moved. The flip could not be tried. "A little hitch before he cuts in" is the slant's cut (the control T1 has it too, to be confirmed). |
+| T8 rollout right | the quarterback rolls out to the right and the receivers run their routes; he throws on the move "partly" (it depends on the pressure). |
+| T9 play-action boot left | fakes the handoff, the back fakes; he rolls out to the left only "partly": it looks like the play-action animation followed by a move backwards rather than to the side. The same step list is the game's own "Play-action boot left", so compare it with a stock boot play (PA Boot Lt) in the same set. |
+
+What this settles: custom plays made by the editor load, appear and run; the kind of play can be changed (pass to run, pass to play-action); routes and the quarterback's option can be chosen; and **a player can be moved on the field by writing the yards into the play's own set**.
+
+What the first runs found, and the editor now does: the game plays a career from the career's own copy of the custom plays' rows; a custom play's set, play, slot and group numbers must not be numbers of the game's own play database (sets 66 to 74 are the game's Stop Clock ... Punt Return Normal and misbehaved or crashed RPCS3); the profile can hold only 100 alignment groups.
 
 **Changing a play you made** (optional, after the nine): Play creator, Playbook list, **Plays I made**, pick one of the test plays (T7 Moved WR is a good one), drag a player somewhere else or give someone another job, press **Save changes...** and **Save changes to this play** (one question). Close the editor's window if you like, start the game and look at the same play: it should have the new change and nothing else; the play must not appear twice. If you press **Save as a new play** instead, the changed play is added next to the first one. Tell us if the game shows the old version, shows both, or does not load the career.
 
