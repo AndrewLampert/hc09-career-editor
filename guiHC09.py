@@ -5683,15 +5683,23 @@ class PlayCanvas(tk.Canvas):
     SCALE = 480 / 180
     PAD = 8
 
-    def __init__(self, parent, art_dir=None, on_pick=None, on_open=None, **kw):
+    DRAG_START = 4                 # pixels the mouse has to move with the button down before a click turns into a drag
+
+    def __init__(self, parent, art_dir=None, on_pick=None, on_open=None, on_drag=None, on_drop=None, **kw):
         super().__init__(parent, width=int(round(180 * self.SCALE)) + 2 * self.PAD, height=int(round(104 * self.SCALE)) + 2 * self.PAD + 18, highlightthickness=0, background="#1c3a20", **kw)
         self.field_img, self.num_imgs = None, {}
         self.on_pick, self.on_open = on_pick, on_open        # called with the slot (poso) of the player clicked, or double clicked
+        self.on_drag, self.on_drop = on_drag, on_drop        # on_drag(poso, x, y) while a player is dragged (x, y in the diagram's units), on_drop(poso) when he is let go
+        self._press = None                                   # [poso, mouse x, mouse y, moved] of the player the button went down on
         self._at = {}
         if on_pick is not None:
             self.bind("<Button-1>", lambda e: self._hit(e, self.on_pick))
             self.bind("<Double-Button-1>", lambda e: self._hit(e, self.on_open))
             self.bind("<Motion>", lambda e: self.configure(cursor="hand2" if self._nearest(e.x, e.y) is not None else ""))
+        if on_drag is not None:
+            self.bind("<ButtonPress-1>", self._press_start, add="+")
+            self.bind("<B1-Motion>", self._dragging, add="+")
+            self.bind("<ButtonRelease-1>", self._press_end, add="+")
         if art_dir:
             try:
                 self.field_img = tk.PhotoImage(master=self, file=os.path.join(art_dir, "field.png"))
@@ -5714,6 +5722,24 @@ class PlayCanvas(tk.Canvas):
         poso = self._nearest(event.x, event.y)
         if poso is not None and callback is not None:
             callback(poso)
+
+    def _press_start(self, event):
+        poso = self._nearest(event.x, event.y)
+        self._press = [poso, event.x, event.y, False] if poso is not None else None
+
+    def _dragging(self, event):
+        pr = self._press
+        if pr is None or self.on_drag is None:
+            return
+        if not pr[3] and (event.x - pr[1]) ** 2 + (event.y - pr[2]) ** 2 < self.DRAG_START ** 2:
+            return                                          # still a click
+        pr[3] = True
+        self.on_drag(pr[0], (event.x - self.PAD) / self.SCALE, (event.y - self.PAD) / self.SCALE)
+
+    def _press_end(self, event):
+        pr, self._press = self._press, None
+        if pr is not None and pr[3] and self.on_drop is not None:
+            self.on_drop(pr[0])
 
     def draw_play(self, slots, side, lib, changed=(), reads=(), selected=None):
         """reads: the slots (poso) of the pass reads in order, drawn with the game's numbers 1 to 5; selected: the slot to ring."""
@@ -5793,7 +5819,7 @@ class PlayDesignerDialog(tk.Toplevel):
 
         steps = ttk.Frame(self)
         steps.pack(fill="x", padx=12, pady=(10, 0))
-        for n, text in ((1, "Pick a play to start from"), (2, "Click a player on the field and choose what he does"), (3, "Press Make custom play to save it")):
+        for n, text in ((1, "Pick a play to start from"), (2, "Click a player on the field and choose what he does, or drag him"), (3, "Press Make custom play to save it")):
             ttk.Label(steps, text=f" {n} ", font=("", 11, "bold"), foreground="#6aa8ff").pack(side="left")
             ttk.Label(steps, text=text + "        ").pack(side="left")
         self.lbl_hint = ttk.Label(self, wraplength=1180, justify="left", font=("", 10, "bold"), padding=(12, 6, 12, 0))
@@ -5838,7 +5864,8 @@ class PlayDesignerDialog(tk.Toplevel):
 
         mid = ttk.Frame(main)
         mid.pack(side="left", padx=10)
-        self.canvas = PlayCanvas(mid, art_dir=getattr(lib, "_ui_art", None), on_pick=self._pick_on_field, on_open=lambda poso: (self._pick_on_field(poso), self._change_slot()))
+        self.canvas = PlayCanvas(mid, art_dir=getattr(lib, "_ui_art", None), on_pick=self._pick_on_field, on_open=lambda poso: (self._pick_on_field(poso), self._change_slot()),
+                                 on_drag=self._drag_on_field, on_drop=self._drop_on_field)
         self.canvas.pack()
         self.lbl_info = ttk.Label(mid, wraplength=470, justify="left", padding=(0, 6, 0, 0))
         self.lbl_info.pack(anchor="w")
@@ -6126,13 +6153,39 @@ class PlayDesignerDialog(tk.Toplevel):
 
     def _draw(self):
         if self.detail is not None:
-            self.canvas.draw_play(self._slots_now(), self.detail["table"], self.lib, changed=set(self.overrides), reads=self._reads(), selected=self._selected_poso())
+            self.canvas.draw_play(self._slots_now(), self.detail["table"], self.lib, changed=set(self.overrides) | set(self.align_override), reads=self._reads(), selected=self._selected_poso())
 
     def _pick_on_field(self, poso):
         """A player was clicked on the field."""
         if self.slots.exists(str(poso)):
             self.slots.selection_set(str(poso))
             self.slots.see(str(poso))
+
+    def _drag_on_field(self, poso, ax, ay):
+        """A player of an offensive play is dragged on the field (ax, ay in the diagram's units): he stands where the mouse is, in the game's yards, to a quarter yard and inside the limits.
+        The places go into the new play's own set when it is made (the same as the Move players window); a play of the other sides cannot be saved, so it is not moved."""
+        d = self.detail
+        if d is None or d["side"] != "offense" or poso not in {s_["poso"] for s_ in d["slots"]}:
+            return
+        if self.slots.exists(str(poso)) and self._selected_poso() != poso:
+            self.slots.selection_set(str(poso))
+        x, y = self.lib.yard_map().yards(ax, ay)
+        x, y = max(-ALIGN_X, min(ALIGN_X, round(x * 4) / 4)), max(ALIGN_Y[0], min(ALIGN_Y[1], round(y * 4) / 4))
+        stock = self.stock_yards().get(poso)
+        now = self.align_override.get(poso, stock)
+        if (x, y) == now:
+            return
+        if stock is not None and abs(x - stock[0]) < 0.001 and abs(y - stock[1]) < 0.001:
+            self.align_override.pop(poso, None)
+        else:
+            self.align_override[poso] = (x, y)
+        label = next((s_["label"] for s_ in d["slots"] if s_["poso"] == poso), poso)
+        self._hint(f"{label}: {x:+.2f} yards across (plus is right), {-y:.2f} yards behind the line. Let go to leave him there.")
+        self._draw()
+
+    def _drop_on_field(self, poso):
+        self._refresh_make()
+        self._slot_selected()
 
     def _hint(self, text):
         self.lbl_hint.configure(text=text)
@@ -6142,16 +6195,16 @@ class PlayDesignerDialog(tk.Toplevel):
         ok = bool(sel) and self.detail is not None
         sl = next((s_ for s_ in self._slots_now() if s_["poso"] == int(sel[0])), None) if ok else None
         self.btn_change.configure(state="normal" if ok else "disabled", text=f"Change what {sl['label']} does..." if sl else "Change what he does...")
-        self.btn_reset_slot.configure(state="normal" if ok and sel[0] and int(sel[0]) in self.overrides else "disabled")
+        self.btn_reset_slot.configure(state="normal" if ok and sel[0] and (int(sel[0]) in self.overrides or int(sel[0]) in self.align_override) else "disabled")
         if self.detail is None:
             self._hint("Pick a play from the list on the left to start.")
         elif self.detail["side"] != "offense":
             self._hint(f"This is a {'defensive' if self.detail['side'] == 'defense' else 'special teams'} play: you can look at it and try changes here, but only offensive plays can be saved as custom plays for now.")
         elif not ok:
-            self._hint("Click a player on the field (or in the list) to change what he does." if not self.overrides else
+            self._hint("Click a player on the field (or in the list) to change what he does, or drag him to move him." if not (self.overrides or self.align_override) else
                        "Happy with it? Press Make custom play to save it. Click another player to change more, or Undo all to start again.")
         else:
-            self._hint(f"{sl['label']} is selected: press the blue button (or double-click him on the field) to choose what he does." if sl["poso"] not in self.overrides else
+            self._hint(f"{sl['label']} is selected: press the blue button (or double-click him on the field) to choose what he does, or drag him to move him." if sl["poso"] not in self.overrides and sl["poso"] not in self.align_override else
                        f"{sl['label']} was changed. Press the blue button to change him again, Undo this to put him back, or Make custom play to save.")
         if not ok:
             self.lbl_slot.configure(text="")
@@ -6188,8 +6241,9 @@ class PlayDesignerDialog(tk.Toplevel):
 
     def _reset_slot(self):
         sel = self.slots.selection()
-        if sel and int(sel[0]) in self.overrides:
-            del self.overrides[int(sel[0])]
+        if sel and (int(sel[0]) in self.overrides or int(sel[0]) in self.align_override):
+            self.overrides.pop(int(sel[0]), None)
+            self.align_override.pop(int(sel[0]), None)
             self._show()
 
     def _reset_play(self):
