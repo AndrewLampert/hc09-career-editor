@@ -1,7 +1,7 @@
 """
-Test plays: the seven custom plays of Part A of the test guide, worked out in one go so the editor can make and install them with a single button.
+Test plays: the nine custom plays of Part A of the test guide, worked out in one go so the editor can make and install them with a single button.
 
-Standard library only (no Tk). All seven start from the same stock play (Slants, set Big, formation Singleback) and each changes one thing, so that what the game does with
+Standard library only (no Tk). All nine start from the same stock play (Slants, set Big, formation Singleback) and each changes one thing (T9 two), so that what the game does with
 each kind of change can be told apart:
 
     T1  nothing (the control: does the game accept a custom play at all?)
@@ -10,10 +10,20 @@ each kind of change can be told apart:
     T4  the kind of play: triple option, in a set that has no triple option (the assignments come from other formations)
     T5  one receiver's route: WR1 runs an out, medium
     T6  the quarterback's reads: WR1 first, TE1 second
-    T7  one player's place: WR1 stands 7 yards from the middle of the field
+    T7  one player's place: WR1 stands 7 yards from the middle of the field (dragging a player on the field in the Play creator writes the same thing)
+    T8  the quarterback's named option: a rollout to the right
+    T9  a play-action pass whose quarterback is the named option "Play-action boot left"
 
 build_tests(lib, types, catalog) returns one spec per test (what to give hc09_plays.build_custom_play); report() writes the tester's answers as text for the chat.
 """
+
+NUMBER_WORDS = {1: "one", 7: "seven", 9: "nine"}
+
+
+def count_word(n):
+    """The number of tests in words, for the window's texts."""
+    return NUMBER_WORDS.get(n, str(n))
+
 
 BASE_PLAY = "Slants"
 BASE_SET = "Big"
@@ -41,14 +51,15 @@ def find_base(lib):
     return found[0]["plyl"]
 
 
-def kind_plan(lib, types, plyl, family):
+def kind_plan(lib, types, plyl, family, extra=None):
     """(overrides, plan) of turning a play into another kind of play, the way the Play creator does it (Change the kind of play, then Make custom play): the players whose
-    assignment does not fit change, and the plan names where the kind's tables are taken from."""
+    assignment does not fit change, and the plan names where the kind's tables are taken from. extra: assignments chosen by hand afterwards ({poso: entry}), which stay."""
     detail = lib.detail(plyl)
     setl = detail["set"]["setl"]
     stock = {sl["poso"]: (sl["psal"], sl["artl"], sl["plrr"]) for sl in detail["slots"]}
     first = types.convert(plyl, family, current=stock, keep=set())
     overrides = dict(first["overrides"])
+    overrides.update(extra or {})
     now = types.family_of_assignments(setl, {**stock, **overrides})
     if now != family:
         raise RuntimeError(f"The converted play does not come out as a {family} but as {now}.")
@@ -132,6 +143,28 @@ def build_tests(lib, types, catalog):
                               ("moved", f"He stands about {abs(x1):.0f} yards from the middle (not out by the sideline like in T1)", YES),
                               ("diagram", "The play's diagram in the playbook shows him moved", YES),
                               ("flip", "If the game lets you flip the play: the whole formation is the mirror image", ("", "yes", "no", "could not flip it"))), alignment={wr1["poso"]: (x1, y0)}))
+
+    qb = _slot(detail, "QB")
+    if qb is None:
+        raise RuntimeError("The test play has no QB, so the tests T8 and T9 cannot be made.")
+    qb_options = {c["label"]: c for c in catalog.choices("offense", 0, qb["dpos"], qb["x"])}
+    for label in ("Rollout right", "Play-action boot left"):
+        if label not in qb_options:
+            raise RuntimeError(f"The quarterback option '{label}' was not found, so the tests T8 and T9 cannot be made.")
+    roll = {qb["poso"]: qb_options["Rollout right"]["entry"]}
+    stock = {sl["poso"]: (sl["psal"], sl["artl"], sl["plrr"]) for sl in detail["slots"]}
+    if types.family_of_assignments(setl, {**stock, **roll}) != types.family_of_play(base):
+        raise RuntimeError("The rollout is not a dropback pass here, so test T8 cannot be made.")
+    tests.append(spec("T8", "T8 QB Rollout Right", "The quarterback's option: a rollout to the right", "The quarterback now runs a rollout to the right instead of dropping straight back; everything else is as in T1.",
+                      "After the snap the quarterback runs out to the right, away from the middle, and throws on the move. The receivers still run their slants.",
+                      _checks(("rolls", "The quarterback runs out to the right after the snap (he does not just drop straight back)", YES), ("throws", "He throws while he is moving", YES),
+                              ("routes", "The receivers run their routes as in T1", YES)), overrides=roll))
+    boot = {qb["poso"]: qb_options["Play-action boot left"]["entry"]}
+    ov, plan, first = kind_plan(lib, types, base, "play_action", extra=boot)
+    tests.append(spec("T9", "T9 PA Boot Left", "The quarterback's option: a play-action boot to the left", f"A play-action pass (as T2, {len(first['changes'])} players changed) whose quarterback fakes the handoff and then runs out to the left.",
+                      "The quarterback turns and fakes the handoff, then runs out to the left (away from the right-hand side where WR1 stands) and throws on the move. The back fakes, the linemen fire out and then pass block.",
+                      _checks(("fakes", "The quarterback fakes the handoff first", YES), ("boot", "Then he runs out to the left and not straight back", YES), ("throws", "He throws on the move", YES),
+                              ("back", "The back fakes taking the ball", YES)), overrides=ov, plan=plan))
     for t in tests:
         if len(t["name"]) > 24:
             raise RuntimeError(f"The name {t['name']} is longer than 24 characters.")
@@ -153,7 +186,7 @@ def report(state, tests, game=""):
     lines = ["**HC09 test plays results**"]
     made = state.get("made") or {}
     if made.get("playbook"):
-        lines.append(f"The seven plays were added to custom playbook {made['playbook']}" + (f" on {made['time']}" if made.get("time") else "") + ".")
+        lines.append(f"The {count_word(len(made.get('ids') or tests))} plays were added to custom playbook {made['playbook']}" + (f" on {made['time']}" if made.get("time") else "") + ".")
     if game:
         lines.append(game)
     lines.append("")

@@ -15,28 +15,28 @@ Two parts. **Part A** tests the custom plays the Play creator makes (about 10 mi
 
 | Part | What changes | Backup | Undo |
 |---|---|---|---|
-| A | your profile save and your career save (the two `USR-DATA` files), only when you press **Add the seven test plays to my game** (or **Add to my game** in the Play creator) | `Documents\hc09-test-backups\<date and time>\` (both files, every time) | **Put my saves back** in the same window (all the way back, or one step), or copy your own copies back |
+| A | your profile save and your career save (the two `USR-DATA` files), only when you press **Add the nine test plays to my game** (or **Add to my game** in the Play creator) | `Documents\hc09-test-backups\<date and time>\` (both files, every time) | **Put my saves back** in the same window (all the way back, or one step), or copy your own copies back |
 | B | a few numbers of one route in the game's two copies of its play database (`qkl_boot.ast` and the in-game copy in `qkl_fe2ig.ast`), only when you press **Apply this test** | the first time, the original of each entry in `Documents\hc09-game-file-backup\` | **Put the route back to the game's own** in the Route test window, which restores the numbers exactly (tested byte for byte) |
 
 If anything looks wrong or the game will not start: close RPCS3, press the undo button, and tell us what happened.
 
 ## Part A: the custom plays (the Test plays window)
 
-One button makes all seven test plays and adds them to your game; you then try them in the game and write down what you saw, in the same window. About 10 minutes in the editor, the rest in the game.
+One button makes all nine test plays and adds them to your game; you then try them in the game and write down what you saw, in the same window. About 10 minutes in the editor, the rest in the game.
 
 **First, make your team use the custom playbook** (otherwise the game never offers the test plays and "it is not in my playbook" would only mean your team plays another one): Playbooks tab, **Team playbooks** box, choose your team, and on the Offense row press **Change...** and pick a custom playbook (1 to 10); then **Save to File**. The Test plays window says which custom playbook it is going to use: the one your team plays if it plays a custom one, otherwise custom playbook 1 (and then it tells you your team does not play it yet).
 
 **In the editor** (RPCS3 closed, your career loaded):
 
 1. Playbooks tab, **Test plays (testers)...** (a few seconds to read the game's plays).
-2. Press **Add the seven test plays to my game** and say yes to the one question. The editor makes the seven plays, checks them, saves your own two files in `Documents\hc09-test-backups` and puts the new ones in place (about a minute). If it says it could not find your profile save, press **Details...** and pick the `USR-DATA` in the `BLUS30128-PROFILE-...` folder. **On Xenia (Xbox 360)** open your career from **Saves...** (Xenia saves are marked *(Xenia)*; if yours is not listed press *Look in another folder...* and pick Xenia's folder, the one that holds `content`, or load the `.mc02` with **Load Save File**). The profile is found next to it by what is in it; if the window says it could not find it, pick your profile's `.mc02` in **Details...**. If the editor cannot find your saves, tell us where Xenia keeps them (the folder path and what the folders under `content` are called).
+2. Press **Add the nine test plays to my game** and say yes to the one question. The editor makes the seven plays, checks them, saves your own two files in `Documents\hc09-test-backups` and puts the new ones in place (about a minute). If it says it could not find your profile save, press **Details...** and pick the `USR-DATA` in the `BLUS30128-PROFILE-...` folder. **On Xenia (Xbox 360)** open your career from **Saves...** (Xenia saves are marked *(Xenia)*; if yours is not listed press *Look in another folder...* and pick Xenia's folder, the one that holds `content`, or load the `.mc02` with **Load Save File**). The profile is found next to it by what is in it; if the window says it could not find it, pick your profile's `.mc02` in **Details...**. If the editor cannot find your saves, tell us where Xenia keeps them (the folder path and what the folders under `content` are called).
 3. Start RPCS3 and the game, load the career: open the offensive playbook, go to the custom playbook, then **Created Plays**.
 
-**If the game crashes or will not load the career with the seven in** (the editor adds them together, so a crash cannot be pinned on one play): close RPCS3, press **Put my saves back...** and **Yes**, then press **Add only T1 (the control)** and see whether the career loads with that one alone. Tell us which of the two worked.
+**If the game crashes or will not load the career with the nine in** (the editor adds them together, so a crash cannot be pinned on one play): close RPCS3, press **Put my saves back...** and **Yes**, then press **Add only T1 (the control)** and see whether the career loads with that one alone. Tell us which of the two worked.
 
 If you changed your team's playbook in the Playbooks tab while the window was open, the window picks that playbook when you press the button (unless you chose one by hand under **Details...**); the question it asks says which playbook and whether your team plays it. The editor also names the team (the one picked at the top of the editor), so check that it is yours.
 
-The seven plays are copies of **Slants** (formation Singleback, set Big) with one thing changed each, so that what the game does with each kind of change can be told apart:
+The nine plays are copies of **Slants** (formation Singleback, set Big) with one thing changed each (T9 two), so that what the game does with each kind of change can be told apart:
 
 | Test | What it is | What to look at |
 |---|---|---|
@@ -47,6 +47,8 @@ The seven plays are copies of **Slants** (formation Singleback, set Big) with on
 | **T5 WR Out** | one receiver's route: WR1 runs an out, medium | WR1 runs up the field, then toward the sideline |
 | **T6 Reads** | the quarterback's reads: WR1 first, TE1 second | on the play's diagram in the playbook the numbers 1 to 5 stand on the receivers in that order; with no pressure the quarterback looks to WR1 first |
 | **T7 Moved WR** (important) | one player's place: WR1 stands 7 yards from the middle instead of out by the sideline | before the snap WR1 stands about 7 yards from the middle of the field (near the hash marks, inside the numbers); the diagram shows him moved; if the game flips plays, the whole formation is the mirror image. **This is the one that matters most for what we can build next.** |
+| **T8 QB Rollout Right** | the quarterback's named option "Rollout right" instead of the usual dropback (everything else as T1) | after the snap the quarterback runs out to the right and throws while moving; the receivers still run their slants. This is the "rollout" you can pick for the quarterback in the Play creator |
+| **T9 PA Boot Left** | a play-action pass (as T2) whose quarterback is "Play-action boot left" | the quarterback fakes the handoff, then runs out to the left (away from the side WR1 stands on) and throws on the move; the back fakes, the linemen fire out and then pass block |
 
 **In the game**, for every test play: is it listed, with its name and a diagram that looks like the original? Can you call it without the game crashing or freezing? Run it two or three times and look at what the table says. Anything odd (players standing still, wrong formation, missing players, strange camera)?
 
@@ -121,17 +123,19 @@ Measure in yards as well as you can; "about twice as far", "turned toward the mi
 | **B12 to B14 are still glitchy** | the cut and the leg are linked in a way we have not found | more tests, and a closer look at the cut code |
 | **everything responds as above, and T1 to T3 work** | writing routes in place is possible | we build the route lab (draw a route, match it to the nearest one the game has, give up one of the game's single-use routes only if you insist), with these numbers |
 | **B1 works but the numbers behave in no pattern** | the file is read but we cannot yet say how | more tests with a simpler route |
-| **the game will not load the career with all seven, but loads it with T1 alone** | one of T2 to T7 breaks the game (T4, with assignments from other formations, is the likeliest) | add them one at a time from the Play creator (Add to my game) and tell us which one breaks it |
+| **the game will not load the career with all nine, but loads it with T1 alone** | one of T2 to T9 breaks the game (T4, with assignments from other formations, is the likeliest) | add them one at a time from the Play creator (Add to my game) and tell us which one breaks it |
 | **T1 fails** | custom plays made by the editor are not accepted at all | fix that first; Part B still answers the route question |
 | **T7: he lines up at the new place** | the game reads the new play's own alignment from the profile, so players can be moved without touching a game file | keep and extend it (also the flipped version, the motion groups) |
 | **T7: he lines up where T1 has him, but the diagram shows him moved** | the game takes the on-field alignment from its own sets, not from the profile | the same edit has to be made in the game files: a new test series like Part B |
 | **T7: he lines up somewhere else** (mirrored, further back ...) | the yards mean something else than we think | tell us where (yards from the middle and from the line) |
+| **T8 or T9: the quarterback just drops back (or does the plain play-action)** | the game does not read the quarterback's move numbers the way we think, or the named option is the plain one under another name | tell us what he did (which way, how far); the names of the options would need a second look |
+| **T8 and T9 work** | the quarterback's options can be picked by name | keep going: edit the plays you made, then more options |
 | **T1 works, T2/T3 do not** | changing the kind of a play is the problem | tell us which player does what |
 
 ## If something goes wrong
 
 - **The Route test says the file is in use:** close RPCS3 (and anything else that has `qkl_boot.ast` or `qkl_fe2ig.ast` open) and press the button again.
 - **The game will not start or crashes after a test:** close RPCS3, press **Put the route back to the game's own** (Part B) or **Put my saves back...** (Part A, in the Test plays window), and tell us the test number and what you saw. If the editor itself will not open the files, copy your own copy of the saves back and, for `qkl_boot.ast`, restore `Documents\hc09-game-file-backup\qkl_boot.ast.entry40.orig` with **Restore all to stock** in *Set personnel* (that puts the whole entry back, so it also undoes any Set personnel changes you made).
-- **The game will not load the career with the seven test plays in:** Put my saves back, then Add only T1 (see Part A).
+- **The game will not load the career with the nine test plays in:** Put my saves back, then Add only T1 (see Part A).
 - **RPCS3 is running:** the editor refuses to add plays or put saves back while it runs (it rewrites the saves when it closes).
 - **The editor says the career has unsaved changes:** save them (Save to File) or throw them away (Reload from File) and press the button again; the editor loads the career again after adding the plays, so it must not hold changes of its own.
