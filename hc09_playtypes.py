@@ -109,6 +109,10 @@ def behavior(sig):
     return "move"
 
 
+PEOPLE = (("backs", (1, 2)), ("tight ends", (4,)), ("wide receivers", (3,)))      # the roles of people a set has, by EPos
+NEEDS_SHARE = 0.85                                                            # a kind needs as many of a role as this share of the game's plays of the kind have
+
+
 class PlayTypes:
     """The kinds of play of a PlayLibrary's offensive plays: detection, comparison, validation and conversion."""
 
@@ -125,6 +129,9 @@ class PlayTypes:
         self.plyt_count = collections.defaultdict(collections.Counter)
         self.hole_count = collections.defaultdict(collections.Counter)
         self.per_values = collections.defaultdict(lambda: collections.defaultdict(list))
+        self.vpos_count = collections.defaultdict(collections.Counter)  # kind -> Counter of PBPL.vpos (the primary receiver of a pass, the ball carrier of a run)
+        self.people_count = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))   # kind -> role of people -> Counter of how many the stock plays' sets have
+        self._needs = {}
         self._custom_ids = set()                                      # mounted custom plays whose kind is known (see register_custom); not in the statistics
         self._twins = None
         self._index()
@@ -154,6 +161,9 @@ class PlayTypes:
             self.members[fam].append(plyl)
             self.by_set[s["setl"]][fam].append(plyl)
             self.plyt_count[fam][play["plyt"]] += 1
+            self.vpos_count[fam][play["vpos"]] += 1
+            for role, epos in PEOPLE:
+                self.people_count[fam][role][sum(1 for x in s["slots"] if x["epos"] in epos)] += 1
             for sl in s["slots"]:
                 row = slots.get(sl["poso"])
                 if row is None:
@@ -173,6 +183,35 @@ class PlayTypes:
             if pr is not None:
                 for k in range(1, 6):
                     self.per_values[fam][k].append((int(pr[f"rcv{k}"]), int(pr[f"per{k}"])))
+
+    def needs(self, fam):
+        """{role of people: how many a play of this kind needs}: the number that at least NEEDS_SHARE of the game's stock plays of the kind have in their sets (only roles that need one or more)."""
+        if fam not in self._needs:
+            out = {}
+            for role, _epos in PEOPLE:
+                c = self.people_count[fam][role]
+                total = sum(c.values())
+                if not total:
+                    continue
+                n = max((k for k in c if sum(v for kk, v in c.items() if kk >= k) / total >= NEEDS_SHARE), default=0)
+                if n >= 1:
+                    out[role] = n
+            self._needs[fam] = out
+        return self._needs[fam]
+
+    def warnings_for(self, setl, fam):
+        """What the set lacks for this kind of play, in words ([] when nothing): the game's plays of the kind nearly always have so many backs, tight ends or wide receivers in their sets, and a
+        role of the play (the man who takes the pitch ...) has nobody to do it in a set with fewer. Found in the first game test: a triple option in a one-back set had no pitch man."""
+        st = self.lib.sets.get(setl)
+        if st is None or fam not in FAMILY_NAME:
+            return []
+        out = []
+        for role, n in self.needs(fam).items():
+            have = sum(1 for x in st["slots"] if x["epos"] in dict(PEOPLE)[role])
+            if have < n:
+                extra = " Nobody takes the pitch." if fam in ("triple_option", "option_pass", "speed_option") and role == "backs" else ""
+                out.append(f"A {FAMILY_NAME[fam].lower()} needs at least {n} {role} (nine in ten of the game's have that many) and this set has {have}.{extra}")
+        return out
 
     def register_custom(self, plyls):
         """Remember the kind of the mounted custom plays of a profile (PlayLibrary.mount_custom) so that they can be opened and changed like any play. They are not counted in the
@@ -397,7 +436,13 @@ class PlayTypes:
         if sib is None:
             tables = self._tables_synth(target, plyl, out, s["setl"])
         issues = self.validate(s["setl"], out, target)
-        return {"family": target, "overrides": {poso: e for poso, e in out.items() if e != base.get(poso)}, "changes": changes, "plyt": plyt, "tables_from": sib,
+        if FAMILY_KIND[target] == "pass":
+            vpos = None                                        # the primary receiver follows from the reads (see hc09_plays.build_custom_play)
+        elif sib is not None:
+            vpos = lib.plays[sib]["vpos"]
+        else:
+            vpos = self.vpos_count[target].most_common(1)[0][0] if self.vpos_count[target] else play["vpos"]
+        return {"family": target, "vpos": vpos, "warnings": self.warnings_for(s["setl"], target), "overrides": {poso: e for poso, e in out.items() if e != base.get(poso)}, "changes": changes, "plyt": plyt, "tables_from": sib,
                 "tables": tables, "source": (f"the play \"{lib.plays[sib]['name']}\" of the same set" if sib is not None else
                            "the usual assignments of that kind of play, from other formations (no stock play of that kind uses this set, so they may not suit this alignment: less certain)"),
                 "issues": issues}
