@@ -58,7 +58,7 @@ export/import through HC09Editor required.
   play works as that kind. Any slot can be given any of the game's assignments, and
   **Make custom play...** (offense only for now; it is switched off, with a note, for defense and special
   teams) writes the result as a custom play into *copies* of your profile and career saves. The game has
-  not been tried with these files yet, so treat it as an experiment, with backups. **Pass reads...** sets the order the quarterback looks to his receivers, and **Move players...** puts the offensive players somewhere else on the field (both are written into the new play's own rows in your profile). See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
+  not been tried with these files yet, so treat it as an experiment, with backups. **Plays I made** (second entry of the Playbook list) opens the custom plays of your profile so that you can change them (**Save changes...**: into the play itself, or as a new play next to it). **Pass reads...** sets the order the quarterback looks to his receivers, and **Move players...** puts the offensive players somewhere else on the field (both are written into the new play's own rows in your profile). See [docs/hc09_play_creator.md](docs/hc09_play_creator.md).
   **Add to my game** (the button of the save window) does it in one go: it makes the play, puts it into
   your profile and career after saving them, and picks the custom playbook your team plays (else the first);
   **Put my saves back** undoes it. Testing it in the game: **Test plays (testers)...** makes nine test plays

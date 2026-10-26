@@ -56,6 +56,8 @@ The nine plays are copies of **Slants** (formation Singleback, set Big) with one
 
 When you are done, close RPCS3 and press **Put my saves back...** in the Test plays window, then **Yes** to get your files from before the first install (if you want to keep the test plays, skip this).
 
+**Changing a play you made** (optional, after the nine): Play creator, Playbook list, **Plays I made**, pick one of the test plays (T7 Moved WR is a good one), drag a player somewhere else or give someone another job, press **Save changes...** and **Save changes to this play** (one question). Close the editor's window if you like, start the game and look at the same play: it should have the new change and nothing else; the play must not appear twice. If you press **Save as a new play** instead, the changed play is added next to the first one. Tell us if the game shows the old version, shows both, or does not load the career.
+
 **Making one play by hand** (not part of the test): Playbooks tab, **Play creator...**, pick a play, change what you like, press **Make custom play...** and then **Add to my game** (one question; the same backups and the same Put my saves back). **Details...** has the files, the output folder and the playbook if you want to choose them yourself, and **Only make the files** makes the two copies without changing your game.
 
 ## Part B: the route numbers (the Route test window)

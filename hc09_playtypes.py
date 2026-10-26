@@ -125,6 +125,8 @@ class PlayTypes:
         self.plyt_count = collections.defaultdict(collections.Counter)
         self.hole_count = collections.defaultdict(collections.Counter)
         self.per_values = collections.defaultdict(lambda: collections.defaultdict(list))
+        self._custom_ids = set()                                      # mounted custom plays whose kind is known (see register_custom); not in the statistics
+        self._twins = None
         self._index()
 
     # ---- index
@@ -139,7 +141,7 @@ class PlayTypes:
         lib = self.lib
         for plyl, play in lib.plays.items():
             s = lib.sets.get(play["setl"])
-            if not s or s["side"] != "offense":
+            if not s or s["side"] != "offense" or plyl in lib.custom:
                 continue
             slots = lib.slot_rows.get(plyl, {})
             qb = next((x for x in s["slots"] if x["epos"] == 0), None)
@@ -171,6 +173,43 @@ class PlayTypes:
             if pr is not None:
                 for k in range(1, 6):
                     self.per_values[fam][k].append((int(pr[f"rcv{k}"]), int(pr[f"per{k}"])))
+
+    def register_custom(self, plyls):
+        """Remember the kind of the mounted custom plays of a profile (PlayLibrary.mount_custom) so that they can be opened and changed like any play. They are not counted in the
+        statistics that decide what a kind looks like; a previous registration is dropped."""
+        for k in self._custom_ids:
+            self.family.pop(k, None)
+        self._custom_ids = set()
+        lib = self.lib
+        for plyl in plyls:
+            s = lib.sets.get(lib.plays[plyl]["setl"]) if plyl in lib.plays else None
+            if not s or s["side"] != "offense":
+                continue
+            slots = lib.slot_rows.get(plyl, {})
+            qb = next((x for x in s["slots"] if x["epos"] == 0), None)
+            if qb is None or qb["poso"] not in slots:
+                continue
+            fam = qb_family(signature(self.steps.get(slots[qb["poso"]]["psal"], [])))
+            if fam is not None:
+                self.family[plyl] = fam
+                self._custom_ids.add(plyl)
+
+    def stock_twin(self, setl):
+        """The game's own set a custom set was copied from (the same eleven positions on the same diagram places), else the set itself: the plays of the twin are what a conversion of a
+        custom play takes its assignments from."""
+        from hc09_plays import CUSTOM_OFFSETS
+        if setl < CUSTOM_OFFSETS["SETL"] or setl not in self.lib.sets:
+            return setl
+        if self._twins is None:
+            self._twins = {}
+            for k, st in sorted(self.lib.sets.items()):
+                if k < CUSTOM_OFFSETS["SETL"] and st["side"] == "offense":
+                    self._twins.setdefault(self._set_key(st), k)
+        return self._twins.get(self._set_key(self.lib.sets[setl]), setl)
+
+    @staticmethod
+    def _set_key(st):
+        return tuple((x["poso"], x["epos"], x["dpos"], x["x"], x["y"]) for x in st["slots"])
 
     # ---- what a kind asks of each role
     def effective_role(self, fam, role):
@@ -315,7 +354,7 @@ class PlayTypes:
     def pick_sibling(self, setl, fam, cur, plyt, exclude=None):
         """The stock play of the kind in the same set that is closest to the current assignments (the most players the same, then the same PLYT)."""
         best, best_key = None, None
-        for q in self.by_set[setl][fam]:
+        for q in self.by_set[self.stock_twin(setl)][fam]:
             if q == exclude:
                 continue
             rows = self.lib.slot_rows.get(q, {})
