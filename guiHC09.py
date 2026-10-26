@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, DEFINITION_TABLES, missing_definitions, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -8379,7 +8379,16 @@ class PlaybookData:
         info = self.bgid_info.get((side, bgid))
         if info is None or (side, bgid) not in self.profile_bgids or not info["bokl"].isdigit() or not any(self.profile_rows.values()):
             return {t: [] for t in DEFINITION_TABLES}, []
-        return missing_definitions(self.profile_rows, self._career_rows(), int(info["bokl"]))
+        return missing_definitions(self.profile_rows, self._career_rows(), int(info["bokl"]), {x for x in self.stock_sets if x.isdigit()})
+
+    def clashing_plays(self, side, bgid):
+        """Names of the profile's custom plays in this playbook whose set number is one of the game's own sets (made by a version of the editor before 2026-10-26): the game reads its own set
+        instead (a punt return, a kneel ...) and can crash when the play is edited. They have to be deleted in the game (Manage Created Plays) and made again."""
+        info = self.bgid_info.get((side, bgid))
+        if info is None or (side, bgid) not in self.profile_bgids or not info["bokl"].isdigit():
+            return []
+        linked = {((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip()) for r in self.tables["PGPL"] if (r.get("BOKL") or "").strip() == info["bokl"]}
+        return [(r.get("name") or "").strip() for r in self.profile_rows["PBPL"] if ((r.get("SETL") or "").strip(), (r.get("PLYL") or "").strip()) in linked and (r.get("SETL") or "").strip() in self.stock_sets]
 
     def custom_book_problem(self, side, bgid):
         """What the career lacks to play this custom playbook, in words ('' when nothing): its own PLAB row and the definitions of its custom plays."""
@@ -8393,6 +8402,14 @@ class PlaybookData:
         if n:
             lacks.append(f"{n} of its custom play{'s' if n != 1 else ''}")
         return " and ".join(lacks)
+
+    def custom_book_warning(self, side, bgid):
+        """A sentence for the panel when custom plays of the playbook use a set number that is one of the game's own sets, else ''."""
+        clash = self.clashing_plays(side, bgid)
+        if not clash:
+            return ""
+        return (f"{len(clash)} custom play{'s' if len(clash) != 1 else ''} ({', '.join(clash[:3])}{', ...' if len(clash) > 3 else ''}) use a set number that is one of the game's own sets, so the game shows or crashes on them: "
+                "delete them in the game (Manage Created Plays) and make them again with this editor.")
 
     def ensure_custom_book(self, side, bgid):
         """Put what a career needs to play a custom playbook into it, as the game does when one is chosen at New Career: the profile's PLAB row of the playbook and the definitions of the
@@ -10319,8 +10336,9 @@ class App(tk.Tk):
             _b, co = data.team_book(self.model.coaches, tid, side, "coord")
             getattr(self, f"lbl_pb_{attr}").configure(text=hc or "-")
             missing = data.custom_book_problem(side, hc_bgid) if hc_bgid else ""
+            clash = data.custom_book_warning(side, hc_bgid) if hc_bgid else ""
             getattr(self, f"lbl_pb_{attr}_detail").configure(text=f"{coord}: {co or '-'}" + (
-                f"     This career lacks {missing} of this custom playbook, so the game shows no plays or wrong ones: press Change... and pick it again." if missing else ""))
+                f"     This career lacks {missing} of this custom playbook, so the game shows no plays or wrong ones: press Change... and pick it again." if missing else "") + (f"     {clash}" if clash else ""))
 
     def on_change_team_playbook(self, side):
         data = self._playbook_data
@@ -10358,7 +10376,8 @@ class App(tk.Tk):
             if data.dirty_tables:
                 self.model.pb_pending = {t: data.tables[t] for t in data.dirty_tables}
             if skipped:
-                messagebox.showwarning("Playbooks", "These custom plays were not copied into the career because their ids are already used there by other plays: " + ", ".join(skipped[:6]) + ".")
+                messagebox.showwarning("Playbooks", "These custom plays were not copied into the career because their set or play number is already used there or is one of the game's own sets (the game would read its own set instead): " + ", ".join(skipped[:6]) +
+                                       ". Delete them in the game (Manage Created Plays) and make them again with this editor.")
         else:
             for c in team_rows:
                 c[field] = bgid
@@ -12329,7 +12348,7 @@ class App(tk.Tk):
             raise RuntimeError("The bridge did not write every table: " + "; ".join(f"{r.get('table')}: {r.get('status')} {r.get('warnings') or ''}" for r in bad)[:400])
         return res
 
-    def _sync_career_definitions(self, out_profile, out_career, bokls):
+    def _sync_career_definitions(self, out_profile, out_career, bokls, stock_sets=()):
         """Give the career its own copy of the definitions of the custom plays it links into these playbooks (hc09_plays.missing_definitions): the game plays a career from its own copy, and
         without it the custom plays show default data. Both files are copies made by the caller. Returns the names of plays that could not be added."""
         names = list(DEFINITION_TABLES) + ["PGPL"]
@@ -12337,7 +12356,7 @@ class App(tk.Tk):
         in_profile, in_career = {t: rows for t, (_h, rows) in prof.items()}, {t: list(rows) for t, (_h, rows) in car.items()}
         add, skipped = {t: [] for t in DEFINITION_TABLES}, []
         for b in sorted(bokls):
-            rows, left_out = missing_definitions(in_profile, in_career, b)
+            rows, left_out = missing_definitions(in_profile, in_career, b, stock_sets)
             skipped += left_out
             for t, rs in rows.items():
                 add[t].extend(rs)
@@ -12388,7 +12407,7 @@ class App(tk.Tk):
             raise RuntimeError(str(e))
         if changed:
             self._replace_and_import(out_career, changed, car_now)
-        summary["left_out"] = self._sync_career_definitions(out_profile, out_career, bokls)
+        summary["left_out"] = self._sync_career_definitions(out_profile, out_career, bokls, [k for k in lib.sets if k < CUSTOM_OFFSETS["SETL"]])
         for path in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", path])
             if not ok.get("ok"):
@@ -12445,13 +12464,15 @@ class App(tk.Tk):
         shutil.copy2(career_path, out_career)
         ptables = ["PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM", "PGPL", "PGSS", "PGSL", "PGFM"]
         prof = self._export_tables(out_profile, ptables)
-        new, summary = build_custom_play(lib, base_plyl, name, overrides, {t: prof[t][1] for t in ptables}, plan=plan, reads=reads, alignment=alignment)
+        held = self._export_tables(out_career, ["PBPL", "SETL", "SETP", "SGFF"])          # ids the career holds (its copies of plays that may be gone from the profile) are not reused either
+        avoid = {"SETL": [r["SETL"] for r in held["SETL"][1]], "PLYL": [r["PLYL"] for r in held["PBPL"][1]], "SETP": [r["SETP"] for r in held["SETP"][1]], "SGF_": [r["SGF_"] for r in held["SGFF"][1]]}
+        new, summary = build_custom_play(lib, base_plyl, name, overrides, {t: prof[t][1] for t in ptables}, plan=plan, reads=reads, alignment=alignment, avoid=avoid)
         links = career_link_rows({"PGFM": prof["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
         self._append_and_import(out_profile, {**new, **links}, prof)
         car = self._export_tables(out_career, ["PGPL", "PGSS", "PGSL", "PGFM"])
         links_c = career_link_rows({"PGFM": car["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
         self._append_and_import(out_career, links_c, car)
-        summary["left_out"] = self._sync_career_definitions(out_profile, out_career, {bokl})      # the career's own copy of the play (and of the profile's other plays in this playbook)
+        summary["left_out"] = self._sync_career_definitions(out_profile, out_career, {bokl}, [k for k in lib.sets if k < CUSTOM_OFFSETS["SETL"]])      # the career's own copy of the play (and of the profile's other plays in this playbook)
         for p in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", p])
             if not ok.get("ok"):
