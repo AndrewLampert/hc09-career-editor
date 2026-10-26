@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, DEFINITION_TABLES, missing_definitions, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -4065,7 +4065,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
 PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
 PLAYBOOK_PLAYNAMES_FILE = "pppn.csv"     # the names each playbook gives its plays (PPPN); optional: without it the master names are shown
-PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB"]
+PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM"]
 # The tables that make up a playbook's contents, in CSV column order. PLAB is the playbook's own row: a career that plays a custom playbook (one from the profile) holds the
 # definition of it, put there by the game when the playbook is chosen (checked in every career that has one); without it the game shows the team no plays at all.
 PLAYBOOK_TABLE_HEADERS = {
@@ -4074,6 +4074,16 @@ PLAYBOOK_TABLE_HEADERS = {
     "PGSS": ["BOKL", "SETL"],                   # sets in a playbook
     "PGSL": ["BOKL", "SETL", "PBFM"],           # which formation each set sits under
     "PLAB": ["PI34", "BGID", "BORD", "BOFF", "PBGI", "BNAM", "PBAN", "PBPR"],   # the playbooks themselves (a career only has the custom ones it plays)
+    # the definitions of the custom plays (see hc09_plays.DEFINITION_TABLES): the game copies them from the profile into a career that plays a custom playbook
+    "PBPL": ["SETL", "PLYL", "SITT", "PLYT", "PLF_", "name", "risk", "motn", "vpos"],
+    "SETL": ["SETL", "FORM", "MOTN", "SETT", "SITT", "SLF_", "name", "poso"],
+    "SETP": ["SETL", "SETP", "SGT_", "arti", "opnm", "tabo", "poso", "odep", "flas", "DPos", "EPos", "fmtx", "artx", "fmty", "arty"],
+    "SETG": ["SETP", "SGF_", "SF__", "x___", "y___", "fx__", "fy__", "anm_", "dir_", "fanm", "fdir"],
+    "SGFF": ["SETL", "SGF_", "name", "dflt"],
+    "PLYS": ["PSAL", "ARTL", "PLYL", "PLRR", "poso"],
+    "PLPD": ["per1", "rcv1", "per2", "rcv2", "per3", "rcv3", "per4", "rcv4", "per5", "rcv5", "PLYL"],
+    "PLRD": ["PLYL", "hole"],
+    "PLCM": ["per1", "dir1", "ply1", "per2", "dir2", "ply2", "per3", "dir3", "ply3", "per4", "dir4", "ply4", "per5", "dir5", "ply5", "PLYL"],
 }
 PLAYBOOK_PLAY_CAP = 200   # in-game limit per playbook (200 offensive or 200 defensive), special teams not counted
 PLAYBOOK_CREATED_FORMATIONS = {"8190", "8191"}   # the per-save "Created Plays" formations (offense / defense)
@@ -8272,7 +8282,7 @@ class PlaybookPickerDialog(tk.Toplevel):
 
 # Playbooks 1-10 are the custom playbooks made in-game, and the custom plays and sets in them; their
 # names live in the HC09 profile save (BLUS30128-PROFILE-*), not in the career. Read-only.
-PLAYBOOK_PROFILE_TABLES = ("PLAB", "SETL", "PBPL", "PGPL")   # PGPL only to check the names belong to the career
+PLAYBOOK_PROFILE_TABLES = ("PLAB", "SETL", "PBPL", "PGPL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM")   # PGPL only to check the names belong to the career; the rest are the plays' definitions
 PLAYBOOK_NAME_MATCH = 0.8   # a custom playbook is named only if this share of its profile plays is in the career's
 
 
@@ -8310,6 +8320,7 @@ class PlaybookData:
         prof = self._custom_names_only(game, profile or {})
         self.profile_bgids = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()) for r in prof["plab"]}
         self.profile_plab = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()): dict(r) for r in prof["plab"]}   # the profile's definitions of its custom playbooks
+        self.profile_rows = {t: (profile or {}).get(t.lower(), []) for t in DEFINITION_TABLES}                                  # and of its custom plays
 
         self.book_names = defaultdict(list)
         self.book_side = {}
@@ -8360,15 +8371,45 @@ class PlaybookData:
         """Does the career hold the definition (PLAB row) of this playbook? Only custom playbooks need one there."""
         return any((r.get("BOFF") or "").strip() == side and (r.get("BGID") or "").strip() == bgid for r in self.tables["PLAB"])
 
+    def _career_rows(self):
+        return {t: self.tables[t] for t in DEFINITION_TABLES} | {"PGPL": self.tables["PGPL"]}
+
+    def missing_plays(self, side, bgid):
+        """({table: rows}, [names left out]) the career lacks of the custom plays the playbook holds (see hc09_plays.missing_definitions); nothing for a playbook that is not custom."""
+        info = self.bgid_info.get((side, bgid))
+        if info is None or (side, bgid) not in self.profile_bgids or not info["bokl"].isdigit() or not any(self.profile_rows.values()):
+            return {t: [] for t in DEFINITION_TABLES}, []
+        return missing_definitions(self.profile_rows, self._career_rows(), int(info["bokl"]))
+
+    def custom_book_problem(self, side, bgid):
+        """What the career lacks to play this custom playbook, in words ('' when nothing): its own PLAB row and the definitions of its custom plays."""
+        if (side, bgid) not in self.profile_bgids:
+            return ""
+        lacks = []
+        if not self.career_has_book(side, bgid):
+            lacks.append("the playbook itself")
+        rows, _skipped = self.missing_plays(side, bgid)
+        n = len(rows["PBPL"])
+        if n:
+            lacks.append(f"{n} of its custom play{'s' if n != 1 else ''}")
+        return " and ".join(lacks)
+
     def ensure_custom_book(self, side, bgid):
-        """Put the profile's PLAB row of a custom playbook into the career when the career has none (what the game does when a custom playbook is chosen at New Career): True if a row was
-        added. Without it a team that plays the playbook has no plays in the game."""
+        """Put what a career needs to play a custom playbook into it, as the game does when one is chosen at New Career: the profile's PLAB row of the playbook and the definitions of the
+        custom plays it holds (PBPL, SETL, SETP, SETG, SGFF, PLYS, PLPD, PLRD, PLCM). Without them the game shows the team no plays, or plays with default data. Returns (plab row added,
+        number of plays added, [names of plays that could not be added])."""
+        added_plab = False
         row = self.profile_plab.get((side, bgid))
-        if row is None or self.career_has_book(side, bgid):
-            return False
-        self.tables["PLAB"].append({h: row.get(h, "") for h in PLAYBOOK_TABLE_HEADERS["PLAB"]})
-        self.dirty_tables.add("PLAB")
-        return True
+        if row is not None and not self.career_has_book(side, bgid):
+            self.tables["PLAB"].append({h: row.get(h, "") for h in PLAYBOOK_TABLE_HEADERS["PLAB"]})
+            self.dirty_tables.add("PLAB")
+            added_plab = True
+        rows, skipped = self.missing_plays(side, bgid)
+        for t, rs in rows.items():
+            if rs:
+                self.tables[t].extend({h: r.get(h, "") for h in PLAYBOOK_TABLE_HEADERS[t]} for r in rs)
+                self.dirty_tables.add(t)
+        return added_plab, len(rows["PBPL"]), skipped
 
     @staticmethod
     def _custom_names_only(game, profile):
@@ -10277,9 +10318,9 @@ class App(tk.Tk):
             hc_bgid, hc = data.team_book(self.model.coaches, tid, side)
             _b, co = data.team_book(self.model.coaches, tid, side, "coord")
             getattr(self, f"lbl_pb_{attr}").configure(text=hc or "-")
-            missing = (side, hc_bgid) in data.profile_bgids and not data.career_has_book(side, hc_bgid)
+            missing = data.custom_book_problem(side, hc_bgid) if hc_bgid else ""
             getattr(self, f"lbl_pb_{attr}_detail").configure(text=f"{coord}: {co or '-'}" + (
-                "     This career has no definition of the custom playbook, so the game shows no plays: press Change... and pick it again." if missing else ""))
+                f"     This career lacks {missing} of this custom playbook, so the game shows no plays or wrong ones: press Change... and pick it again." if missing else ""))
 
     def on_change_team_playbook(self, side):
         data = self._playbook_data
@@ -10301,7 +10342,7 @@ class App(tk.Tk):
             return
         bgid, name, _bokl, bord = dlg.result
         custom = (side, bgid) in data.profile_bgids
-        if bgid == current and not (custom and not data.career_has_book(side, bgid)):       # the same playbook again repairs a custom one that has no definition in the career
+        if bgid == current and not (custom and data.custom_book_problem(side, bgid)):       # the same playbook again repairs a custom one the career lacks the definition of
             return
         if custom:
             # A custom playbook: the game stores it on the head coach's row only (the coordinators keep a game
@@ -10313,8 +10354,11 @@ class App(tk.Tk):
             self._set_pb_control(tid, side, "0")
             for c in hc_rows:
                 c[field] = bgid
-            if data.ensure_custom_book(side, bgid):
+            _plab, n_plays, skipped = data.ensure_custom_book(side, bgid)
+            if data.dirty_tables:
                 self.model.pb_pending = {t: data.tables[t] for t in data.dirty_tables}
+            if skipped:
+                messagebox.showwarning("Playbooks", "These custom plays were not copied into the career because their ids are already used there by other plays: " + ", ".join(skipped[:6]) + ".")
         else:
             for c in team_rows:
                 c[field] = bgid
@@ -12285,6 +12329,23 @@ class App(tk.Tk):
             raise RuntimeError("The bridge did not write every table: " + "; ".join(f"{r.get('table')}: {r.get('status')} {r.get('warnings') or ''}" for r in bad)[:400])
         return res
 
+    def _sync_career_definitions(self, out_profile, out_career, bokls):
+        """Give the career its own copy of the definitions of the custom plays it links into these playbooks (hc09_plays.missing_definitions): the game plays a career from its own copy, and
+        without it the custom plays show default data. Both files are copies made by the caller. Returns the names of plays that could not be added."""
+        names = list(DEFINITION_TABLES) + ["PGPL"]
+        prof, car = self._export_tables(out_profile, names), self._export_tables(out_career, names)
+        in_profile, in_career = {t: rows for t, (_h, rows) in prof.items()}, {t: list(rows) for t, (_h, rows) in car.items()}
+        add, skipped = {t: [] for t in DEFINITION_TABLES}, []
+        for b in sorted(bokls):
+            rows, left_out = missing_definitions(in_profile, in_career, b)
+            skipped += left_out
+            for t, rs in rows.items():
+                add[t].extend(rs)
+                in_career[t] = in_career[t] + rs
+        if any(add.values()):
+            self._append_and_import(out_career, add, car)
+        return skipped
+
     def update_custom_play_files(self, lib, plyl, name, overrides, profile_path, career_path, out_dir, plan=None, reads=None, alignment=None):
         """Change one of the profile's custom plays in place, in COPIES of the profile save and the career save (see update_custom_play); the originals are only read. plyl is the
         play's mounted id (load_my_plays). Returns the same kind of result as make_custom_play_files, so install_custom_play puts the copies in place."""
@@ -12318,6 +12379,16 @@ class App(tk.Tk):
                 for r in links:
                     r["PLTP"] = str(summary["plyt"])
                 self._replace_and_import(path, {"PGPL": t["PGPL"][1]}, t)
+        # the career's own copy of the play: brought up to date where it has one; added (with the profile's other plays of its playbooks) where it has none
+        dnames = list(DEFINITION_TABLES) + ["PGPL"]
+        prof_now, car_now = self._export_tables(out_profile, dnames), self._export_tables(out_career, dnames)
+        try:
+            changed = sync_play_definition({t: rows for t, (_h, rows) in prof_now.items()}, {t: rows for t, (_h, rows) in car_now.items()}, summary["setl"], summary["plyl"])
+        except ValueError as e:
+            raise RuntimeError(str(e))
+        if changed:
+            self._replace_and_import(out_career, changed, car_now)
+        summary["left_out"] = self._sync_career_definitions(out_profile, out_career, bokls)
         for path in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", path])
             if not ok.get("ok"):
@@ -12380,6 +12451,7 @@ class App(tk.Tk):
         car = self._export_tables(out_career, ["PGPL", "PGSS", "PGSL", "PGFM"])
         links_c = career_link_rows({"PGFM": car["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
         self._append_and_import(out_career, links_c, car)
+        summary["left_out"] = self._sync_career_definitions(out_profile, out_career, {bokl})      # the career's own copy of the play (and of the profile's other plays in this playbook)
         for p in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", p])
             if not ok.get("ok"):

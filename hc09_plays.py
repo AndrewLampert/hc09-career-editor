@@ -587,6 +587,10 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
         rows["SETP"].append({"SETL": new_setl, "SETP": ids["SETP"] + i, "SGT_": 0, "arti": 5 if sl["epos"] == 7 else 4, "opnm": 0, "tabo": sl["tabo"], "poso": sl["poso"], "odep": 0,
                              "flas": 0, "DPos": sl["dpos"], "EPos": sl["epos"], "fmtx": ax, "artx": ax, "fmty": ay, "arty": ay})
     groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == bset["setl"]]
+    # The pre-snap motion alignment groups (M1le ... M5ri, up to 8 of them next to the normal one) are copied only for a play that has pre-snap motion (step 45): the game's own custom plays
+    # keep the normal group and the one motion group they use, and the profile's group table holds just 100 rows, which nine groups per play would fill after eleven plays.
+    if not any(code == 45 for sl in d["slots"] for code, *_ in lib.steps_of(d["table"], overrides.get(sl["poso"], (sl["psal"],))[0])):
+        groups = [g for g in groups if g["dflt"] == "1"] or groups[:1]
     group_map = {}
     for i, g in enumerate(sorted(groups, key=lambda g: -int(g["dflt"]))):
         group_map[int(g["SGF_"])] = ids["SGF_"] + i
@@ -678,7 +682,7 @@ def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None
     old_groups = [g for g in profile.get("SGFF", []) if int(g["SETL"]) == orig_setl]
     old_groups.sort(key=lambda g: -int(g["dflt"]))
     new_groups = [int(g["SGF_"]) for g in new["SGFF"]]
-    if len(old_groups) != len(new_groups):
+    if len(old_groups) < len(new_groups):
         raise ValueError("The play's alignment groups are not the ones of its set, so it cannot be changed in place.")
     group_of_new = {ng: int(og["SGF_"]) for ng, og in zip(new_groups, old_groups)}
     old_setg = {(old_poso[int(r["SETP"])], int(r["SGF_"])): r for r in out["SETG"] if int(r["SETP"]) in old_poso}
@@ -703,6 +707,81 @@ def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None
     summary = {"setl": orig_setl, "plyl": orig_plyl, "name": name, "plyt": int(new["PBPL"][0]["PLYT"]), "from": info["name"], "slots_changed": sorted(overrides),
                "slots_moved": summ["slots_moved"], "mounted": plyl}
     return out, summary
+
+
+# ---------- the career's own copy of the custom plays
+# A custom play is DEFINED in the profile save (PBPL, SETL, SETP, SETG, SGFF, PLYS, PLPD, PLRD, PLCM) and only LINKED in a career (PGPL, PGSS, PGSL, PGFM). But the game plays a career from the
+# career's own copy: when a custom playbook is chosen at New Career the game copies the definitions of the profile's custom plays into the career (checked in the four careers made that
+# way: the same ids, the same rows), and a career without them shows the playbook's custom plays with default data (every player a quarterback on one spot, one name and one picture).
+DEFINITION_TABLES = ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM")
+
+
+def play_definition(tables, setl, plyl):
+    """The rows that define one custom play in a save's tables ({TABLE: [row dicts]}): its PBPL row, the SETL, SETP and SGFF rows of its set, the SETG rows of those SETP rows, and its
+    PLYS, PLPD, PLRD and PLCM rows. Returns {table: [rows]} (the rows themselves, not copies)."""
+    setps = [r for r in tables.get("SETP", []) if int(r["SETL"]) == setl]
+    ids = {int(r["SETP"]) for r in setps}
+    by_play = lambda t: [r for r in tables.get(t, []) if int(r["PLYL"]) == plyl]
+    return {"PBPL": [r for r in tables.get("PBPL", []) if int(r["SETL"]) == setl and int(r["PLYL"]) == plyl], "SETL": [r for r in tables.get("SETL", []) if int(r["SETL"]) == setl],
+            "SETP": setps, "SETG": [r for r in tables.get("SETG", []) if int(r["SETP"]) in ids], "SGFF": [r for r in tables.get("SGFF", []) if int(r["SETL"]) == setl],
+            "PLYS": by_play("PLYS"), "PLPD": by_play("PLPD"), "PLRD": by_play("PLRD"), "PLCM": by_play("PLCM")}
+
+
+def missing_definitions(profile, career, bokl):
+    """The definitions the career lacks for the custom plays it links into playbook bokl (PGPL): ({table: [rows to add]}, [names of plays that could not be added]). profile and career are
+    {TABLE: [row dicts]} with the DEFINITION_TABLES and, for the career, PGPL. A play is added with the ids it has in the profile (as the game does); one whose set or play id is already
+    used by a different play in the career is left out and named, not overwritten."""
+    mine = {(int(r["SETL"]), int(r["PLYL"])): r for r in profile.get("PBPL", [])}
+    have = {(int(r["SETL"]), int(r["PLYL"])) for r in career.get("PBPL", [])}
+    used_sets = {int(r["SETL"]) for r in career.get("SETL", [])}
+    used_plays = {int(r["PLYL"]) for r in career.get("PBPL", [])}
+    out, skipped, done = {t: [] for t in DEFINITION_TABLES}, [], set()
+    for r in career.get("PGPL", []):
+        if int(r["BOKL"]) != int(bokl):
+            continue
+        key = (int(r["SETL"]), int(r["PLYL"]))
+        if key not in mine or key in have or key in done:
+            continue
+        if key[0] in used_sets or key[1] in used_plays:
+            skipped.append(mine[key]["name"])
+            done.add(key)
+            continue
+        for t, rows in play_definition(profile, *key).items():
+            out[t].extend(dict(x) for x in rows)
+        done.add(key)
+        used_sets.add(key[0])
+        used_plays.add(key[1])
+    return out, skipped
+
+
+def sync_play_definition(profile, career, setl, plyl):
+    """The career's copy of one custom play made equal to the profile's, value by value ({table: the career table's whole row list} for the tables that changed): rows are matched by their
+    ids and none is added or taken out. Raises ValueError when the two copies do not have the same rows (then the play cannot be changed in the career in place). {} when the career has no copy."""
+    theirs, mine = play_definition(career, setl, plyl), play_definition(profile, setl, plyl)
+    if not theirs["PBPL"]:
+        return {}
+    keys = {"PBPL": ("SETL", "PLYL"), "SETL": ("SETL",), "SETP": ("SETP",), "SETG": ("SETP", "SGF_"), "SGFF": ("SGF_",), "PLYS": ("poso",), "PLPD": ("PLYL",), "PLCM": ("PLYL",)}
+    out = {}
+    for t in DEFINITION_TABLES:
+        a, b = theirs[t], mine[t]
+        if len(a) != len(b):
+            raise ValueError(f"The career's copy of the play has {len(a)} {t} row(s) and the profile's has {len(b)}, so the copy in the career cannot be brought up to date in place.")
+        if t == "PLRD":
+            pairs = list(zip(a, b))
+        else:
+            index = {tuple(r[k] for k in keys[t]): r for r in b}
+            pairs = [(x, index.get(tuple(x[k] for k in keys[t]))) for x in a]
+        changed = False
+        for x, y in pairs:
+            if y is None:
+                raise ValueError(f"The career's copy of the play has a {t} row that the profile's does not, so it cannot be brought up to date in place.")
+            for c in x:
+                if c in y and x[c] != y[c]:
+                    x[c] = y[c]
+                    changed = True
+        if changed:
+            out[t] = career[t]
+    return out
 
 
 def career_link_rows(career, bokl, new_setl, new_plyl, plyt):
