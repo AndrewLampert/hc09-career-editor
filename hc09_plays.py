@@ -545,7 +545,34 @@ def next_ids(profile):
     return {"SETL": top("SETL", "SETL"), "PLYL": top("PBPL", "PLYL"), "SETP": top("SETP", "SETP"), "SGF_": top("SGFF", "SGF_")}
 
 
-def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=None, reads=None, alignment=None):
+def free_ids(lib, profile, avoid=None, slots=11, groups=1):
+    """The ids for a new custom play: the smallest ones that are not used by the game's own play database, by the profile or by `avoid` (ids a career already holds): {"SETL": n, "PLYL": n,
+    "SETP": [one per slot], "SGF_": [one per alignment group]}. The game reads a set, a play, a slot or a group of the same id from ITS OWN data instead of the custom one when there is one
+    (found 2026-10-26: custom sets 66 to 74 are the game's Stop Clock, Twin TE WR, QB Kneel, Onside Return, FakePuntDirectSnap, Punt Max Protect and Punt Return Normal, which showed up in
+    their place, lined the players up like a punt return and crashed RPCS3 when edited), which is why the game itself picks ids that its own data does not have (checked on its 14 custom plays)."""
+    avoid = avoid or {}
+    big = CUSTOM_OFFSETS
+    used = {
+        "SETL": {k for k in lib.sets if k < big["SETL"]} | {int(r["SETL"]) for r in profile.get("SETL", [])} | {int(r["SETL"]) for r in profile.get("PBPL", [])},
+        "PLYL": {k for k in lib.plays if k < big["PLYL"]} | {int(r["PLYL"]) for r in profile.get("PBPL", [])},
+        "SETP": {int(r["SETP"]) for r in lib.tables["SETP"] if int(r["SETP"]) < big["SETP"]} | {int(r["SETP"]) for r in profile.get("SETP", [])},
+        "SGF_": {int(r["SGF_"]) for r in lib.tables["SGFF"] if int(r["SGF_"]) < big["SGF_"]} | {int(r["SGF_"]) for r in profile.get("SGFF", [])}}
+    for kind in used:
+        used[kind] |= {int(x) for x in avoid.get(kind, ())}
+
+    def take(kind, count, limit):
+        out, n = [], 1
+        while len(out) < count:
+            if n > limit:
+                raise ValueError("The profile has no free set or play ids left.")
+            if n not in used[kind]:
+                out.append(n)
+            n += 1
+        return out
+    return {"SETL": take("SETL", 1, 511)[0], "PLYL": take("PLYL", 1, 16383)[0], "SETP": take("SETP", slots, 32767), "SGF_": take("SGF_", groups, 32767)}
+
+
+def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=None, reads=None, alignment=None, avoid=None):
     """The rows of a new custom play made from the stock play base_plyl: {table: [row dicts with every column of that table as strings]} for the
     profile save (PBPL, SETL, SETP, SETG, SGFF, PLYS, and PLPD / PLRD / PLCM when the base play has them), and a summary.
     overrides: {poso: (PSAL, ARTL, PLRR)} replaces a slot's assignment with any step list of the game (PSAL, ARTL and PLRR taken from library entries).
@@ -557,15 +584,19 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
     written to the new set's own SETG rows of the normal alignment group (and to the flipped position of the slot that mirrors him) and, in the diagram's units, to its SETP rows;
     the pre-snap motion alignment groups are copied as they are.
     The alignment is the stock set's, in the diagram's units (a custom set keeps the diagram coordinates in both the formation and the art columns); each of
-    the set's alignment groups (the normal one and the pre-snap motion variants) is copied with its SETG rows. Ids come after the profile's own."""
+    the set's alignment groups (the normal one and the pre-snap motion variants) is copied with its SETG rows. Ids are the smallest that neither the game's own data nor the profile (nor
+    avoid, {"SETL", "PLYL", "SETP", "SGF_": ids a career holds}) uses, see free_ids."""
     d = lib.detail(base_plyl)
     base, bset = d["play"], d["set"]
     if len(name) > 24 or not name.strip():
         raise ValueError("A play name is 1 to 24 characters.")
-    ids = next_ids(profile)
+    groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == bset["setl"]]
+    # The pre-snap motion alignment groups (M1le ... M5ri, up to 8 of them next to the normal one) are copied only for a play that has pre-snap motion (step 45): the game's own custom plays
+    # keep the normal group and the one motion group they use, and the profile's group table holds just 100 rows, which nine groups per play would fill after eleven plays.
+    if not any(code == 45 for sl in d["slots"] for code, *_ in lib.steps_of(d["table"], overrides.get(sl["poso"], (sl["psal"],))[0])):
+        groups = [g for g in groups if g["dflt"] == "1"] or groups[:1]
+    ids = free_ids(lib, profile, avoid, slots=len(bset["slots"]), groups=len(groups))
     new_setl, new_plyl = ids["SETL"], ids["PLYL"]
-    if new_setl > 511 or new_plyl > 16383:
-        raise ValueError("The profile has no free set or play ids left.")
     rows = collections.defaultdict(list)
     ptype = plyt if plyt is not None else (plan["plyt"] if plan is not None else base["plyt"])
     rows["PBPL"].append({"SETL": new_setl, "PLYL": new_plyl, "SITT": 2, "PLYT": ptype, "PLF_": base["plf"], "name": name, "risk": 0, "motn": base["motn"], "vpos": base["vpos"]})
@@ -582,19 +613,14 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
     ymap = lib.yard_map() if moved else None
     setp_ids = {}
     for i, sl in enumerate(bset["slots"]):
-        setp_ids[sl["setp"]] = ids["SETP"] + i
+        setp_ids[sl["setp"]] = ids["SETP"][i]
         ax, ay = ymap.art(*moved[sl["poso"]]) if sl["poso"] in moved else (sl["x"], sl["y"])
-        rows["SETP"].append({"SETL": new_setl, "SETP": ids["SETP"] + i, "SGT_": 0, "arti": 5 if sl["epos"] == 7 else 4, "opnm": 0, "tabo": sl["tabo"], "poso": sl["poso"], "odep": 0,
+        rows["SETP"].append({"SETL": new_setl, "SETP": ids["SETP"][i], "SGT_": 0, "arti": 5 if sl["epos"] == 7 else 4, "opnm": 0, "tabo": sl["tabo"], "poso": sl["poso"], "odep": 0,
                              "flas": 0, "DPos": sl["dpos"], "EPos": sl["epos"], "fmtx": ax, "artx": ax, "fmty": ay, "arty": ay})
-    groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == bset["setl"]]
-    # The pre-snap motion alignment groups (M1le ... M5ri, up to 8 of them next to the normal one) are copied only for a play that has pre-snap motion (step 45): the game's own custom plays
-    # keep the normal group and the one motion group they use, and the profile's group table holds just 100 rows, which nine groups per play would fill after eleven plays.
-    if not any(code == 45 for sl in d["slots"] for code, *_ in lib.steps_of(d["table"], overrides.get(sl["poso"], (sl["psal"],))[0])):
-        groups = [g for g in groups if g["dflt"] == "1"] or groups[:1]
     group_map = {}
     for i, g in enumerate(sorted(groups, key=lambda g: -int(g["dflt"]))):
-        group_map[int(g["SGF_"])] = ids["SGF_"] + i
-        rows["SGFF"].append({"SETL": new_setl, "SGF_": ids["SGF_"] + i, "name": g["name"], "dflt": g["dflt"]})
+        group_map[int(g["SGF_"])] = ids["SGF_"][i]
+        rows["SGFF"].append({"SETL": new_setl, "SGF_": ids["SGF_"][i], "name": g["name"], "dflt": g["dflt"]})
     default_group = next((int(g["SGF_"]) for g in groups if g["dflt"] == "1"), None)
     poso_of_setp = {sl["setp"]: sl["poso"] for sl in bset["slots"]}
     for g in lib.tables["SETG"]:
@@ -727,10 +753,12 @@ def play_definition(tables, setl, plyl):
             "PLYS": by_play("PLYS"), "PLPD": by_play("PLPD"), "PLRD": by_play("PLRD"), "PLCM": by_play("PLCM")}
 
 
-def missing_definitions(profile, career, bokl):
+def missing_definitions(profile, career, bokl, stock_sets=None):
     """The definitions the career lacks for the custom plays it links into playbook bokl (PGPL): ({table: [rows to add]}, [names of plays that could not be added]). profile and career are
     {TABLE: [row dicts]} with the DEFINITION_TABLES and, for the career, PGPL. A play is added with the ids it has in the profile (as the game does); one whose set or play id is already
-    used by a different play in the career is left out and named, not overwritten."""
+    used by a different play in the career, or whose set id is one of the game's own sets (stock_sets, ids as numbers: the game would read its own set instead), is left out and named, not
+    overwritten."""
+    stock_sets = {int(x) for x in (stock_sets or ())}
     mine = {(int(r["SETL"]), int(r["PLYL"])): r for r in profile.get("PBPL", [])}
     have = {(int(r["SETL"]), int(r["PLYL"])) for r in career.get("PBPL", [])}
     used_sets = {int(r["SETL"]) for r in career.get("SETL", [])}
@@ -742,7 +770,7 @@ def missing_definitions(profile, career, bokl):
         key = (int(r["SETL"]), int(r["PLYL"]))
         if key not in mine or key in have or key in done:
             continue
-        if key[0] in used_sets or key[1] in used_plays:
+        if key[0] in used_sets or key[1] in used_plays or key[0] in stock_sets:
             skipped.append(mine[key]["name"])
             done.add(key)
             continue
