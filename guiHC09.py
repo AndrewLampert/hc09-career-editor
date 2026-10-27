@@ -11987,10 +11987,13 @@ class App(tk.Tk):
         why = self.install_blocker(career_path)
         if why:
             raise RuntimeError(why)
-        made = result.get("made_from") or {}
+        made, sources = result.get("made_from") or {}, result.get("made_sources") or {}
+        norm = lambda p_: os.path.normcase(os.path.abspath(p_))
         for name, given in (("profile", profile_path), ("career", career_path)):
-            if made.get(name) and os.path.normcase(os.path.abspath(made[name])) != os.path.normcase(os.path.abspath(given)):
-                raise RuntimeError(f"These files were made from another {name} save ({made[name]}), so they are not put over {given}. Make the files again with the save you want them in.")
+            # the files go over the save they were made from, or over the original save at the start of a chain of plays (each made from the copies the one before made)
+            allowed = {norm(x) for x in (made.get(name), sources.get(name)) if x}
+            if allowed and norm(given) not in allowed:
+                raise RuntimeError(f"These files were made from another {name} save ({sources.get(name) or made.get(name)}), so they are not put over {given}. Make the files again with the save you want them in.")
         pairs = [("profile", result["profile"], profile_path), ("career", result["career"], career_path)]
         for name, new, old in pairs:
             if not os.path.isfile(new) or not os.path.isfile(old):
@@ -12234,7 +12237,7 @@ class App(tk.Tk):
             if not ok.get("ok"):
                 raise RuntimeError(f"The structure check of {path} failed: {ok.get('issues')}")
         book = ", ".join(str(b) for b in sorted(bokls))
-        summary.update({"profile": out_profile, "career": out_career, "bokl": book, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "career_linked": career_linked})
+        summary.update({"profile": out_profile, "career": out_career, "bokl": book, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}, "career_linked": career_linked})
         summary["message"] = (f"Changed the custom play \"{name}\" (set {summary['setl']}, play {summary['plyl']}) in place; it is in custom playbook {book or '?'}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
@@ -12302,7 +12305,7 @@ class App(tk.Tk):
             ok = self.model.run_bridge(["verify-db", "--db", p])
             if not ok.get("ok"):
                 raise RuntimeError(f"The structure check of {p} failed: {ok.get('issues')}")
-        summary.update({"profile": out_profile, "career": out_career, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career)})
+        summary.update({"profile": out_profile, "career": out_career, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}})
         summary["message"] = (f"Made the custom play \"{name}\" (from {summary['from']}, set {summary['setl']}, play {summary['plyl']}) in playbook {bokl}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder (every career shares it) and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
