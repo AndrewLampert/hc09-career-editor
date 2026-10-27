@@ -7,8 +7,9 @@ Every table of the game's database is exactly full and the archive's entries fol
 END of qkl_boot.ast and points the table of contents at them (proven in the game: the play shows in the playbook, runs, and can be flipped and have its routes changed). This module only
 works out the ROWS from what the Play creator shows; the bridge puts them in, checks them and keeps what is needed to put the files back byte for byte. No Tk.
 
-Scope of this first version: offense; the play keeps the stock formation (a moved player would change the alignment of every play of the set: use a custom play or Make a game play for
-that); the play goes into playbooks that already hold the play it was made from (so its set is in them).
+A play whose players line up somewhere else than in the stock formation (set) needs a formation of its own: every play of a set shares its alignment, so moving a player in the stock set
+would move him in all of them (the set "Big" has 86 plays). Such a play gets a NEW set, a copy of the stock one with only the moved players' places changed (its slots, the places in each
+alignment group, the groups, the quick-sub packages, the compact copy's row of each slot), linked into the same playbooks as the stock set.
 """
 import copy
 
@@ -18,6 +19,8 @@ import hc09_plays as P
 ENTRIES = (40, 42, 46, 47)
 PASS_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "rcv"))
 TEXT_COLS = {"name", "PPPM"}
+LINK_TABLES = {"PGPL": ("BOKL", "SETL", "PLYL", "PLTP"), "PGSL": ("BOKL", "SETL", "PBFM"), "PGSS": ("BOKL", "SETL")}      # the playbook link tables of a save and their columns
+LINK_KEYS = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSL": ("BOKL", "SETL"), "PGSS": ("BOKL", "SETL")}
 
 
 def _num(row):
@@ -25,15 +28,36 @@ def _num(row):
     return {k: (str(v) if k in TEXT_COLS else int(v)) for k, v in row.items()}
 
 
+def _highest_free(used, count, top):
+    """`count` ids below `top` that are not in `used`, the highest first."""
+    out = []
+    for i in range(top - 1, 0, -1):
+        if i not in used:
+            out.append(i)
+            if len(out) == count:
+                return out
+    raise ValueError("The game has no free ids left for that.")
+
+
 def free_play_id(lib, taken=()):
     """The play id for a new play: the highest id below the game's highest that no play uses (the proven way: 7455 to 7458 were free), so the ids that custom plays take (the small
     numbers) and the ones the game gives to plays made in it later are left alone."""
     used = set(lib.plays) | {int(t) for t in taken}
-    top = max(used)
-    for i in range(top - 1, 0, -1):
-        if i not in used:
-            return i
-    raise ValueError("The game has no free play id.")
+    return _highest_free(used, 1, max(used))[0]
+
+
+def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None):
+    """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}, the highest free ones below the
+    game's highest (the small ones are what custom plays in a profile take). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added
+    sets, ids a save holds)."""
+    taken = taken or {}
+    quick = getattr(lib, "quick_subs", None) or {}
+    used = {"SETL": {int(k) for k in lib.sets}, "SETP": {int(r["SETP"]) for r in lib.tables["SETP"]}, "SGF_": {int(r["SGF_"]) for r in lib.tables["SGFF"]},
+            "SPF_": {int(r["SPF_"]) for r in quick.get("SPKF", [])}}
+    for k in used:
+        used[k] |= {int(x) for x in taken.get(k, ())}
+    return {"SETL": _highest_free(used["SETL"], 1, max(used["SETL"]))[0], "SETP": _highest_free(used["SETP"], slots, max(used["SETP"])),
+            "SGF_": _highest_free(used["SGF_"], groups, max(used["SGF_"])), "SPF_": _highest_free(used["SPF_"], packages, max(used["SPF_"] or {0})) if packages else []}
 
 
 def books_of(lib, base):
@@ -42,7 +66,7 @@ def books_of(lib, base):
 
 
 def moved_players(lib, base, alignment):
-    """The slots of an alignment that are not where the stock set has them (adding a play does not move players: the formation is shared by all plays of the set)."""
+    """The slots of an alignment that are not where the stock set has them."""
     stock = lib.alignment(lib.detail(base)["set"]["setl"])
     return sorted(poso for poso, (x, y) in (alignment or {}).items() if poso in stock and (abs(float(x) - stock[poso]["x"]) > 0.001 or abs(float(y) - stock[poso]["y"]) > 0.001))
 
@@ -60,17 +84,74 @@ def compact_row(setl, plyl, plyt, plpd=None, plrd=None):
     return row
 
 
-def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None):
-    """What the bridge needs for a new play id `plyl`, made from the stock play `base` as the Play creator shows it (overrides, plan, reads as in hc09_gamefiles.changes_for), put into
-    the playbooks `books`: {"plyl", "name", "base", "setl", "plyt", "books", "rows": {"40": {table: [row]}, "42": ..., "46": ..., "47": ...}}. Raises ValueError for what cannot be added."""
+def set_ids_needed(lib, base):
+    """How many ids a copy of the base play's set needs: (slots, alignment groups, quick-sub packages)."""
+    setl = lib.detail(base)["set"]["setl"]
+    quick = getattr(lib, "quick_subs", None) or {}
+    return (len([r for r in lib.tables["SETP"] if int(r["SETL"]) == setl]), len([g for g in lib.tables["SGFF"] if int(g["SETL"]) == setl]),
+            len([r for r in quick.get("SPKF", []) if int(r["SETL"]) == setl]))
+
+
+def new_set_rows(lib, base, new, alignment, ids, set_name):
+    """The rows of a copy of the base play's set with the moved players' places changed: ({"40": {SETL, SETP, SETG, SGFF, SPKF, SPKG}, "42": {SETP}}, the new set's id). The copy is the stock set's
+    own rows with only these values changed: the diagram places (SETP artx, arty) and the yards of the normal alignment group (SETG x___, y___, fx__, fy__, the flipped partner's too) of the players
+    that moved; the compact copy's rows hold the normal group's yards."""
+    d = lib.detail(base)
+    st = d["set"]
+    setl = int(st["setl"])
+    set_name = GF.clean_name(set_name)
+    setp_diff, setg_diff, dflt = GF.alignment_changes(lib, d, new, alignment)
+    stock_setl = next(r for r in lib.tables["SETL"] if int(r["SETL"]) == setl)
+    stock_setp = sorted((r for r in lib.tables["SETP"] if int(r["SETL"]) == setl), key=lambda r: int(r["poso"]))
+    groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == setl]
+    quick = getattr(lib, "quick_subs", None) or {}
+    packages = [r for r in quick.get("SPKF", []) if int(r["SETL"]) == setl]
+    if len(ids["SETP"]) != len(stock_setp) or len(ids["SGF_"]) != len(groups) or len(ids["SPF_"]) != len(packages):
+        raise ValueError("The ids do not fit the set.")
+    new_setl = ids["SETL"]
+    setp_map = {int(r["SETP"]): ids["SETP"][i] for i, r in enumerate(stock_setp)}
+    group_map = {int(g["SGF_"]): ids["SGF_"][i] for i, g in enumerate(groups)}
+    pack_map = {int(r["SPF_"]): ids["SPF_"][i] for i, r in enumerate(packages)}
+    poso_of = {int(r["SETP"]): int(r["poso"]) for r in stock_setp}
+    r40 = {"SETL": [{**stock_setl, "SETL": new_setl, "name": set_name}]}
+    clean = lambda row: {**row, "name": GF._text(row["name"])} if "name" in row else row
+    setp_rows = []
+    for r in stock_setp:
+        row = {**r, "SETL": new_setl, "SETP": setp_map[int(r["SETP"])]}
+        row.update({k: v for k, v in setp_diff.get(int(r["poso"]), {}).items()})
+        setp_rows.append(row)
+    r40["SETP"] = setp_rows
+    r40["SGFF"] = [clean({**g, "SETL": new_setl, "SGF_": group_map[int(g["SGF_"])]}) for g in groups]
+    setg_rows = []
+    for g in lib.tables["SETG"]:
+        if int(g["SETP"]) in setp_map and int(g["SGF_"]) in group_map:
+            row = {**g, "SETP": setp_map[int(g["SETP"])], "SGF_": group_map[int(g["SGF_"])]}
+            if dflt is not None and int(g["SGF_"]) == dflt:
+                row.update(setg_diff.get(poso_of[int(g["SETP"])], {}))
+            setg_rows.append(row)
+    r40["SETG"] = setg_rows
+    if packages:
+        r40["SPKF"] = [clean({**r, "SETL": new_setl, "SPF_": pack_map[int(r["SPF_"])]}) for r in packages]
+        r40["SPKG"] = [{**r, "SPF_": pack_map[int(r["SPF_"])]} for r in quick.get("SPKG", []) if int(r["SPF_"]) in pack_map]
+    new_dflt = group_map.get(dflt)
+    poso_of_new = {setp_map[old]: poso for old, poso in poso_of.items()}
+    yards = {poso_of_new[int(r["SETP"])]: r for r in setg_rows if int(r["SGF_"]) == new_dflt}
+    r42 = {"SETP": [{"SETL": new_setl, "x___": yards[int(r["poso"])]["x___"], "y___": yards[int(r["poso"])]["y___"], "poso": r["poso"], "DPos": r["DPos"], "EPos": r["EPos"]} for r in setp_rows]}
+    return {"40": r40, "42": r42}, new_setl
+
+
+def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False):
+    """What the bridge needs for a new play id `plyl`, made from the stock play `base` as the Play creator shows it (overrides, plan, reads, alignment as in hc09_gamefiles.changes_for), put into
+    the playbooks `books`: {"plyl", "name", "base", "setl", "new_set", "plyt", "books", "rows": {"40": {table: [row]}, "42": ..., "46": ..., "47": ...}}. When players are moved (or new_set is
+    asked for) the play gets a set of its own: set_name (its name), set_ids (free_set_ids) and book_pbfm ({playbook: the formation id the playbook gives the stock set}, the PBFM of its PGSL row)
+    are needed. Raises ValueError for what cannot be added."""
     name = GF.clean_name(name)
     d = lib.detail(base)
     if d["side"] != "offense":
         raise ValueError("Only offensive plays can be added for now.")
     if plyl in lib.plays:
         raise ValueError(f"The game already has a play {plyl}.")
-    if moved_players(lib, base, alignment):
-        raise ValueError("A player was moved: that changes the formation (the set), which every play of it shares. Use a custom play, or Make a game play, for a changed formation.")
+    own_set = bool(moved_players(lib, base, alignment)) or new_set
     have = set(books_of(lib, base))
     books = sorted({int(b) for b in books})
     if not books:
@@ -81,7 +162,17 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     _d, new = GF._new_rows(lib, base, overrides or {}, plan, reads, alignment)
     nb = new["PBPL"][0]
     plyt = int(nb["PLYT"])
-    setl = int(st["setl"])
+    stock_setl = int(st["setl"])
+    setl = stock_setl
+    extra40, extra42, extra47 = {}, {}, {}
+    if own_set:
+        if not set_name or not set_ids or book_pbfm is None:
+            raise ValueError("A play whose players are somewhere else than in the stock formation needs a formation of its own: a name for it and free ids are needed.")
+        if any(b not in book_pbfm for b in books):
+            raise ValueError("The formation of the play was not found in every playbook chosen.")
+        sets, setl = new_set_rows(lib, base, new, alignment, set_ids, set_name)
+        extra40, extra42 = sets["40"], sets["42"]
+        extra47 = {"PGSL": [{"BOKL": b, "SETL": setl, "PBFM": book_pbfm[b]} for b in books], "PGSS": [{"BOKL": b, "SETL": setl} for b in books]}
     base_play = lib.plays[base]
     pbpl = {"SETL": setl, "PLYL": plyl, "SITT": int(base_play["sitt"]), "PLYT": plyt, "PLF_": int(nb["PLF_"]), "name": name, "risk": int(nb["risk"]), "motn": int(nb["motn"]), "vpos": int(nb["vpos"])}
     plys = [{"PSAL": int(r["PSAL"]), "ARTL": int(r["ARTL"]), "PLYL": plyl, "PLRR": int(r["PLRR"]), "poso": int(r["poso"])} for r in new["PLYS"]]
@@ -98,10 +189,13 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     r40["PBAI"] = pbai
     row42 = compact_row(setl, plyl, plyt, (r40.get("PLPD") or [None])[0], (r40.get("PLRD") or [None])[0])
     r42 = {"PBPL": [row42], "PLYS": [{"PLYL": plyl, "PLRR": r["PLRR"], "poso": r["poso"]} for r in plys]}
-    rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]},
-            "47": {"PGPL": [{"BOKL": b, "SETL": setl, "PLYL": plyl, "PLTP": plyt} for b in books]}}
+    r47 = {"PGPL": [{"BOKL": b, "SETL": setl, "PLYL": plyl, "PLTP": plyt} for b in books]}
+    r40.update(extra40)
+    r42.update(extra42)
+    r47.update(extra47)
+    rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
-    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "plyt": plyt, "books": books, "rows": rows}
+    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "plyt": plyt, "books": books, "rows": rows}
 
 
 def merge(plays):
@@ -118,35 +212,64 @@ def merge(plays):
     return {"rows": rows, "plays": plays}
 
 
+def taken_ids(plays):
+    """The set ids the added plays already use: {"SETL": ..., "SETP": ..., "SGF_": ..., "SPF_": ...} (for free_set_ids)."""
+    out = {"SETL": [], "SETP": [], "SGF_": [], "SPF_": []}
+    for p in plays:
+        t = p["rows"]["40"]
+        out["SETL"] += [r["SETL"] for r in t.get("SETL", [])]
+        out["SETP"] += [r["SETP"] for r in t.get("SETP", [])]
+        out["SGF_"] += [r["SGF_"] for r in t.get("SGFF", [])]
+        out["SPF_"] += [r["SPF_"] for r in t.get("SPKF", [])]
+    return out
+
+
 def links_of(plays):
-    """The playbook links (PGPL rows) a save needs for the plays: [{BOKL, SETL, PLYL, PLTP}]."""
-    return [dict(r) for p in plays for r in p["rows"]["47"]["PGPL"]]
+    """The playbook links a save needs for the plays: {"PGPL": [...], "PGSL": [...], "PGSS": [...]} (the last two only for plays with a set of their own)."""
+    out = {t: [] for t in LINK_TABLES}
+    for p in plays:
+        for t in LINK_TABLES:
+            out[t] += [dict(r) for r in p["rows"]["47"].get(t, [])]
+    return out
 
 
-def insert_links(rows, links):
-    """The save's PGPL rows (dicts of strings) with the links added: a link that is there is not added twice. The game's own links come first in (BOKL, SETL, PLYL) order and the player's
-    own after them; a new link goes into the sorted block. Returns (rows, number added)."""
-    have = {(int(r["BOKL"]), int(r["SETL"]), int(r["PLYL"])) for r in rows}
-    key = lambda r: (int(r["BOKL"]), int(r["SETL"]), int(r["PLYL"]))
+def insert_rows(rows, new, keys):
+    """A link table's rows (dicts of strings) with the new rows added: one that is there is not added twice. The game's own rows come first in sorted order and the player's own after them; a new row
+    goes into the sorted block. Returns (rows, number added)."""
+    key = lambda r: tuple(int(r[k]) for k in keys)
+    have = {key(r) for r in rows}
     block = 0
     while block + 1 < len(rows) and key(rows[block]) <= key(rows[block + 1]):
         block += 1
-    block += 1 if rows else 0                                                    # the length of the sorted block at the start
+    block += 1 if rows else 0
     out, added = [dict(r) for r in rows], 0
-    for link in sorted(links, key=lambda r: (int(r["BOKL"]), int(r["SETL"]), int(r["PLYL"]))):
-        if (int(link["BOKL"]), int(link["SETL"]), int(link["PLYL"])) in have:
+    for n in sorted(new, key=key):
+        if key(n) in have:
             continue
         i = block
-        while i > 0 and key(out[i - 1]) > key(link):
+        while i > 0 and key(out[i - 1]) > key(n):
             i -= 1
-        out.insert(i, {"BOKL": str(link["BOKL"]), "SETL": str(link["SETL"]), "PLYL": str(link["PLYL"]), "PLTP": str(link["PLTP"])})
+        out.insert(i, {k: str(v) for k, v in n.items()})
+        have.add(key(n))
         block += 1
         added += 1
     return out, added
+
+
+def insert_links(rows, links):
+    """insert_rows for PGPL (kept under its first name)."""
+    return insert_rows(rows, links, LINK_KEYS["PGPL"])
 
 
 def remove_links(rows, plyls):
     """The save's PGPL rows without the links of these plays. Returns (rows, number removed)."""
     gone = {int(p) for p in plyls}
     out = [dict(r) for r in rows if int(r["PLYL"]) not in gone]
+    return out, len(rows) - len(out)
+
+
+def remove_set_links(rows, setls):
+    """The save's PGSL or PGSS rows without the links of these (added) sets. Returns (rows, number removed)."""
+    gone = {int(s) for s in setls}
+    out = [dict(r) for r in rows if int(r["SETL"]) not in gone]
     return out, len(rows) - len(out)

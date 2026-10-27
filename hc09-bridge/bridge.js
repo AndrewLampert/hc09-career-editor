@@ -1375,13 +1375,18 @@ function parseArgs(argv) {
 //   add-play-restore --ast <qkl_boot.ast> --backup-dir <dir>    the original table-of-contents rows back and the archive cut to its original length: byte for byte the file before the first add.
 // Each entry is checked before anything is written: the structure (checksums, offsets, sizes), every table read back row by row, every table that was not touched byte for byte.
 const ADD_PLAY_ENTRIES = [40, 42, 46, 47];
-const ADD_PLAY_PLACE = {                       // per entry: table -> the columns its rows are sorted by (the game's own order, checked at run time: a table that is not sorted gets the rows at its end)
-    40: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'], PLPD: ['PLYL'], PLRD: ['PLYL'], PLCM: ['PLYL'], PBAI: ['BOKL'] },
-    42: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'] },
-    46: { PPPN: ['BOKL', 'PLYL'] },
-    47: { PGPL: ['BOKL', 'SETL', 'PLYL'] },
+const ADD_PLAY_PLACE = {                       // per entry: table -> { sort: the columns its rows are sorted by (the game's own order, checked at run time: a table that is not sorted gets the rows at its end), unique: the columns that identify a row (null: several rows may be alike) }
+    40: {
+        PBPL: { sort: ['PLYL'], unique: ['PLYL'] }, PLYS: { sort: ['PLYL', 'poso'], unique: ['PLYL', 'poso'] }, PLPD: { sort: ['PLYL'], unique: ['PLYL'] }, PLRD: { sort: ['PLYL'], unique: ['PLYL'] },
+        PLCM: { sort: ['PLYL'], unique: ['PLYL'] }, PBAI: { sort: ['BOKL'], unique: null },
+        // a new formation (set) for a play whose players are somewhere else than in the stock set: the set, its eleven slots, their places in each alignment group, the groups, the quick-sub packages
+        SETL: { sort: ['SETL'], unique: ['SETL'] }, SETP: { sort: ['SETL'], unique: ['SETP'] }, SETG: { sort: ['SETP', 'SGF_'], unique: ['SETP', 'SGF_'] }, SGFF: { sort: ['SETL'], unique: ['SGF_'] },
+        SPKF: { sort: ['SETL'], unique: ['SPF_'] }, SPKG: { sort: ['SPF_'], unique: ['SPF_', 'poso'] },
+    },
+    42: { PBPL: { sort: ['PLYL'], unique: ['PLYL'] }, PLYS: { sort: ['PLYL', 'poso'], unique: ['PLYL', 'poso'] }, SETP: { sort: ['SETL', 'poso'], unique: ['SETL', 'poso'] } },
+    46: { PPPN: { sort: ['BOKL', 'PLYL'], unique: ['BOKL', 'PLYL'] } },
+    47: { PGPL: { sort: ['BOKL', 'SETL', 'PLYL'], unique: ['BOKL', 'SETL', 'PLYL'] }, PGSL: { sort: ['BOKL'], unique: ['BOKL', 'SETL'] }, PGSS: { sort: ['BOKL', 'SETL'], unique: ['BOKL', 'SETL'] } },
 };
-const ADD_PLAY_UNIQUE = (table) => table !== 'PBAI';       // PBAI has several rows per book and play (the CPU's chances per situation)
 
 function tocGeometry(astPath) {
     const fd = fs.openSync(astPath, 'r');
@@ -1466,7 +1471,8 @@ async function buildAddPlayEntry(raw, place, rowsByTable) {
     const report = {};
     try {
         const expected = {};
-        for (const [tname, keys] of Object.entries(place)) {
+        for (const [tname, tplace] of Object.entries(place)) {
+            const keys = tplace.sort;
             const added = (rowsByTable || {})[tname];
             if (!added || added.length === 0) continue;
             const t = helper.file[tname];
@@ -1486,8 +1492,13 @@ async function buildAddPlayEntry(raw, place, rowsByTable) {
                 for (const c of Object.keys(r)) if (!names.includes(c)) throw new Error(`${tname} has no column ${c}`);
                 return Object.fromEntries(names.map((n) => [n, r[n] === undefined ? 0 : r[n]]));
             });
-            if (ADD_PLAY_UNIQUE(tname)) {
-                for (const r of rows) if (cur.some((c) => keyCompare(c, r, keys) === 0)) throw new Error(`${tname} already has a row for ${keys.map((k) => `${k} ${r[k]}`).join(', ')}`);
+            if (tplace.unique) {
+                const seen = new Set(cur.map((c) => tplace.unique.map((k) => Number(c[k])).join(',')));
+                for (const r of rows) {
+                    const id = tplace.unique.map((k) => Number(r[k])).join(',');
+                    if (seen.has(id)) throw new Error(`${tname} already has a row for ${tplace.unique.map((k) => `${k} ${r[k]}`).join(', ')}`);
+                    seen.add(id);
+                }
             }
             const sorted = isSortedBy(cur, keys);
             const items = cur.map((v, o) => ({ o, v }));                          // o: the row's place before, -1 for a new row
