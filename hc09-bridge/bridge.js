@@ -1412,17 +1412,78 @@ function parseArgs(argv) {
 //              plays: [ anything the editor wants to get back from add-play-state ] }
 //     The spec holds the rows of ALL the plays that are to be in the game files: the archive is first put back to the state before the first add (the original table-of-contents rows and archive length,
 //     kept in <dir>/<archive>.addplay.json), then every entry is built again from the untouched originals, so the file grows by the four entries once, not once per add, and editing an added play is a rebuild.
+//   add-play-layout --ast <qkl_boot.ast>      which entries of this archive Add a play uses (by what they hold) and the tables of every database entry: for a version of the game it does not know
 //   add-play-state --ast <qkl_boot.ast> --backup-dir <dir>      what is added now (the 'plays' of the last spec)
 //   add-play-restore --ast <qkl_boot.ast> --backup-dir <dir>    the original table-of-contents rows back and the archive cut to its original length: byte for byte the file before the first add.
 // Each entry is checked before anything is written: the structure (checksums, offsets, sizes), every table read back row by row, every table that was not touched byte for byte.
-const ADD_PLAY_ENTRIES = [40, 42, 46, 47];
-const ADD_PLAY_PLACE = {                       // per entry: table -> the columns its rows are sorted by (the game's own order, checked at run time: a table that is not sorted gets the rows at its end)
+// The four entries are named by the number they have in the PS3 game (their ROLE): 40 the master play database, 42 its compact copy, 46 the playbooks' names for the plays, 47 the user-profile template.
+// Another version of the game (the Xbox 360 files, a rebuilt archive) numbers them differently, so the bridge looks for each by what it holds (resolveAddPlayEntries); the spec and the report keep the roles.
+const ADD_PLAY_ROLES = [40, 42, 46, 47];
+const ADD_PLAY_HOLDS = { 40: ['PBPL', 'PLYS', 'PLPD', 'PBAI', 'SETL', 'SETP', 'SETG'], 42: ['PBPL', 'PLYS', 'SETP'], 46: ['PPPN'], 47: ['PGPL', 'PGSL', 'PGSS'] };
+const ADD_PLAY_PLACE = {                       // per role: table -> the columns its rows are sorted by (the game's own order, checked at run time: a table that is not sorted gets the rows at its end)
     40: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'], PLPD: ['PLYL'], PLRD: ['PLYL'], PLCM: ['PLYL'], PBAI: ['BOKL'] },
     42: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'] },
     46: { PPPN: ['BOKL', 'PLYL'] },
     47: { PGPL: ['BOKL', 'SETL', 'PLYL'] },
 };
 const ADD_PLAY_UNIQUE = (table) => table !== 'PBAI';       // PBAI has several rows per book and play (the CPU's chances per situation)
+
+const ADD_PLAY_MIN_ROWS = 100;                  // the templates (a career's or a profile's own) have the same tables with none or a few rows; the game's own play data has thousands
+function roleFits(role, tables) {                  // tables: Map table name -> its number of rows
+    if (!ADD_PLAY_HOLDS[role].every((n) => tables.has(n))) return false;
+    const big = (n) => (tables.get(n) || 0) >= ADD_PLAY_MIN_ROWS;
+    if (role === 40) return big('PBPL') && big('PLYS') && big('PBAI') && big('SETG');
+    if (role === 42) return big('PBPL') && big('PLYS') && !tables.has('PBAI') && !tables.has('SETG');           // the compact copy has no CPU rows and no alignment groups
+    if (role === 46) return big('PPPN');
+    return big('PGPL');
+}
+async function tableNamesOfEntry(ast, toc) {
+    if (toc.uncompressedSizeInt !== 0 || toc.fileSizeInt < 64) return null;       // a database entry is stored as it is and starts with "DB"
+    if (readEntryAt(ast, toc.startPositionInFile, 2).toString('latin1') !== 'DB') return null;
+    let tmp = null;
+    try {
+        const opened = await openEntryBuffer(readEntryAt(ast, toc.startPositionInFile, toc.fileSizeInt));
+        tmp = opened.tmp;
+        return new Map(opened.helper.file.tables.map((t) => [t.name, t.header.currentRecords]));
+    } catch (e) { return null; } finally { if (tmp) { try { fs.unlinkSync(tmp); } catch (x) { /* best effort */ } } }
+}
+// {map: role -> the entry number that holds it, missing: the roles not found, seen: {entry number: its table names}}. The usual places (the PS3 numbers) are looked at first; only when one of them does
+// not hold what its role needs is every database entry of the archive opened.
+async function scanAddPlayEntries(ast) {
+    const tocs = await readToc(ast);
+    const byIndex = new Map(tocs.map((t) => [t.index, t]));
+    const seen = {};
+    const names = async (idx) => {
+        if (!(idx in seen)) seen[idx] = byIndex.has(idx) ? await tableNamesOfEntry(ast, byIndex.get(idx)) : null;
+        return seen[idx];
+    };
+    const map = {};
+    for (const role of ADD_PLAY_ROLES) { const n = await names(role); if (n && roleFits(role, n)) map[role] = role; }
+    if (ADD_PLAY_ROLES.some((r) => map[r] === undefined)) {
+        const used = new Set(Object.values(map));
+        for (const t of tocs) {
+            if (ADD_PLAY_ROLES.every((r) => map[r] !== undefined)) break;
+            if (used.has(t.index)) continue;
+            const n = await names(t.index);
+            if (!n) continue;
+            for (const role of ADD_PLAY_ROLES) if (map[role] === undefined && roleFits(role, n)) { map[role] = t.index; used.add(t.index); break; }
+        }
+    }
+    return { map, missing: ADD_PLAY_ROLES.filter((r) => map[r] === undefined), seen };
+}
+async function resolveAddPlayEntries(ast) {
+    const { map, missing, seen } = await scanAddPlayEntries(ast);
+    if (missing.length) {
+        const found = Object.entries(seen).filter(([, v]) => v).map(([i, v]) => `${i}: ${[...v.keys()].slice(0, 8).join(',')}`).slice(0, 16).join('; ');
+        throw new Error(`${path.basename(ast)} has no database entry that holds ${missing.map((r) => ADD_PLAY_HOLDS[r].join('+')).join(' or ')}, so it is not a version of the game that Add a play knows (database entries found: ${found || 'none'})`);
+    }
+    return map;
+}
+async function cmdAddPlayLayout(args) {
+    if (!args.ast) throw new Error('add-play-layout needs --ast');
+    const { map, missing, seen } = await scanAddPlayEntries(args.ast);
+    console.log(JSON.stringify({ roles: map, missing, databaseEntries: Object.fromEntries(Object.entries(seen).filter(([, v]) => v).map(([i, v]) => [i, Object.fromEntries(v)])) }));
+}
 
 function tocGeometry(astPath) {
     const fd = fs.openSync(astPath, 'r');
@@ -1634,37 +1695,42 @@ async function cmdAddPlay(args) {
     const spec = JSON.parse(fs.readFileSync(args.spec, 'utf8'));
     const geo = tocGeometry(ast);
     let rec = loadAddPlayRecord(backupDir, ast);
+    const map = rec && rec.active ? (rec.entries || Object.fromEntries(ADD_PLAY_ROLES.map((r) => [r, r]))) : await resolveAddPlayEntries(ast);       // an add that is in place keeps the entries it used
+    const idxs = ADD_PLAY_ROLES.map((r) => map[r]);
     // Where the ORIGINAL entries are: they stay where they were (the grown copies are written after them), so they can be read while the grown ones are in use, and nothing is touched until every new
     // entry is built and checked: an add that cannot be done leaves the archive exactly as it was.
     let originalRows, originalLength;
     if (rec && rec.active) {
-        const now = readTocRows(ast, geo, ADD_PLAY_ENTRIES);
-        for (const idx of ADD_PLAY_ENTRIES) {
+        const now = readTocRows(ast, geo, idxs);
+        for (const idx of idxs) {
             if (rec.addedRows[idx] !== undefined && now[idx] !== rec.addedRows[idx]) throw new Error(`entry ${idx} of ${path.basename(ast)} was changed after the last add (outside the editor?): put the game files back from your own copy first`);
         }
         originalRows = rec.rows;
         originalLength = rec.originalLength;
     } else {
-        originalRows = readTocRows(ast, geo, ADD_PLAY_ENTRIES);
+        originalRows = readTocRows(ast, geo, idxs);
         originalLength = fs.statSync(ast).size;
     }
     const built = {};
     const report = {};
-    for (const idx of ADD_PLAY_ENTRIES) {
+    const roleOf = {};
+    for (const role of ADD_PLAY_ROLES) {
+        const idx = map[role];
+        roleOf[idx] = role;
         const orig = addPlayRowFields(geo, originalRows[idx]);
         if (orig.uncompressed !== 0) throw new Error(`entry ${idx} has an uncompressed size (${orig.uncompressed}): not a plain database entry`);
-        const rows = (spec.rows || {})[idx];
+        const rows = (spec.rows || {})[role];
         if (!rows || Object.values(rows).every((r) => !r || r.length === 0)) continue;
         const raw = readEntryAt(ast, orig.start, orig.size);
-        const b = await buildAddPlayEntry(raw, ADD_PLAY_PLACE[idx], rows);
+        const b = await buildAddPlayEntry(raw, ADD_PLAY_PLACE[role], rows);
         built[idx] = b.buf;
-        report[idx] = { before: raw.length, after: b.buf.length, tables: b.report };
+        report[role] = { index: idx, before: raw.length, after: b.buf.length, tables: b.report };
     }
     if (args.dry) { console.log(JSON.stringify({ dry: true, entries: report })); return; }
     if (Object.keys(built).length === 0) { console.log(JSON.stringify({ added: 0, entries: {} })); return; }
     if (rec && rec.active) await addPlayRestore(ast, backupDir);             // the state before the first add; the record of the originals stays
     // the record of the original state comes first, so that a put-back is possible whatever happens next
-    rec = { ast: path.resolve(ast), originalLength, rows: originalRows, active: false, plays: [], savedAt: new Date().toISOString() };
+    rec = { ast: path.resolve(ast), originalLength, rows: originalRows, entries: map, active: false, plays: [], savedAt: new Date().toISOString() };
     saveAddPlayRecord(backupDir, ast, rec);
     try {
         const fd = fs.openSync(ast, 'r+');
@@ -1688,7 +1754,7 @@ async function cmdAddPlay(args) {
         for (const idx of Object.keys(built).map(Number)) {
             const t = after.find((x) => x.index === idx);
             if (t.fileSizeInt !== built[idx].length || t.uncompressedSizeInt !== 0 || Buffer.compare(readEntryAt(ast, t.startPositionInFile, t.fileSizeInt), built[idx]) !== 0) throw new Error(`entry ${idx} is not what was written`);
-            report[idx].start = t.startPositionInFile;
+            report[roleOf[idx]].start = t.startPositionInFile;
         }
     } catch (e) {
         rec.active = true;                                    // so that the restore below knows there is something to undo
@@ -1699,7 +1765,7 @@ async function cmdAddPlay(args) {
     }
     rec.active = true;
     rec.plays = spec.plays || [];
-    rec.addedRows = readTocRows(ast, geo, ADD_PLAY_ENTRIES);
+    rec.addedRows = readTocRows(ast, geo, idxs);
     saveAddPlayRecord(backupDir, ast, rec);
     console.log(JSON.stringify({ added: (spec.plays || []).length, entries: report, archiveBytes: fs.statSync(ast).size, originalLength }));
 }
@@ -1751,6 +1817,8 @@ async function main() {
             await cmdEntryRelocate(args);
         } else if (cmd === 'add-play') {
             await cmdAddPlay(args);
+        } else if (cmd === 'add-play-layout') {
+            await cmdAddPlayLayout(args);
         } else if (cmd === 'add-play-state') {
             await cmdAddPlayState(args);
         } else if (cmd === 'add-play-restore') {
