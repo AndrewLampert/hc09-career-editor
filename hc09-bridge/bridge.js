@@ -885,6 +885,21 @@ function sameValue(have, want) {
     return Number(have) === Number(want);
 }
 
+// Backups are keyed by the archive's file name and the entry number in ONE folder, so two installs (a game and a copy of it) would share them. The backup says which archive it came from; an entry of
+// another archive is never written over a backup of this one, and a backup is never put into another archive (Codex review of the Set personnel tool).
+function sameArchive(a, b) {
+    const norm = (x) => { let r; try { r = fs.realpathSync(x); } catch (e) { r = path.resolve(x); } return process.platform === 'win32' ? r.toLowerCase() : r; };
+    return norm(a) === norm(b);
+}
+function checkBackupBelongs(target, backupDir) {
+    const base = path.join(backupDir, `${path.basename(target.ast)}.entry${target.index}`);
+    if (!fs.existsSync(base + '.json')) return;
+    const info = JSON.parse(fs.readFileSync(base + '.json', 'utf8'));
+    if (info.ast && !sameArchive(info.ast, target.ast)) {
+        throw new Error(`${path.basename(base)} in the backup folder is a backup of another archive (${info.ast}), not of ${path.resolve(target.ast)}; use another backup folder for this one, or put that one back first; nothing written`);
+    }
+}
+
 async function patchEntry(target, mode, backupDir) {
     const added = loadAddPlayRecord(backupDir, target.ast);
     if (added && added.active && target.start >= added.originalLength) {
@@ -974,6 +989,7 @@ async function patchEntry(target, mode, backupDir) {
         const nText = target.edits.reduce((n, e) => n + Object.values(e.set).filter((v) => typeof v === 'string').length, 0);
         if (nText === 0 && changed > 64 + 16 * nValues) throw new Error(`${changed} bytes would change for ${nValues} values; nothing written`);
         const result = { file: path.basename(target.ast), index: target.index, done, changedBytes: changed, written: false };
+        if (changed > 0) checkBackupBelongs(target, backupDir);
         if (mode === 'apply' && changed > 0) {
             fs.mkdirSync(backupDir, { recursive: true });
             const base = path.join(backupDir, `${path.basename(target.ast)}.entry${target.index}`);
@@ -997,12 +1013,16 @@ async function restoreEntry(target, backupDir) {
     const base = path.join(backupDir, `${path.basename(target.ast)}.entry${target.index}`);
     if (!fs.existsSync(base + '.json')) return { file: path.basename(target.ast), index: target.index, restored: false, reason: 'no backup' };
     const info = JSON.parse(fs.readFileSync(base + '.json', 'utf8'));
+    if (info.ast && !sameArchive(info.ast, target.ast)) {
+        throw new Error(`${path.basename(base)} is a backup of another archive (${info.ast}), not of ${path.resolve(target.ast)}; nothing written`);
+    }
     const orig = fs.readFileSync(base + '.orig');
     if (sha256(orig) !== info.sha256) throw new Error(`${path.basename(base)}.orig is damaged (checksum mismatch); nothing written`);
     const tocs = await readToc(target.ast);
     checkEntryPlace(tocs.find((t) => t.index === info.index), { ast: target.ast, index: info.index, start: info.start, size: info.size });
     writeIntoArchiveAt(target.ast, [{ position: info.start, buf: orig }]);
     const same = Buffer.compare(readEntryAt(target.ast, info.start, info.size), orig) === 0;
+    if (!same) throw new Error(`${path.basename(target.ast)} entry ${info.index} does not hold the original bytes after writing them back; do not use the game files until it is restored`);
     return { file: path.basename(target.ast), index: target.index, restored: true, identical: same };
 }
 
@@ -1116,7 +1136,28 @@ async function cmdEntryPatch(args) {
     const results = [];
     // check every entry before writing any of them
     if (mode !== 'restore') for (const t of cfg.targets) await patchEntry(t, 'dry', cfg.backupDir);
-    for (const t of cfg.targets) results.push(mode === 'restore' ? await restoreEntry(t, cfg.backupDir) : await patchEntry(t, mode, cfg.backupDir));
+    const undo = [];                                  // the entries as they were just before this call, so a failure in a later archive (read-only, in use) does not leave the change split across copies
+    try {
+        for (const t of cfg.targets) {
+            const before = mode === 'apply' ? readEntryAt(t.ast, t.start, t.size) : null;
+            try {
+                results.push(mode === 'restore' ? await restoreEntry(t, cfg.backupDir) : await patchEntry(t, mode, cfg.backupDir));
+            } catch (e) {
+                if (mode === 'apply' && Buffer.compare(readEntryAt(t.ast, t.start, t.size), before) !== 0) undo.push({ t, before });          // written in part: put back too
+                throw e;
+            }
+            if (mode === 'apply') undo.push({ t, before });
+        }
+    } catch (e) {
+        if (mode === 'apply' && undo.length) {
+            const failed = [];
+            for (const u of undo.reverse()) {
+                try { writeIntoArchiveAt(u.t.ast, [{ position: u.t.start, buf: u.before }]); } catch (x) { failed.push(`${path.basename(u.t.ast)} #${u.t.index}`); }
+            }
+            throw new Error(`${e.message}. The entries written before it were put back${failed.length ? `, EXCEPT ${failed.join(', ')} (restore from the backup)` : ''}`);
+        }
+        throw e;
+    }
     console.log(JSON.stringify({ mode, results }));
 }
 
