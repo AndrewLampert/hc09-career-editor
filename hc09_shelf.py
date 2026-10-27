@@ -70,6 +70,23 @@ def inside(path, root):
     return a.startswith(b)
 
 
+def in_entry(path, root):
+    """Is `path` inside a SHELVED SAVE of the shelf at `root` (a folder with a shelf.json between the path and the shelf's top)? Only those are not saves of the game: a shelf folder may sit
+    above or beside live save folders, whose saves must stay listed."""
+    if not inside(path, root):
+        return False
+    top = os.path.normcase(os.path.abspath(root))
+    cur = os.path.dirname(os.path.abspath(path))
+    while os.path.normcase(cur) != top and len(cur) > len(top):
+        if os.path.isfile(os.path.join(cur, META)):
+            return True
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return False
+
+
 def _unique_dir(parent, label):
     """parent/label, or parent/label (2), (3)... when that exists."""
     path = os.path.join(parent, label)

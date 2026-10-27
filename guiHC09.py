@@ -6058,8 +6058,8 @@ class ShelfDialog(tk.Toplevel):
         folder = filedialog.askdirectory(title="Pick the folder the shelf lives in (it can be on another drive)", parent=self, initialdir=self.shelf.root if os.path.isdir(self.shelf.root) else None)
         if not folder:
             return
-        if any(SHELF.inside(folder, sv["root"]) for sv in self.game):
-            messagebox.showerror("Save shelf", "That folder is inside a folder where the game keeps its saves, so the game and the editor would list the shelved saves as saves of the game. Pick another folder.", parent=self)
+        if any(SHELF.inside(folder, sv["root"]) or SHELF.inside(sv["root"], folder) for sv in self.game):
+            messagebox.showerror("Save shelf", "That folder is inside, or holds, a folder where the game keeps its saves, so the shelved saves and the game's own would be mixed up. Pick another folder.", parent=self)
             return
         self.app.ui_prefs["shelf_dir"] = folder
         save_ui_prefs(self.app.ui_prefs)
@@ -11272,7 +11272,7 @@ class App(tk.Tk):
                               "size": sv["size"], "root": sv["root"], "platform": "pcport"})
         if SHELF is not None:                       # saves on the shelf are not saves of the game, even when the shelf folder sits inside a folder that is searched
             shelf_root = self.ui_prefs.get("shelf_dir") or SHELF.default_shelf_dir()
-            found = [f for f in found if not SHELF.inside(f["path"], shelf_root)]
+            found = [f for f in found if not SHELF.in_entry(f["path"], shelf_root)]
         return sorted(found, key=lambda s: -s["mtime"])
 
     def _detected_game_file(self, name):
