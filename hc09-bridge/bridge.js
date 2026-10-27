@@ -785,8 +785,13 @@ function mergeRanges(a, b) {
 async function openEntryBuffer(buf) {
     const tmp = path.join(os.tmpdir(), `hc09_entry_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
     fs.writeFileSync(tmp, buf);
-    const helper = await openDb(tmp);
-    return { helper, tmp };
+    try {
+        const helper = await openDb(tmp);
+        return { helper, tmp };
+    } catch (e) {
+        try { fs.unlinkSync(tmp); } catch (x) { /* best effort */ }          // an entry that cannot be opened must not leave its temporary file behind (a scan of a whole archive tries many)
+        throw e;
+    }
 }
 
 function readEntryAt(astPath, start, size) {
