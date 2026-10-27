@@ -170,6 +170,13 @@ python guiHC09.py
    in the other port's install folder. **Saves...** looks there too, marks the careers *(HC09 PC 1.2)*, leaves the `Backups` folder out and pairs a career with the profile
    of the same game version; **Look in another folder...** takes the `Saves` folder (or the folder that holds it). This was written from the two projects' README pages and
    not checked against a real install, and whether the PC versions accept an edited save is untested: close the game first and back up the folder.
+   **Save shelf...** (a button in the Saves window) gets round the game's list of 10 saves: put a career away, bring it back later, or back it up as often as you like. A save is
+   one folder (in RPCS3, `savedata/BLUS30128-CAREER-<NAME>`); **Put on shelf** moves it out of the game into a shelf folder of your own (by default `Documents\hc09-save-shelf`; change it
+   to any drive), **Shelve a copy** backs it up and leaves the game's save alone, **Bring back** puts it where it came from, **Bring back a copy** restores a backup (the shelf keeps it) and
+   **Restore, replacing the game's** puts the save that is in the game on the shelf first, so nothing is lost. The shelf can have folders inside folders (for a dynasty, a season, "before the
+   playoffs") and a note on each save; a save on the shelf is not in the game, so it uses none of its 10 slots. The save's folder keeps its own name (the save remembers it), moves between
+   drives are copied and checked file by file before the original goes, and nothing moves while the game or an emulator is running or the save is open in the editor. RPCS3 and HC09 for PC
+   saves can be shelved; Xenia keeps a header file for each save in another folder, so those are not moved yet. Tested on copies only, not on a real emulator run.
    The first time you load a save it asks which team is yours and remembers the answer;
    switch teams any time from the list on the left.
 2. Edit players, stats, contracts, trades, picks, staff, playbooks, or the salary cap.

@@ -60,6 +60,11 @@ except ImportError:                  # without it the play designer still works,
     PlayTypes = None
 
 try:
+    import hc09_shelf as SHELF
+except ImportError:                  # without it only the Save shelf window is missing
+    SHELF = None
+
+try:
     import hc09_reference as GREF
 except ImportError:                  # without it only the Game reference window is missing
     GREF = None
@@ -5641,10 +5646,21 @@ class SavesDialog(tk.Toplevel):
         ttk.Button(row, text="Show folder", command=self._show_folder).pack(side="left", padx=(8, 0))
         ttk.Button(row, text="Look in another folder...", command=self._add_folder).pack(side="left", padx=(8, 0))
         ttk.Button(row, text="Search this computer", command=lambda: self._refresh(search=True)).pack(side="left", padx=(8, 0))
+        ttk.Button(row, text="Save shelf...", command=self._open_shelf).pack(side="right")
 
         self.bind("<Escape>", lambda e: self.destroy())
         self._refresh()
         self._rebuild_recent()
+
+    def _open_shelf(self):
+        """Save shelf...: put saves away (and back), or back them up, in a folder of your own."""
+        if SHELF is None:
+            messagebox.showerror("Save shelf", "hc09_shelf.py is missing next to the editor.", parent=self)
+            return
+        if getattr(self, "_shelf_dlg", None) is not None and self._shelf_dlg.winfo_exists():
+            self._shelf_dlg.lift()
+            return
+        self._shelf_dlg = ShelfDialog(self.app, on_change=self._refresh)
 
     def _refresh(self, search=False):
         self.config(cursor="watch")
@@ -5725,6 +5741,312 @@ class SavesDialog(tk.Toplevel):
     def _reopen_toggled(self):
         self.app.ui_prefs["reopen_last"] = bool(self.reopen_var.get())
         save_ui_prefs(self.app.ui_prefs)
+
+
+class ShelfDialog(tk.Toplevel):
+    """Save shelf: the career saves in the game's save folder on the left, your shelf (a folder of your own, with folders inside folders) on the right. The game lists 10 saves; the shelf is not in
+    the game, so any number of saves and backups can wait there. Put on shelf moves a save out of the game, Shelve a copy backs it up (the game keeps it), Bring back puts it where it came from,
+    Bring back a copy restores a backup (the shelf keeps it), and Replace puts the save that is in the game on the shelf first, so nothing is lost. See hc09_shelf.py."""
+
+    def __init__(self, app, on_change=None):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Save shelf")
+        self.transient(app)
+        self.geometry("1120x660")
+        self.minsize(940, 500)
+        self.app = app
+        self.on_change = on_change
+        self.shelf = SHELF.Shelf(app.ui_prefs.get("shelf_dir") or SHELF.default_shelf_dir())
+        self.game = []
+        self._shelf_rows = {}
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(10, 2))
+        self.lbl_where = ttk.Label(top, text="")
+        self.lbl_where.pack(side="left")
+        ttk.Button(top, text="Open shelf folder", command=self._show_shelf).pack(side="right")
+        ttk.Button(top, text="Change shelf folder...", command=self._change_dir).pack(side="right", padx=(0, 8))
+        self.lbl_note = ttk.Label(self, foreground="gray", wraplength=1080, justify="left", padding=(12, 0, 12, 6),
+                                  text="Close the game and the emulator first. A save on the shelf is not in the game, so it does not use one of its 10 slots. Moving a save keeps its folder name (the save remembers it). "
+                                       "Xenia saves cannot be moved yet (Xenia keeps a header file for each save elsewhere).")
+        self.lbl_note.pack(anchor="w")
+
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=12, pady=(6, 10))
+        self.lbl_status = ttk.Label(bottom, text="", foreground="gray", wraplength=900, justify="left")
+        self.lbl_status.pack(side="left")
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True, padx=12)
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(2, weight=1)
+        body.rowconfigure(1, weight=1)
+        self.lbl_game = ttk.Label(body, text="In the game", font=("", 11, "bold"))
+        self.lbl_game.grid(row=0, column=0, sticky="w")
+        ttk.Label(body, text="On the shelf", font=("", 11, "bold")).grid(row=0, column=2, sticky="w")
+
+        gframe = ttk.Frame(body)
+        gframe.grid(row=1, column=0, sticky="nsew")
+        self.tree_game = ttk.Treeview(gframe, columns=("saved", "size", "where"), selectmode="extended", height=12)
+        self.tree_game.heading("#0", text="Save")
+        self.tree_game.column("#0", width=200, anchor="w")
+        for c, (t, w, a) in zip(("saved", "size", "where"), [("Last saved", 120, "w"), ("Size", 62, "e"), ("Folder", 160, "w")]):
+            self.tree_game.heading(c, text=t)
+            self.tree_game.column(c, width=w, anchor=a, stretch=(c == "where"))
+        gs = ttk.Scrollbar(gframe, orient="vertical", command=self.tree_game.yview)
+        self.tree_game.configure(yscrollcommand=gs.set)
+        self.tree_game.pack(side="left", fill="both", expand=True)
+        gs.pack(side="right", fill="y")
+
+        mid = ttk.Frame(body)
+        mid.grid(row=1, column=1, padx=10)
+        for text, cmd in (("Put on shelf  →", lambda: self._put(copy=False)), ("Shelve a copy  →", lambda: self._put(copy=True))):
+            ttk.Button(mid, text=text, width=24, command=cmd).pack(pady=(0, 6))
+        ttk.Separator(mid, orient="horizontal").pack(fill="x", pady=6)
+        for text, cmd in (("←  Bring back", lambda: self._bring()), ("←  Bring back a copy", lambda: self._bring(copy=True)),
+                          ("←  Restore, replacing the game's", lambda: self._bring(copy=True, replace=True))):
+            ttk.Button(mid, text=text, width=28, command=cmd).pack(pady=(0, 6))
+
+        sframe = ttk.Frame(body)
+        sframe.grid(row=1, column=2, sticky="nsew")
+        self.tree_shelf = ttk.Treeview(sframe, columns=("saved", "size", "from"), selectmode="browse", height=12)
+        self.tree_shelf.heading("#0", text="Folder / save")
+        self.tree_shelf.column("#0", width=250, anchor="w")
+        for c, (t, w, a) in zip(("saved", "size", "from"), [("Last saved", 120, "w"), ("Size", 62, "e"), ("Came from", 150, "w")]):
+            self.tree_shelf.heading(c, text=t)
+            self.tree_shelf.column(c, width=w, anchor=a, stretch=(c == "from"))
+        ss = ttk.Scrollbar(sframe, orient="vertical", command=self.tree_shelf.yview)
+        self.tree_shelf.configure(yscrollcommand=ss.set)
+        self.tree_shelf.pack(side="left", fill="both", expand=True)
+        ss.pack(side="right", fill="y")
+        srow = ttk.Frame(body)
+        srow.grid(row=2, column=2, sticky="w", pady=(6, 0))
+        for text, cmd in (("New folder...", self._new_folder), ("Rename...", self._rename), ("Move to folder...", self._move_to), ("Note...", self._note)):
+            ttk.Button(srow, text=text, command=cmd).pack(side="left", padx=(0, 6))
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._refresh()
+
+    # ---- what is shown
+    def _refresh(self):
+        self.lbl_where.configure(text=f"Shelf: {self.shelf.root}")
+        self.game = self.app.detected_saves()
+        for iid in self.tree_game.get_children():
+            self.tree_game.delete(iid)
+        by_root = Counter(sv["root"] for sv in self.game if sv.get("platform", "rpcs3") == "rpcs3")
+        for i, sv in enumerate(self.game):
+            self.tree_game.insert("", tk.END, iid=str(i), text=sv["name"], values=(time.strftime("%Y-%m-%d %H:%M", time.localtime(sv["mtime"])), f"{sv['size'] / 1048576:.1f} MB", sv["root"]))
+        most = max(by_root.values(), default=0)
+        self.lbl_game.configure(text=f"In the game ({len(self.game)} career save{'s' if len(self.game) != 1 else ''}" + (f"; one folder holds {most}, the game lists 10" if most > 10 else "") + ")")
+        for iid in self.tree_shelf.get_children():
+            self.tree_shelf.delete(iid)
+        self._shelf_rows = {}
+        folders, entries = self.shelf.walk()
+        for rel in sorted(folders):
+            parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+            iid = "f:" + rel
+            self.tree_shelf.insert("f:" + parent if parent else "", tk.END, iid=iid, text=rel.rsplit("/", 1)[-1], open=True, values=("", "", ""))
+            self._shelf_rows[iid] = ("folder", rel)
+        for e in sorted(entries, key=lambda e: e["label"].lower()):
+            iid = "e:" + e["rel"]
+            parent = e["folder_rel"]
+            where = {"rpcs3": "RPCS3", "pcport": "HC09 PC", "xenia": "Xenia"}.get(e["meta"].get("platform"), "") + (" (backup)" if e["meta"].get("copy") else "")
+            self.tree_shelf.insert("f:" + parent if parent else "", tk.END, iid=iid, text=e["label"], values=(time.strftime("%Y-%m-%d %H:%M", time.localtime(e["mtime"])), f"{e['size'] / 1048576:.1f} MB", where))
+            self._shelf_rows[iid] = ("entry", e["rel"])
+        if self.on_change:
+            self.on_change()
+
+    def _say(self, text):
+        self.lbl_status.configure(text=text)
+
+    # ---- picking
+    def _game_picked(self):
+        return [self.game[int(i)] for i in self.tree_game.selection()]
+
+    def _shelf_picked(self):
+        sel = self.tree_shelf.selection()
+        return self._shelf_rows.get(sel[0]) if sel else None
+
+    def _target_folder(self):
+        pick = self._shelf_picked()
+        if not pick:
+            return ""
+        kind, rel = pick
+        return rel if kind == "folder" else (rel.rsplit("/", 1)[0] if "/" in rel else "")
+
+    def _guard(self):
+        if self.app._rpcs3_running():
+            messagebox.showerror("Save shelf", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return False
+        return True
+
+    # ---- saves in and out
+    def _put(self, copy):
+        saves = self._game_picked()
+        if not saves:
+            messagebox.showinfo("Save shelf", "Pick one or more saves on the left first.", parent=self)
+            return
+        if not self._guard():
+            return
+        folder = self._target_folder()
+        done, problems = [], []
+        for sv in saves:
+            if not copy and self.app._career_open(sv["path"]):
+                problems.append(f"{sv['name']}: it is open in the editor; open another save first.")
+                continue
+            label = None
+            if copy and len(saves) == 1:
+                label = simpledialog.askstring("Shelve a copy", "Name for the backup:", parent=self, initialvalue=f"{sv['name']} {time.strftime('%Y-%m-%d %H-%M')}")
+                if label is None:
+                    return
+            try:
+                self.shelf.put_away(sv, folder_rel=folder, label=label, copy=copy)
+                done.append(sv["name"])
+            except SHELF.ShelfError as e:
+                problems.append(f"{sv['name']}: {e}")
+        self._refresh()
+        self._say(("Shelved " + (", ".join(done) + ". ") if done else "") + (" ".join(problems) if problems else ""))
+        if problems:
+            messagebox.showerror("Save shelf", "\n".join(problems), parent=self)
+
+    def _bring(self, copy=False, replace=False):
+        pick = self._shelf_picked()
+        if not pick or pick[0] != "entry":
+            messagebox.showinfo("Save shelf", "Pick a saved game on the right first.", parent=self)
+            return
+        entry = self.shelf.entry(self.shelf._abs(pick[1]))
+        if entry is None:
+            self._refresh()
+            return
+        if not self._guard():
+            return
+        meta = entry["meta"]
+        if meta.get("platform") not in SHELF.MOVABLE:
+            messagebox.showerror("Save shelf", "That save cannot be put back by the shelf.", parent=self)
+            return
+        target = meta["root"]
+        if not os.path.isdir(target):
+            target = filedialog.askdirectory(title=f"The folder {meta['root']} is not there any more. Pick the folder the save goes into", parent=self)
+            if not target:
+                return
+        game_save = next((sv for sv in self.game if os.path.normcase(os.path.dirname(os.path.dirname(sv["path"]))) == os.path.normcase(os.path.abspath(target))
+                          and os.path.basename(os.path.dirname(sv["path"])) == meta["folder"]), None)
+        if replace:
+            if game_save and self.app._career_open(game_save["path"]):
+                messagebox.showerror("Save shelf", "The save in the game is open in the editor; open another save first.", parent=self)
+                return
+            if not messagebox.askyesno("Save shelf", f"Replace the save {meta['folder']} in the game with this one?\n\nThe save that is in the game now is put on the shelf first (next to this one), so nothing is lost.", parent=self):
+                return
+        try:
+            self.shelf.bring_back(entry, target_root=target, copy=copy, replace=replace, game_save=game_save)
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            self._say(str(e))
+            return
+        self._refresh()
+        self._say(f"{'Copied' if copy else 'Brought'} {entry['label']} back into the game.")
+
+    # ---- folders on the shelf
+    def _new_folder(self):
+        name = simpledialog.askstring("New folder", "Name of the new folder (inside the folder picked on the right, or at the top):", parent=self)
+        if not name:
+            return
+        try:
+            self.shelf.new_folder(self._target_folder(), name)
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            return
+        self._refresh()
+
+    def _rename(self):
+        pick = self._shelf_picked()
+        if not pick:
+            messagebox.showinfo("Save shelf", "Pick a folder or a saved game on the right first.", parent=self)
+            return
+        name = simpledialog.askstring("Rename", "New name:", parent=self, initialvalue=pick[1].rsplit("/", 1)[-1])
+        if not name:
+            return
+        try:
+            self.shelf.rename(pick[1], name)
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            return
+        self._refresh()
+
+    def _move_to(self):
+        pick = self._shelf_picked()
+        if not pick:
+            messagebox.showinfo("Save shelf", "Pick a folder or a saved game on the right first.", parent=self)
+            return
+        folders, _entries = self.shelf.walk()
+        own = pick[1] if pick[0] == "folder" else None
+        choices = [""] + [f for f in sorted(folders) if own is None or not (f == own or f.startswith(own + "/"))]
+        dlg = tk.Toplevel(self)
+        dlg.title("Move to folder")
+        dlg.transient(self)
+        dlg.geometry("360x360")
+        ttk.Label(dlg, text="Move to which folder?", padding=8).pack(anchor="w")
+        box = tk.Listbox(dlg, exportselection=False)
+        box.pack(fill="both", expand=True, padx=8)
+        for c in choices:
+            box.insert(tk.END, c or "(the top of the shelf)")
+        chosen = []
+
+        def ok():
+            sel = box.curselection()
+            if sel:
+                chosen.append(choices[sel[0]])
+            dlg.destroy()
+        row = ttk.Frame(dlg)
+        row.pack(fill="x", padx=8, pady=8)
+        ttk.Button(row, text="Move", style="Accent.TButton", command=ok).pack(side="right")
+        ttk.Button(row, text="Cancel", command=dlg.destroy).pack(side="right", padx=(0, 6))
+        box.bind("<Double-1>", lambda e: ok())
+        dlg.grab_set()
+        self.wait_window(dlg)
+        if not chosen:
+            return
+        try:
+            self.shelf.move_within(pick[1], chosen[0])
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            return
+        self._refresh()
+
+    def _note(self):
+        pick = self._shelf_picked()
+        if not pick or pick[0] != "entry":
+            messagebox.showinfo("Save shelf", "Pick a saved game on the right first.", parent=self)
+            return
+        entry = self.shelf.entry(self.shelf._abs(pick[1]))
+        note = simpledialog.askstring("Note", "A note for this saved game (week, trade, why you kept it):", parent=self, initialvalue=(entry["meta"].get("note") or "") if entry else "")
+        if note is None or entry is None:
+            return
+        self.shelf.set_note(pick[1], note)
+        self._say("Note saved.")
+
+    def _show_shelf(self):
+        try:
+            os.makedirs(self.shelf.root, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(self.shelf.root)
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", self.shelf.root])
+        except OSError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+
+    def _change_dir(self):
+        folder = filedialog.askdirectory(title="Pick the folder the shelf lives in (it can be on another drive)", parent=self, initialdir=self.shelf.root if os.path.isdir(self.shelf.root) else None)
+        if not folder:
+            return
+        self.app.ui_prefs["shelf_dir"] = folder
+        save_ui_prefs(self.app.ui_prefs)
+        self.shelf = SHELF.Shelf(folder)
+        self._refresh()
 
 
 PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 20: ("#d96ad0", 14, 6), 21: ("#e0c040", 12, 7)}   # zone step code (deep, curl, flat, hook) -> (colour, half width, half height)
@@ -10921,15 +11243,15 @@ class App(tk.Tk):
         a PC version's "(HC09 PC)" with the game version when it has one."""
         if hc09_detect is None:
             return []
-        found = hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))
+        found = [{**f, "platform": "rpcs3"} for f in hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))]
         for sv in hc09_detect.list_xenia_saves(self._detect_xenia_dirs(search)):
             if sv["kind"] == "career":
-                found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"]})
+                found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"], "platform": "xenia"})
         have = {os.path.normcase(os.path.abspath(f["path"])) for f in found}
         for sv in hc09_detect.list_pcport_saves(self._detect_pcport_roots()):
             if sv["kind"] == "career" and os.path.normcase(os.path.abspath(sv["path"])) not in have:
                 found.append({"name": f"{sv['name']} (HC09 PC{' ' + sv['version'] if sv['version'] else ''})", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"],
-                              "size": sv["size"], "root": sv["root"]})
+                              "size": sv["size"], "root": sv["root"], "platform": "pcport"})
         return sorted(found, key=lambda s: -s["mtime"])
 
     def _detected_game_file(self, name):
