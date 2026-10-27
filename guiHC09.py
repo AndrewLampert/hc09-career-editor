@@ -5878,6 +5878,15 @@ class ShelfDialog(tk.Toplevel):
         kind, rel = pick
         return rel if kind == "folder" else (rel.rsplit("/", 1)[0] if "/" in rel else "")
 
+    def _open_in_shelf(self, rel):
+        """Is the save open in the editor inside this place of the shelf? Then moving or renaming it would leave the editor with a path that is not there any more (a later Save to File would
+        fail), so it is refused with a message. (A save opened from the shelf through Load Save File or the recent list can be in there.)"""
+        path = getattr(self.app.model, "db_path", None)
+        if path and SHELF.inside(path, self.shelf._abs(rel)):
+            messagebox.showerror("Save shelf", "The save that is open in the editor is on the shelf there. Open another save first, then try again.", parent=self)
+            return True
+        return False
+
     def _guard(self):
         if self.app._rpcs3_running():
             messagebox.showerror("Save shelf", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
@@ -5924,6 +5933,8 @@ class ShelfDialog(tk.Toplevel):
             return
         if not self._guard():
             return
+        if not copy and self._open_in_shelf(pick[1]):
+            return
         meta = entry["meta"]
         if meta.get("platform") not in SHELF.MOVABLE:
             messagebox.showerror("Save shelf", "That save cannot be put back by the shelf.", parent=self)
@@ -5967,6 +5978,8 @@ class ShelfDialog(tk.Toplevel):
         if not pick:
             messagebox.showinfo("Save shelf", "Pick a folder or a saved game on the right first.", parent=self)
             return
+        if self._open_in_shelf(pick[1]):
+            return
         name = simpledialog.askstring("Rename", "New name:", parent=self, initialvalue=pick[1].rsplit("/", 1)[-1])
         if not name:
             return
@@ -5981,6 +5994,8 @@ class ShelfDialog(tk.Toplevel):
         pick = self._shelf_picked()
         if not pick:
             messagebox.showinfo("Save shelf", "Pick a folder or a saved game on the right first.", parent=self)
+            return
+        if self._open_in_shelf(pick[1]):
             return
         folders, _entries = self.shelf.walk()
         own = pick[1] if pick[0] == "folder" else None
