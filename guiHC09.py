@@ -50,6 +50,11 @@ except ImportError:                  # without it only changing a play in the ga
     GF = None
 
 try:
+    import hc09_addplay as AP
+except ImportError:                  # without it only adding a play to the game files is missing
+    AP = None
+
+try:
     from hc09_playtypes import PlayTypes, FAMILY_NAME, FAMILY_TEXT, FAMILY_KIND
 except ImportError:                  # without it the play designer still works, only the play types are missing
     PlayTypes = None
@@ -5013,6 +5018,45 @@ def load_personnel_data(model, archives, backup_dir=None, cache_dir=None):
     return data
 
 
+def link_plays_in_save(model, db_path, links=(), remove_plyls=()):
+    """The playbook links (PGPL) of a save: the links of plays added to the game files put in (a profile is what a NEW career copies its links from), and the links of plays that are no
+    longer in the game files taken out. The save is copied to <save>.bak first and put back if the write fails. Returns (added, removed)."""
+    tmp = tempfile.mkdtemp(prefix="hc09_link_")
+    try:
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PGPL"])
+        rows = read_csv_dicts(os.path.join(tmp, "pgpl.csv"))
+        removed = added = 0
+        if remove_plyls:
+            rows, removed = AP.remove_links(rows, remove_plyls)
+        if links:
+            rows, added = AP.insert_links(rows, links)
+        if not added and not removed:
+            return 0, 0
+        out = os.path.join(tmp, "in")
+        os.makedirs(out)
+        with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, lineterminator="\r\n")
+            w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
+            for r in rows:
+                w.writerow([r["BOKL"], r["SETL"], r["PLYL"], r["PLTP"]])
+        bak = db_path + ".bak"
+        shutil.copy2(db_path, bak)
+        try:
+            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", "PGPL", "--allow-append", "PGPL", "--allow-shrink", "PGPL"])
+            bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
+            if bad:
+                raise RuntimeError("The bridge did not write the playbook links: " + str(bad)[:300])
+            check = model.run_bridge(["verify-db", "--db", db_path])
+            if not check.get("ok"):
+                raise RuntimeError("The save does not check out after the links were written: " + str(check)[:300])
+        except Exception:
+            shutil.copy2(bak, db_path)
+            raise
+        return added, removed
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
     """Run bridge entry-patch on prepared targets (PersonnelData.edits_for / reset_edits_for); raises on any failure, in which
     case nothing was written (every entry is checked before the first write)."""
@@ -5031,7 +5075,11 @@ def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
 
 
 def restore_personnel_files(model, data, backup_dir=None):
-    """Write every backed-up entry back (all sets to stock). Returns the bridge's result."""
+    """Write every backed-up entry back (all sets to stock). Returns the bridge's result. The plays Add a play put into the game files come out first (the table of contents and the length of the
+    archive go back), so that the entries are where their own backups expect them."""
+    for ast in sorted({c["ast"] for c in data.copies}):
+        if os.path.basename(ast).lower() == "qkl_boot.ast":
+            model.run_bridge(["add-play-restore", "--ast", ast, "--backup-dir", backup_dir or PERSONNEL_BACKUP_DIR])
     cfg = os.path.join(tempfile.gettempdir(), f"hc09_personnel_restore_{os.getpid()}.json")
     targets = [{"ast": c["ast"], "index": c["index"], "start": c["start"], "size": c["size"], "edits": []} for c in data.copies]
     with open(cfg, "w", encoding="utf-8") as f:
@@ -5919,6 +5967,8 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_make.pack(side="right", padx=(0, 8))
         self.btn_files = ttk.Button(bottom, text="Make a game play...", command=self._open_game_files)
         self.btn_files.pack(side="right", padx=(0, 8))
+        self.btn_add = ttk.Button(bottom, text="Add a play...", command=self._open_add_play)
+        self.btn_add.pack(side="right", padx=(0, 8))
         self.lbl_make = ttk.Label(bottom, wraplength=500, justify="left", foreground="gray")
         self.lbl_make.pack(side="left")
         ttk.Button(bottom, text="All assignments (advanced)...", command=lambda: AssignmentPickerDialog(self.app, self, None, None)).pack(side="right", padx=(0, 8))
@@ -6185,6 +6235,7 @@ class PlayDesignerDialog(tk.Toplevel):
             state, note = "normal", ("This is one of your own plays: Save changes... puts the changes into it, or saves them as a new play." if self.is_mine() else "")
         self.btn_make.configure(state=state, text="Save changes..." if self.is_mine() else "Make custom play...")
         self.btn_files.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
+        self.btn_add.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None and AP is not None else "disabled")
         self.lbl_make.configure(text=note)
 
     def _job_text(self, sl):
@@ -6307,6 +6358,11 @@ class PlayDesignerDialog(tk.Toplevel):
         if self.detail is None or self.is_mine() or GF is None:
             return
         GameFilesDialog(self.app, self)
+
+    def _open_add_play(self):
+        if self.detail is None or self.is_mine() or GF is None or AP is None:
+            return
+        AddPlayDialog(self.app, self)
 
     def _make_custom(self):
         if self.detail is None:
@@ -7514,6 +7570,230 @@ class GameFilesDialog(tk.Toplevel):
         def done(result):
             self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}.")
             messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
+
+        app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
+
+
+class AddPlayDialog(tk.Toplevel):
+    """Add a play: the play shown in the designer, with the changes made there, added to the game's own play database as a NEW play (a normal play for the game: it can be flipped and hot-routed,
+    the quarterback adjusts, the CPU calls it), in the playbooks you pick. The game has no free rows, so the bridge writes bigger copies of the entries it changes at the end of qkl_boot.ast
+    (see hc09_addplay.py); Put the game files back restores the file byte for byte. The play's links also go into your profile, which is what a NEW career copies its playbooks from."""
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Add a play")
+        self.transient(designer)
+        self.geometry("860x700")
+        self.app, self.designer = app, designer
+        d = designer.detail
+        self.base = designer.plyl
+        self.boot = None
+        self.added = []
+        ttk.Label(self, text=f"Add {d['play']['name']} as a new play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=820, justify="left", padding=(14, 0, 14, 6),
+                  text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed, the quarterback adjusts and the CPU calls it. It keeps "
+                       "the formation of the play it was made from (a moved player is not added: that changes a formation every play of it shares). Close RPCS3 first. The first time, the "
+                       "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 on one play; "
+                       "the CPU's use and defense plays are not tried.").pack(anchor="w")
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=14, pady=(0, 4))
+        ttk.Label(form, text="Name of the play (24 characters):").grid(row=0, column=0, sticky="w", pady=3)
+        self.name_var = tk.StringVar(value=d["play"]["name"][:24])
+        ttk.Entry(form, width=30, textvariable=self.name_var).grid(row=0, column=1, sticky="w", padx=6)
+        ttk.Label(form, text="Put it in these playbooks:").grid(row=1, column=0, sticky="nw", pady=3)
+        lf = ttk.Frame(form)
+        lf.grid(row=1, column=1, sticky="w", padx=6)
+        self.lst_books = tk.Listbox(lf, selectmode="extended", height=7, width=58, exportselection=False)
+        self.lst_books.pack(side="left")
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self.lst_books.yview)
+        sb.pack(side="left", fill="y")
+        self.lst_books.configure(yscrollcommand=sb.set)
+        self._books = []
+        self.lbl_info = ttk.Label(self, wraplength=820, justify="left", padding=(14, 4, 14, 2))
+        self.lbl_info.pack(anchor="w")
+        self.saves_frame = ttk.LabelFrame(self, text="Also link the play in these saves (a new career copies its playbook links from the profile)")
+        self.saves_frame.pack(fill="x", padx=14, pady=(4, 4))
+        self.save_vars = []
+        self._saves = []
+        ttk.Label(self, text="Plays added to the game files so far:", padding=(14, 4, 14, 0)).pack(anchor="w")
+        lf2 = ttk.Frame(self)
+        lf2.pack(fill="x", padx=14)
+        self.lst_added = tk.Listbox(lf2, height=4, width=90, exportselection=False)
+        self.lst_added.pack(side="left")
+        ttk.Button(lf2, text="Take the selected play out", command=self._take_out).pack(side="left", padx=8, anchor="n")
+        self.lbl_result = ttk.Label(self, wraplength=820, justify="left", foreground="gray", padding=(14, 6, 14, 4))
+        self.lbl_result.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_apply = ttk.Button(btn, text="Add the play to the game files", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Put the game files back...", command=self._restore).pack(side="left")
+        self._populate()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _args(self):
+        d = self.designer
+        return dict(overrides=dict(d.overrides), plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
+
+    def _archives(self):
+        return self.app._personnel_archives()
+
+    def _populate(self):
+        app = self.app
+        archives = self._archives()
+        if not archives:
+            self.btn_apply.configure(state="disabled")
+            self.lbl_info.configure(text="The game files were not found: pick qkl_boot.ast in the Playbooks tab first.")
+            return
+        self.boot = archives[0]
+        lib = self.designer.lib
+        try:
+            names = app.playbook_name_map(self.boot)
+        except Exception:
+            names = {}
+        self._books = AP.books_of(lib, self.base)
+        for b in self._books:
+            self.lst_books.insert("end", f"{names.get(b, 'playbook')} ({b})")
+        self.lst_books.selection_set(0, "end")
+        try:
+            self.added = app.add_play_state(self.boot).get("plays") or []
+        except Exception as e:
+            self.added = []
+            self.lbl_result.configure(text=f"Could not read what was added before: {e}")
+        self._fill_added()
+        self.lbl_info.configure(text=f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation).")
+        self._saves = []
+        db = getattr(app.model, "db_path", None)
+        if db and os.path.isfile(db):
+            self._saves.append((f"the open save: {os.path.basename(os.path.dirname(db))}" + ("  (a career: not tried in the game)" if "-PROFILE-" not in db.upper() else ""), db, "-PROFILE-" in db.upper()))
+            for pth in find_profile_saves(db):
+                if os.path.abspath(pth) != os.path.abspath(db):
+                    self._saves.append((f"your profile: {os.path.basename(os.path.dirname(pth))}", pth, True))
+        for label, path, default in self._saves:
+            v = tk.BooleanVar(value=default)
+            self.save_vars.append(v)
+            ttk.Checkbutton(self.saves_frame, text=label, variable=v).pack(anchor="w", padx=8)
+        if not self._saves:
+            ttk.Label(self.saves_frame, text="No save is open: open your profile in the editor to link the play there (a play is only in a new career's playbook when the profile has its links).",
+                      wraplength=780, foreground="gray").pack(anchor="w", padx=8, pady=2)
+
+    def _fill_added(self):
+        self.lst_added.delete(0, "end")
+        for p in self.added:
+            self.lst_added.insert("end", f"{p['name']}  (play {p['plyl']}, made from play {p['base']}, in {len(p['books'])} playbook{'s' if len(p['books']) != 1 else ''})")
+
+    def _selected_saves(self):
+        return [(label, path) for (label, path, _d), v in zip(self._saves, self.save_vars) if v.get()]
+
+    def _link(self, links=(), remove=()):
+        out = []
+        for label, path in self._selected_saves():
+            try:
+                a, r = link_plays_in_save(self.app.model, path, links, remove)
+                out.append(f"{label}: {a} link{'s' if a != 1 else ''} added, {r} taken out")
+            except Exception as e:
+                out.append(f"{label}: NOT changed ({e})")
+        db = getattr(self.app.model, "db_path", None)
+        if db and any(path == db for _l, path in self._selected_saves()):
+            try:
+                self.app.model.load_all_from_db(db)           # the open save was changed on disk: read it again
+                self.app._on_load_db_path_success(db)
+            except Exception:
+                pass
+        return out
+
+    def _apply(self):
+        app = self.app
+        if self.boot is None:
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Add a play", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        db = getattr(app.model, "db_path", None)
+        if db and getattr(app, "dirty", False) and any(path == db for _l, path in self._selected_saves()):
+            messagebox.showerror("Add a play", "The open save has changes that are not saved yet. Save it first (or untick it here), then try again.", parent=self)
+            return
+        try:
+            name = GF.clean_name(self.name_var.get())
+            books = [self._books[i] for i in self.lst_books.curselection()]
+            plyl = AP.free_play_id(self.designer.lib, [p["plyl"] for p in self.added])
+            play = AP.build(self.designer.lib, self.base, name, books, plyl, **self._args())
+        except ValueError as e:
+            messagebox.showerror("Add a play", str(e), parent=self)
+            return
+        if any(p["name"].lower() == name.lower() for p in self.added):
+            messagebox.showerror("Add a play", f"A play called {name} was already added. Take it out first or give this one another name.", parent=self)
+            return
+        if not messagebox.askyesno("Add a play", f"Add {name} to the game files as play {plyl}, in {len(books)} playbook{'s' if len(books) != 1 else ''}?\n\nThis writes qkl_boot.ast (four of its "
+                                   "entries are written again at the end of the file, about 15 MB). The original table of contents is saved first and Put the game files back restores the file "
+                                   "byte for byte.", parent=self):
+            return
+        plays = self.added + [play]
+
+        def work():
+            rep = app.add_play_write(self.boot, plays)
+            return rep
+
+        def done(rep):
+            self.added = plays
+            self._fill_added()
+            lines = self._link(links=AP.links_of([play])) if self._selected_saves() else []
+            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it.")
+            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it.", parent=self)
+
+        app.run_in_thread_with_busy("Adding the play to the game files...", work, done, error_title="Add a play")
+
+    def _take_out(self):
+        sel = self.lst_added.curselection()
+        if not sel or self.boot is None:
+            return
+        app = self.app
+        if app._rpcs3_running():
+            messagebox.showerror("Add a play", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        gone = self.added[sel[0]]
+        plays = [p for p in self.added if p["plyl"] != gone["plyl"]]
+        if not messagebox.askyesno("Add a play", f"Take {gone['name']} (play {gone['plyl']}) out of the game files?\n\nIts links are taken out of the ticked saves too.", parent=self):
+            return
+
+        def work():
+            return app.add_play_write(self.boot, plays)
+
+        def done(rep):
+            self.added = plays
+            self._fill_added()
+            lines = self._link(remove=[gone["plyl"]]) if self._selected_saves() else []
+            self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
+
+        app.run_in_thread_with_busy("Taking the play out...", work, done, error_title="Add a play")
+
+    def _restore(self):
+        app = self.app
+        if app._rpcs3_running():
+            messagebox.showerror("Put the game files back", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        archives = self._archives()
+        if not archives:
+            return
+        if not messagebox.askyesno("Put the game files back", "Put every play database entry that the editor changed back as it was before the first change: the plays added here come out (qkl_boot.ast is cut "
+                                   "back to its original length) and the Set personnel and Make a game play changes are undone.\n\nThe links of the added plays are taken out of the ticked saves.",
+                                   parent=self):
+            return
+        gone = [p["plyl"] for p in self.added]
+
+        def work():
+            return app.game_file_restore(archives)
+
+        def done(result):
+            self.added = []
+            self._fill_added()
+            lines = self._link(remove=gone) if gone and self._selected_saves() else []
+            self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}. " + "; ".join(lines))
+            messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
 
         app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
 
@@ -12040,6 +12320,37 @@ class App(tk.Tk):
         holder.copies = copies
         res = restore_personnel_files(self.model, holder, self._personnel_backup_dir())
         return sum(1 for r in res.get("results", []) if r.get("restored"))
+
+    def playbook_name_map(self, boot_ast):
+        """{playbook id (BOKL): its name} from the game's PLAB (read once into the cache)."""
+        if not self._playbook_names_cached():
+            self._extract_playbook_names(boot_ast)
+        names = {}
+        for r in read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv")):
+            pbgi = safe_int(r.get("PBGI", ""))
+            if pbgi is not None:
+                names[pbgi] = (r.get("BNAM") or "").strip() or f"playbook {pbgi}"
+        return names
+
+    def add_play_state(self, boot_ast):
+        """What Add a play has put into qkl_boot.ast: {"active", "plays": [the plays as hc09_addplay.build made them], "originalLength", "length"}."""
+        return self.model.run_bridge(["add-play-state", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
+
+    def add_play_write(self, boot_ast, plays):
+        """Make the game files hold exactly these added plays (hc09_addplay.build results): the archive goes back to its state before the first add and the entries are built again from their
+        untouched originals; an empty list puts it all back. Every entry is checked before anything is written. Returns the bridge's report."""
+        if not plays:
+            return self.model.run_bridge(["add-play-restore", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
+        spec = os.path.join(tempfile.gettempdir(), f"hc09_addplay_{os.getpid()}.json")
+        with open(spec, "w", encoding="utf-8") as f:
+            json.dump(AP.merge(plays), f)
+        try:
+            return self.model.run_bridge(["add-play", "--ast", boot_ast, "--spec", spec, "--backup-dir", self._personnel_backup_dir()])
+        finally:
+            try:
+                os.remove(spec)
+            except OSError:
+                pass
 
     def _personnel_backup_dir(self):
         return self.ui_prefs.get("personnel_backup_dir") or PERSONNEL_BACKUP_DIR

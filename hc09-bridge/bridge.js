@@ -309,6 +309,7 @@ async function cmdImport(args) {
     // the table's spare allocated slots). Anything not listed here keeps the old
     // strictly-position-matched behaviour, so an ordinary save can never append.
     const appendTables = new Set(args['allow-append'] ? String(args['allow-append']).split(',') : []);
+    const shrinkTables = new Set(args['allow-shrink'] ? String(args['allow-shrink']).split(',') : []);       // tables that may end up with FEWER rows than the save has (links taken out)
 
     const helper = await openDb(dbPath);
     const availableTables = new Set(helper.file.tables.map((t) => t.name));
@@ -363,6 +364,19 @@ async function cmdImport(args) {
                 table._records[i].recordBuffer.fill(0);
                 table._records[i].isPopulated = true;
             }
+            table.header.currentRecords = dataRows.length;
+            table.headerBuffer.writeUInt16BE(dataRows.length, 22);
+            rewriteHeaderCrc(table);
+            records = table.records;
+        }
+
+        if (shrinkTables.has(tableName) && dataRows.length < records.length) {
+            // Rows taken out: the table keeps its capacity and its first rows, the count goes down and the freed rows are zeroed (the CSV holds the rows that stay, in order).
+            for (let i = dataRows.length; i < table._records.length; i++) {
+                table._records[i].recordBuffer.fill(0);
+                table._records[i].isPopulated = false;
+            }
+            appendedRows = dataRows.length - records.length;                       // negative: how many rows went
             table.header.currentRecords = dataRows.length;
             table.headerBuffer.writeUInt16BE(dataRows.length, 22);
             rewriteHeaderCrc(table);
@@ -872,6 +886,10 @@ function sameValue(have, want) {
 }
 
 async function patchEntry(target, mode, backupDir) {
+    const added = loadAddPlayRecord(backupDir, target.ast);
+    if (added && added.active && target.start >= added.originalLength) {
+        throw new Error(`${path.basename(target.ast)} #${target.index} is a copy made by Add a play: put the game files back first (or change the play through Add a play), nothing written`);
+    }
     const tocs = await readToc(target.ast);
     checkEntryPlace(tocs.find((t) => t.index === target.index), target);
     const raw = readEntryAt(target.ast, target.start, target.size);
@@ -1005,16 +1023,8 @@ async function cmdEntryGrow(args) {
             if (!t) throw new Error(`no table ${name}`);
             await t.readRecords();
             const h = t.header;
-            const lb = h.lengthBytes;
-            const area = lb * h.maxRecords;
-            report.tables.push({ table: name, allocation: h.dataAllocationType, lengthBytes: lb, maxRecords: h.maxRecords, currentRecords: h.currentRecords, indexCount: h.indexCount, indexBytes: t.indexBuffer ? t.indexBuffer.length : 0, grownBy: k });
-            t.dataBuffer = Buffer.concat([t.dataBuffer.slice(0, area), Buffer.alloc(lb * k), t.dataBuffer.slice(area)]);
-            h.maxRecords += k;
-            h.currentRecords += k;
-            t.headerBuffer.writeUInt16BE(h.maxRecords, 20);
-            t.headerBuffer.writeUInt16BE(h.currentRecords, 22);
-            if (t._extraDataBufferOffset >= 0) t._extraDataBufferOffset = lb * h.maxRecords;
-            rewriteHeaderCrc(t);
+            report.tables.push({ table: name, allocation: h.dataAllocationType, lengthBytes: h.lengthBytes, maxRecords: h.maxRecords, currentRecords: h.currentRecords, indexCount: h.indexCount, indexBytes: t.indexBuffer ? t.indexBuffer.length : 0, grownBy: k });
+            growTable(t, k);
             await t.readRecords();                                   // the records again, now with the new ones
         }
         if (args.fill) {
@@ -1352,6 +1362,316 @@ function parseArgs(argv) {
     return args;
 }
 
+// ---------- ADD A PLAY: new rows in the game's own play database ----------
+// Every table of the game's play database is exactly full and the archive's entries follow each other without a gap, so a play is added by making copies of the entries with bigger tables, putting
+// them at the END of qkl_boot.ast and pointing the table of contents at them. Proven in the game (RPCS3: the play showed in the playbook, ran, and could be flipped and have its routes changed like
+// any stock play) as long as the 'uncompressed size' of the table-of-contents row stays 0 (see entry-relocate: with it set the game crashed in its save thread).
+//   add-play --ast <qkl_boot.ast> --spec spec.json --backup-dir <dir> [--dry]
+//     spec = { rows: { "40": { PBPL: [ {column: value} ], PLYS: [...], PLPD, PLRD, PLCM, PBAI }, "42": { PBPL, PLYS }, "46": { PPPN: [ {BOKL, PLYL, PPPM} ] }, "47": { PGPL: [ {BOKL, SETL, PLYL, PLTP} ] } },
+//              plays: [ anything the editor wants to get back from add-play-state ] }
+//     The spec holds the rows of ALL the plays that are to be in the game files: the archive is first put back to the state before the first add (the original table-of-contents rows and archive length,
+//     kept in <dir>/<archive>.addplay.json), then every entry is built again from the untouched originals, so the file grows by the four entries once, not once per add, and editing an added play is a rebuild.
+//   add-play-state --ast <qkl_boot.ast> --backup-dir <dir>      what is added now (the 'plays' of the last spec)
+//   add-play-restore --ast <qkl_boot.ast> --backup-dir <dir>    the original table-of-contents rows back and the archive cut to its original length: byte for byte the file before the first add.
+// Each entry is checked before anything is written: the structure (checksums, offsets, sizes), every table read back row by row, every table that was not touched byte for byte.
+const ADD_PLAY_ENTRIES = [40, 42, 46, 47];
+const ADD_PLAY_PLACE = {                       // per entry: table -> the columns its rows are sorted by (the game's own order, checked at run time: a table that is not sorted gets the rows at its end)
+    40: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'], PLPD: ['PLYL'], PLRD: ['PLYL'], PLCM: ['PLYL'], PBAI: ['BOKL'] },
+    42: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'] },
+    46: { PPPN: ['BOKL', 'PLYL'] },
+    47: { PGPL: ['BOKL', 'SETL', 'PLYL'] },
+};
+const ADD_PLAY_UNIQUE = (table) => table !== 'PBAI';       // PBAI has several rows per book and play (the CPU's chances per situation)
+
+function tocGeometry(astPath) {
+    const fd = fs.openSync(astPath, 'r');
+    try {
+        const head = Buffer.alloc(0x30);
+        fs.readSync(fd, head, 0, 0x30, 0);
+        const sizes = [0, 1, 2, 3, 4].map((i) => head.readInt8(33 + i));       // widths of: unknown1, id, startPosition, fileSize, uncompressedSize
+        const unit = Math.pow(2, head.readInt8(33 + 5));
+        const tocStart = head.readInt32LE(16);
+        const additional = head.readInt8(40) * 4;
+        const rowLen = sizes.reduce((a, b) => a + b, 0) + head.readInt8(44) + 1;
+        return { unit, sizes, rowLen, rowOffset: (idx) => tocStart + additional + idx * rowLen };
+    } finally { fs.closeSync(fd); }
+}
+function readTocRows(astPath, geo, indexes) {
+    const fd = fs.openSync(astPath, 'r');
+    try {
+        const rows = {};
+        for (const idx of indexes) {
+            const b = Buffer.alloc(geo.rowLen);
+            fs.readSync(fd, b, 0, geo.rowLen, geo.rowOffset(idx));
+            rows[idx] = b.toString('hex');
+        }
+        return rows;
+    } finally { fs.closeSync(fd); }
+}
+function writeTocRows(fd, geo, rows) {
+    for (const [idx, hex] of Object.entries(rows)) fs.writeSync(fd, Buffer.from(hex, 'hex'), 0, geo.rowLen, geo.rowOffset(Number(idx)));
+}
+function addPlayRecordPath(backupDir, ast) { return path.join(backupDir, `${path.basename(ast)}.addplay.json`); }
+function loadAddPlayRecord(backupDir, ast) {
+    if (!backupDir) return null;
+    const p = addPlayRecordPath(backupDir, ast);
+    return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+}
+function saveAddPlayRecord(backupDir, ast, rec) {
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.writeFileSync(addPlayRecordPath(backupDir, ast), JSON.stringify(rec, null, 2));
+}
+
+// The tables of an entry must sit where the definitions say: the library's writer works out the offsets after a table changed its length, so every entry is checked.
+function verifyLayout(helper, buf) {
+    const f = helper.file;
+    const base = f.headerBuffer.length + f.definitionBuffer.length;
+    const issues = [];
+    let pos = base;
+    f.tables.forEach((t) => {
+        const def = f.definitions.find((d) => d.name === t.name);
+        if (!def) issues.push(`no definition for ${t.name}`);
+        else if (def.offset !== pos - base) issues.push(`the definition of ${t.name} says offset ${def.offset} but the table starts at ${pos - base}`);
+        pos += t.headerBuffer.length + t.fieldDefinitionBuffer.length + (t.dataBuffer ? t.dataBuffer.length : 0) + (t.indexBuffer ? t.indexBuffer.length : 0);
+    });
+    pos += f.eofCrcBuffer.length;
+    if (pos !== buf.length) issues.push(`the tables add up to ${pos} bytes, the entry has ${buf.length}`);
+    if (!dbHeaderIsConsistent(buf)) issues.push('the file header does not hold the entry\'s size and checksum');
+    return issues;
+}
+
+function growTable(t, k) {
+    const h = t.header;
+    const lb = h.lengthBytes;
+    const area = lb * h.maxRecords;
+    t.dataBuffer = Buffer.concat([t.dataBuffer.slice(0, area), Buffer.alloc(lb * k), t.dataBuffer.slice(area)]);
+    h.maxRecords += k;
+    h.currentRecords += k;
+    t.headerBuffer.writeUInt16BE(h.maxRecords, 20);
+    t.headerBuffer.writeUInt16BE(h.currentRecords, 22);
+    if (t._extraDataBufferOffset >= 0) t._extraDataBufferOffset = lb * h.maxRecords;
+    rewriteHeaderCrc(t);
+}
+const cellText = (v) => String(v).replace(/[\s\0]+$/, '');
+const sameCell = (a, b) => (typeof a === 'string' || typeof b === 'string') ? cellText(a) === cellText(b) : Number(a) === Number(b);
+const keyCompare = (a, b, keys) => { for (const k of keys) { const d = Number(a[k]) - Number(b[k]); if (d) return d; } return 0; };
+const isSortedBy = (rows, keys) => rows.every((r, i) => i === 0 || keyCompare(rows[i - 1], r, keys) <= 0);
+
+// One entry: the rows of its tables in their sorted places. Returns { buf, report }. NOTE: a table's .records is a getter that copies the array: take it once, never index it in a loop.
+async function buildAddPlayEntry(raw, place, rowsByTable) {
+    const { helper, tmp } = await openEntryBuffer(raw);
+    const original = await openEntryBuffer(raw);
+    const out = path.join(os.tmpdir(), `hc09_addplay_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
+    const temps = [tmp, original.tmp, out];
+    const report = {};
+    try {
+        const expected = {};
+        for (const [tname, keys] of Object.entries(place)) {
+            const added = (rowsByTable || {})[tname];
+            if (!added || added.length === 0) continue;
+            const t = helper.file[tname];
+            if (!t) throw new Error(`the entry has no table ${tname}`);
+            if (t.records.length === 0) await t.readRecords();
+            const h = t.header;
+            if (h.indexCount) throw new Error(`${tname} has an index that would have to be kept in step: not supported`);
+            const oldCount = h.currentRecords;
+            const free = h.maxRecords - oldCount;
+            const oldRecs = t.records.slice(0, oldCount);
+            const names = Object.keys(oldRecs[0].fields);
+            const extra = names.filter((n) => 'extraDataBuffer' in oldRecs[0].fields[n]);          // the columns whose text sits in the table's string area (the playbooks' names)
+            const valuesOf = (rec) => Object.fromEntries(names.map((n) => [n, rec.fields[n].value]));
+            const cur = oldRecs.map(valuesOf);
+            const oldExtra = extra.length ? oldRecs.map((r) => extra.map((n) => ({ buf: r.fields[n].extraDataBuffer, off: r.fields[n].extraDataOffset }))) : null;
+            const rows = added.map((r) => {
+                for (const c of Object.keys(r)) if (!names.includes(c)) throw new Error(`${tname} has no column ${c}`);
+                return Object.fromEntries(names.map((n) => [n, r[n] === undefined ? 0 : r[n]]));
+            });
+            if (ADD_PLAY_UNIQUE(tname)) {
+                for (const r of rows) if (cur.some((c) => keyCompare(c, r, keys) === 0)) throw new Error(`${tname} already has a row for ${keys.map((k) => `${k} ${r[k]}`).join(', ')}`);
+            }
+            const sorted = isSortedBy(cur, keys);
+            const items = cur.map((v, o) => ({ o, v }));                          // o: the row's place before, -1 for a new row
+            for (const r of rows) {
+                let i = items.length;
+                if (sorted) while (i > 0 && keyCompare(items[i - 1].v, r, keys) > 0) i--;
+                if (extra.length && i === 0) throw new Error(`${tname}: a row at the very start of a compressed table is not supported`);
+                items.splice(i, 0, { o: -1, v: r });
+            }
+            if (rows.length > free) growTable(t, rows.length - free);              // adds the rows to the capacity and the count
+            h.currentRecords = oldCount + rows.length;                             // inside the capacity the count is all that changes
+            t.headerBuffer.writeUInt16BE(h.currentRecords, 22);
+            rewriteHeaderCrc(t);
+            await t.readRecords();                                                 // the records again, now with the new (zeroed) ones
+            const recs = t.records.slice(0, h.currentRecords);
+            if (recs.length !== items.length) throw new Error(`${tname}: ${recs.length} rows after growing, expected ${items.length}`);
+            if (extra.length) {                                                    // reading the table again cut the text of the last old row by the zero offsets of the new rows: put every old text back
+                recs.forEach((rec, i) => {
+                    if (i < oldCount) extra.forEach((n, j) => { rec.fields[n].extraDataBuffer = oldExtra[i][j].buf; rec.fields[n].extraDataOffset = oldExtra[i][j].off; });
+                });
+            }
+            const have = recs.map(valuesOf);
+            let written = 0;
+            items.forEach((item, i) => {
+                let touched = false;
+                for (const n of names) {
+                    if (extra.includes(n) && item.o >= 0) {                        // an old row's text moves with its row
+                        const j = extra.indexOf(n);
+                        if (item.o !== i) { recs[i].fields[n].extraDataBuffer = oldExtra[item.o][j].buf; recs[i].fields[n].extraDataOffset = oldExtra[item.o][j].off; recs[i].fields[n].isChanged = true; touched = true; }
+                    } else if (!sameCell(have[i][n], item.v[n])) { recs[i].fields[n].value = item.v[n]; touched = true; }
+                }
+                if (touched) written++;
+            });
+            expected[tname] = { names, final: items.map((x) => x.v), keys };
+            report[tname] = { rows: oldCount, added: rows.length, placed: sorted ? 'sorted' : 'at the end', rowsWritten: written, capacity: h.maxRecords };
+        }
+        await helper.save(out);
+        const buf = fixDbHeader(fs.readFileSync(out));
+        // ---- everything is checked before anything is written
+        const check = await openEntryBuffer(buf);
+        temps.push(check.tmp);
+        const issues = verifyDbStructure(check.helper).concat(verifyLayout(check.helper, buf));
+        for (const [tname, e] of Object.entries(expected)) {
+            const t = check.helper.file[tname];
+            await t.readRecords();
+            const recs = t.records.slice(0, t.header.currentRecords);
+            if (recs.length !== e.final.length) { issues.push(`${tname}: ${recs.length} rows read back, expected ${e.final.length}`); continue; }
+            let bad = 0;
+            for (let i = 0; i < e.final.length && bad < 3; i++) {
+                for (const n of e.names) {
+                    if (!sameCell(recs[i].fields[n].value, e.final[i][n])) { issues.push(`${tname} row ${i} ${n}: read back "${recs[i].fields[n].value}", expected "${e.final[i][n]}"`); bad++; break; }
+                }
+            }
+        }
+        for (const ot of original.helper.file.tables) {
+            if (expected[ot.name]) continue;
+            const nt = check.helper.file[ot.name];
+            const same = (a, b) => (a || emptyBuf).equals(b || emptyBuf);
+            if (!nt || !same(ot.headerBuffer.slice(4), nt.headerBuffer.slice(4)) || !same(ot.fieldDefinitionBuffer, nt.fieldDefinitionBuffer) || !same(ot.dataBuffer, nt.dataBuffer) || !same(ot.indexBuffer, nt.indexBuffer)) {
+                issues.push(`the table ${ot.name} was not touched but is not the same`);
+            }
+        }
+        if (issues.length) throw new Error('the grown entry does not check out: ' + issues.slice(0, 6).join('; '));
+        return { buf, report };
+    } finally {
+        for (const f of temps) { try { fs.unlinkSync(f); } catch (x) { /* best effort */ } }
+    }
+}
+
+async function addPlayRestore(ast, backupDir) {
+    const rec = loadAddPlayRecord(backupDir, ast);
+    if (!rec || !rec.active) return { restored: false, reason: 'nothing was added' };
+    const geo = tocGeometry(ast);
+    const size = fs.statSync(ast).size;
+    if (size < rec.originalLength) throw new Error(`${path.basename(ast)} is shorter (${size}) than it was before the first add (${rec.originalLength}): not restoring`);
+    const fd = fs.openSync(ast, 'r+');
+    try {
+        writeTocRows(fd, geo, rec.rows);
+        fs.ftruncateSync(fd, rec.originalLength);
+        fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    const back = readTocRows(ast, geo, Object.keys(rec.rows).map(Number));
+    for (const [idx, hex] of Object.entries(rec.rows)) if (back[idx] !== hex) throw new Error(`the table of contents row of entry ${idx} is not back as it was`);
+    if (fs.statSync(ast).size !== rec.originalLength) throw new Error('the archive is not back to its original length');
+    rec.active = false;
+    rec.plays = [];
+    delete rec.addedRows;
+    saveAddPlayRecord(backupDir, ast, rec);
+    return { restored: true, length: rec.originalLength };
+}
+
+function addPlayRowFields(geo, hex) {
+    const row = Buffer.from(hex, 'hex');
+    let o = 1;
+    const f = geo.sizes.map((w) => { const v = w && w <= 6 ? row.readUIntLE(o, w) : 0; o += w; return v; });          // the 8 byte id is not needed
+    return { start: f[2] * geo.unit, size: f[3], uncompressed: f[4] };
+}
+
+async function cmdAddPlay(args) {
+    if (!args.ast || !args.spec || !args['backup-dir']) throw new Error('add-play needs --ast, --spec and --backup-dir');
+    const ast = args.ast;
+    const backupDir = args['backup-dir'];
+    const spec = JSON.parse(fs.readFileSync(args.spec, 'utf8'));
+    const geo = tocGeometry(ast);
+    let rec = loadAddPlayRecord(backupDir, ast);
+    // Where the ORIGINAL entries are: they stay where they were (the grown copies are written after them), so they can be read while the grown ones are in use, and nothing is touched until every new
+    // entry is built and checked: an add that cannot be done leaves the archive exactly as it was.
+    let originalRows, originalLength;
+    if (rec && rec.active) {
+        const now = readTocRows(ast, geo, ADD_PLAY_ENTRIES);
+        for (const idx of ADD_PLAY_ENTRIES) {
+            if (rec.addedRows[idx] !== undefined && now[idx] !== rec.addedRows[idx]) throw new Error(`entry ${idx} of ${path.basename(ast)} was changed after the last add (outside the editor?): put the game files back from your own copy first`);
+        }
+        originalRows = rec.rows;
+        originalLength = rec.originalLength;
+    } else {
+        originalRows = readTocRows(ast, geo, ADD_PLAY_ENTRIES);
+        originalLength = fs.statSync(ast).size;
+    }
+    const built = {};
+    const report = {};
+    for (const idx of ADD_PLAY_ENTRIES) {
+        const orig = addPlayRowFields(geo, originalRows[idx]);
+        if (orig.uncompressed !== 0) throw new Error(`entry ${idx} has an uncompressed size (${orig.uncompressed}): not a plain database entry`);
+        const rows = (spec.rows || {})[idx];
+        if (!rows || Object.values(rows).every((r) => !r || r.length === 0)) continue;
+        const raw = readEntryAt(ast, orig.start, orig.size);
+        const b = await buildAddPlayEntry(raw, ADD_PLAY_PLACE[idx], rows);
+        built[idx] = b.buf;
+        report[idx] = { before: raw.length, after: b.buf.length, tables: b.report };
+    }
+    if (args.dry) { console.log(JSON.stringify({ dry: true, entries: report })); return; }
+    if (Object.keys(built).length === 0) { console.log(JSON.stringify({ added: 0, entries: {} })); return; }
+    if (rec && rec.active) await addPlayRestore(ast, backupDir);             // the state before the first add; the record of the originals stays
+    // the record of the original state comes first, so that a put-back is possible whatever happens next
+    rec = { ast: path.resolve(ast), originalLength, rows: originalRows, active: false, plays: [], savedAt: new Date().toISOString() };
+    saveAddPlayRecord(backupDir, ast, rec);
+    try {
+        const fd = fs.openSync(ast, 'r+');
+        try {
+            let size = originalLength;
+            for (const idx of Object.keys(built).map(Number)) {
+                const data = built[idx];
+                const start = Math.ceil(size / geo.unit) * geo.unit;
+                if (start / geo.unit >= Math.pow(256, geo.sizes[2])) throw new Error('the new position does not fit the start position field of the table of contents');
+                fs.writeSync(fd, Buffer.alloc(start - size), 0, start - size, size);
+                fs.writeSync(fd, data, 0, data.length, start);
+                size = start + data.length;
+                const row = Buffer.from(originalRows[idx], 'hex');
+                row.writeUIntLE(start / geo.unit, 1 + geo.sizes.slice(0, 2).reduce((a, b) => a + b, 0), geo.sizes[2]);
+                row.writeUIntLE(data.length, 1 + geo.sizes.slice(0, 3).reduce((a, b) => a + b, 0), geo.sizes[3]);       // the uncompressed size stays as it was: 0
+                fs.writeSync(fd, row, 0, row.length, geo.rowOffset(idx));
+            }
+            fs.fsyncSync(fd);
+        } finally { fs.closeSync(fd); }
+        const after = await readToc(ast);
+        for (const idx of Object.keys(built).map(Number)) {
+            const t = after.find((x) => x.index === idx);
+            if (t.fileSizeInt !== built[idx].length || t.uncompressedSizeInt !== 0 || Buffer.compare(readEntryAt(ast, t.startPositionInFile, t.fileSizeInt), built[idx]) !== 0) throw new Error(`entry ${idx} is not what was written`);
+            report[idx].start = t.startPositionInFile;
+        }
+    } catch (e) {
+        rec.active = true;                                    // so that the restore below knows there is something to undo
+        rec.addedRows = {};
+        saveAddPlayRecord(backupDir, ast, rec);
+        try { await addPlayRestore(ast, backupDir); } catch (x) { e.message += ` (and putting the file back failed: ${x.message})`; }
+        throw e;
+    }
+    rec.active = true;
+    rec.plays = spec.plays || [];
+    rec.addedRows = readTocRows(ast, geo, ADD_PLAY_ENTRIES);
+    saveAddPlayRecord(backupDir, ast, rec);
+    console.log(JSON.stringify({ added: (spec.plays || []).length, entries: report, archiveBytes: fs.statSync(ast).size, originalLength }));
+}
+
+async function cmdAddPlayState(args) {
+    const rec = loadAddPlayRecord(args['backup-dir'], args.ast);
+    console.log(JSON.stringify({ active: Boolean(rec && rec.active), plays: rec && rec.active ? rec.plays : [], originalLength: rec ? rec.originalLength : null, length: fs.statSync(args.ast).size }));
+}
+
+async function cmdAddPlayRestore(args) {
+    console.log(JSON.stringify(await addPlayRestore(args.ast, args['backup-dir'])));
+}
+
 async function main() {
     const [, , cmd, ...rest] = process.argv;
     const args = parseArgs(rest);
@@ -1388,6 +1708,12 @@ async function main() {
             await cmdEntryGrow(args);
         } else if (cmd === 'entry-relocate') {
             await cmdEntryRelocate(args);
+        } else if (cmd === 'add-play') {
+            await cmdAddPlay(args);
+        } else if (cmd === 'add-play-state') {
+            await cmdAddPlayState(args);
+        } else if (cmd === 'add-play-restore') {
+            await cmdAddPlayRestore(args);
         } else if (cmd === 'entry-patch') {
             args._mode = rest.find((a) => !a.startsWith('--'));
             if (!['apply', 'dry', 'restore'].includes(args._mode)) throw new Error('entry-patch needs apply, dry or restore as its first argument');
@@ -1397,7 +1723,7 @@ async function main() {
             console.error('  node bridge.js inspect --db <path>');
             console.error('  node bridge.js fields --db <path> --table <name>');
             console.error('  node bridge.js export --db <path> --out <dir> [--tables PLAY,DRPK,...]');
-            console.error('  node bridge.js import --db <path> --in <dir> [--out <path>] [--tables PLAY,DRPK,...] [--allow-append PGPL,...]');
+            console.error('  node bridge.js import --db <path> --in <dir> [--out <path>] [--tables PLAY,DRPK,...] [--allow-append PGPL,...] [--allow-shrink PGPL,...]');
             console.error('  node bridge.js verify-db --db <path>');
             console.error('  node bridge.js portrait-extract-archive --ast <path> --top-index <N> --out <path>');
             console.error('  node bridge.js portrait-lookup --archive <path> --shortid <N> --out <path>');
