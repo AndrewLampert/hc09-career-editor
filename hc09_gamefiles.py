@@ -17,7 +17,7 @@ import hc09_plays as P
 
 PLPD_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "rcv"))
 PLCM_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "dir", "ply"))
-SCAN_TABLES = "PBPL,PLYL,PLYS,PLPD,PLRD,PLCM,SETP,SETG,SGFF,PBAI,PSAL,ARTL"
+SCAN_TABLES = "PBPL,PLYL,PLYS,PLPD,PLRD,PLCM,SETP,SETG,SGFF,PBAI,PSLO,ARTO"          # PSLO / ARTO: the offense step lists (column PSAL) and art (column ARTL) a copy holds
 NAMES_ENTRY = 46                     # the entry of qkl_boot.ast that holds PPPN: the names the playbooks give their plays (the play-call screen shows these)
 PLAY_COLS = ("PLYT", "PLF_", "vpos", "risk", "motn")      # the columns of a play's own row that follow the play built (PBAI rows clone PLYT, PLF_ and vpos)
 
@@ -187,15 +187,20 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
             if changes["name"] and "name" in mine and _text(mine["name"]) != changes["name"]:
                 edits.append({"table": play_table, "match": {"PLYL": plyl}, "expect": {"name": _text(mine["name"])}, "set": {"name": changes["name"]}})
             plys = {(int(r["PLYL"]), int(r["poso"])): r for r in (_read(cache_dir, c["base"], "PLYS") or [])}
-            steps, arts = _read(cache_dir, c["base"], "PSAL"), _read(cache_dir, c["base"], "ARTL")
-            have_steps = {int(r["PSAL"]) for r in steps} if steps else None        # a Create-A-Play copy holds only some step lists and drawings: a play there must not point at one it lacks
+            steps, arts = _read(cache_dir, c["base"], "PSLO"), _read(cache_dir, c["base"], "ARTO")      # PSAL and ARTL are COLUMNS; the tables are PSLO (offense step lists) and ARTO (offense art)
+            have_steps = {int(r["PSAL"]) for r in steps} if steps else None        # None: the copy has no such table (a Create-A-Play copy) and cannot be checked
             have_arts = {int(r["ARTL"]) for r in arts} if arts else None
             for poso, want in changes["plys"].items():
-                if (plyl, poso) in plys:
-                    if (have_steps is not None and "PSAL" in want and want["PSAL"] not in have_steps) or (have_arts is not None and "ARTL" in want and want["ARTL"] not in have_arts):
-                        skipped.append((f"{c['file']} #{c['index']}", poso))
-                        continue
-                    add("PLYS", {"PLYL": plyl, "poso": poso}, want, plys[(plyl, poso)])
+                row = plys.get((plyl, poso))
+                if row is None:
+                    continue
+                # a CHANGED step list or drawing is written only where the copy is known to hold it: a play must not point at one the copy lacks (or cannot be checked for)
+                new_step = "PSAL" in want and "PSAL" in row and int(want["PSAL"]) != int(row["PSAL"])
+                new_art = "ARTL" in want and "ARTL" in row and int(want["ARTL"]) != int(row["ARTL"])
+                if (new_step and (have_steps is None or int(want["PSAL"]) not in have_steps)) or (new_art and (have_arts is None or int(want["ARTL"]) not in have_arts)):
+                    skipped.append((f"{c['file']} #{c['index']}", poso))
+                    continue
+                add("PLYS", {"PLYL": plyl, "poso": poso}, want, row)
             for key, table in (("plpd", "PLPD"), ("plcm", "PLCM"), ("plrd", "PLRD")):
                 if changes[key]:
                     rows = [r for r in (_read(cache_dir, c["base"], table) or []) if int(r["PLYL"]) == plyl]
@@ -232,7 +237,7 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
             targets.append({"ast": names_entry["ast"], "index": names_entry["index"], "start": names_entry["start"], "size": names_entry["size"], "edits": edits})
             report.append((f"{os.path.basename(names_entry['ast'])} #{names_entry['index']} (the playbooks' names for the play)", len(edits)))
     if skipped:
-        report.append(("not written (the copy lacks that step list or drawing): " + ", ".join(f"{n} slot {p}" for n, p in skipped), 0))
+        report.append(("not written (the copy does not hold that step list or drawing, or has none to check against): " + ", ".join(f"{n} slot {p}" for n, p in skipped), 0))
     return targets, report
 
 
