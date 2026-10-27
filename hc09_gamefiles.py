@@ -156,6 +156,14 @@ def _text(value):
     return (value or "").strip()
 
 
+def is_master(c, copies):
+    """Is this copy the master play database? By what it holds when the scan says (the copy with the most PLYS rows, as the Play creator's library picks it), else by the PS3 game's entry number
+    (qkl_boot.ast entry 40): another version of the game numbers its entries differently."""
+    if all(isinstance(x.get("tables"), dict) for x in copies) and copies:
+        return c is max(copies, key=lambda x: x["tables"].get("PLYS", 0))
+    return c["file"] == "qkl_boot.ast" and c["index"] == 40
+
+
 def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
     """Bridge entry-patch targets (one per copy of the play database that holds the play or its set) for the changes of changes_for(), read from the scan the bridge made of the copies
     (play-sets-scan with SCAN_TABLES, into cache_dir). Each edit carries the value the copy has now (expect) so that nothing is written over a row that is not what was read. The
@@ -179,7 +187,7 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
                 play_table, play_rows = table, rows
                 break
         mine = next((r for r in (play_rows or []) if int(r["PLYL"]) == plyl), None)      # None: this copy does not hold the play (it may still hold its set)
-        if mine is not None and c["file"] == "qkl_boot.ast" and c["index"] == 40:
+        if mine is not None and is_master(c, copies):
             master_has = True
         if mine is not None:
             if changes["play"]:
