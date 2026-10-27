@@ -65,8 +65,8 @@ def fingerprint(folder):
 
 def inside(path, root):
     """Is `path` below (or the same as) the folder `root`?"""
-    a = os.path.normcase(os.path.abspath(path)) + os.sep
-    b = os.path.normcase(os.path.abspath(root)) + os.sep
+    a, b = os.path.normcase(os.path.abspath(path)), os.path.normcase(os.path.abspath(root))
+    a, b = (x if x.endswith(os.sep) else x + os.sep for x in (a, b))          # a filesystem root (C:\ or /) already ends in a separator
     return a.startswith(b)
 
 
