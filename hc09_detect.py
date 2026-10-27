@@ -209,6 +209,12 @@ def running_xenia_dirs():
     any failure."""
     if os.name != "nt":
         return []
+    try:                                 # a quick look first: PowerShell is slow to start and is only needed when something called xenia* runs
+        listing = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10).stdout
+        if not any(line.lower().startswith('"xenia') for line in listing.splitlines()):
+            return []
+    except (OSError, subprocess.SubprocessError):
+        pass
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Process | Where-Object { $_.Name -like 'xenia*' } | ForEach-Object { $_.Path }"],
                              capture_output=True, text=True, timeout=10).stdout
@@ -368,7 +374,7 @@ def xenia_profiles_for(career_path):
 
 def candidate_xenia_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search_budget=3.0):
     """Xenia folders to look at, best first: the ones the recent saves live in, the ones the user added (the Xenia folder itself, its content folder, or anything inside), the usual
-    places, and (only if none of those turned up) a bounded search of search_roots."""
+    places, a Xenia that is running now, and (only if none of those turned up) a bounded search of search_roots."""
     out = []
 
     def add(d):
@@ -383,9 +389,8 @@ def candidate_xenia_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search
             add(d)
     for d in common_xenia_dirs():
         add(d)
-    if not out:
-        for d in running_xenia_dirs():
-            add(d)
+    for d in running_xenia_dirs():       # a portable Xenia that is running elsewhere is added even when other folders were found
+        add(d)
     if not out:
         for d in search_xenia_dirs(search_roots, budget=search_budget):
             add(d)

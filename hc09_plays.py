@@ -764,7 +764,7 @@ def play_definition(tables, setl, plyl):
 
 def missing_definitions(profile, career, bokl, stock_sets=None):
     """The definitions the career lacks for the custom plays it links into playbook bokl (PGPL): ({table: [rows to add]}, [names of plays that could not be added]). profile and career are
-    {TABLE: [row dicts]} with the DEFINITION_TABLES and, for the career, PGPL. A play is added with the ids it has in the profile (as the game does); one whose set or play id is already
+    {TABLE: [row dicts]} with the DEFINITION_TABLES and, for the career, PGPL. A play is added with the ids it has in the profile (as the game does); one whose set, play, slot or group id is already
     used by a different play in the career, or whose set id is one of the game's own sets (stock_sets, ids as numbers: the game would read its own set instead), is left out and named, not
     overwritten."""
     stock_sets = {int(x) for x in (stock_sets or ())}
@@ -772,6 +772,8 @@ def missing_definitions(profile, career, bokl, stock_sets=None):
     have = {(int(r["SETL"]), int(r["PLYL"])) for r in career.get("PBPL", [])}
     used_sets = {int(r["SETL"]) for r in career.get("SETL", [])}
     used_plays = {int(r["PLYL"]) for r in career.get("PBPL", [])}
+    used_slots = {int(r["SETP"]) for r in career.get("SETP", [])}              # SETG rows point at slot and group ids, so a different set that reuses one would alias its alignment
+    used_groups = {int(r["SGF_"]) for r in career.get("SGFF", [])}
     out, skipped, done = {t: [] for t in DEFINITION_TABLES}, [], set()
     for r in career.get("PGPL", []):
         if int(r["BOKL"]) != int(bokl):
@@ -779,7 +781,9 @@ def missing_definitions(profile, career, bokl, stock_sets=None):
         key = (int(r["SETL"]), int(r["PLYL"]))
         if key not in mine or key in have or key in done:
             continue
-        if key[0] in used_sets or key[1] in used_plays or key[0] in stock_sets:
+        slots = {int(x["SETP"]) for x in profile.get("SETP", []) if int(x["SETL"]) == key[0]}
+        groups = {int(x["SGF_"]) for x in profile.get("SGFF", []) if int(x["SETL"]) == key[0]}
+        if key[0] in used_sets or key[1] in used_plays or key[0] in stock_sets or slots & used_slots or groups & used_groups:
             skipped.append(mine[key]["name"])
             done.add(key)
             continue
@@ -788,6 +792,8 @@ def missing_definitions(profile, career, bokl, stock_sets=None):
         done.add(key)
         used_sets.add(key[0])
         used_plays.add(key[1])
+        used_slots |= slots
+        used_groups |= groups
     return out, skipped
 
 
