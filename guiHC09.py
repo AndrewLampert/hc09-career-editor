@@ -4091,6 +4091,15 @@ PLAYBOOK_TABLE_HEADERS = {
     "PLCM": ["per1", "dir1", "ply1", "per2", "dir2", "ply2", "per3", "dir3", "ply3", "per4", "dir4", "ply4", "per5", "dir5", "ply5", "PLYL"],
 }
 PLAYBOOK_PLAY_CAP = 200   # in-game limit per playbook (200 offensive or 200 defensive), special teams not counted
+def unmarked_plab_row(r):
+    """A PLAB row of the profile as the profile has it. _verified_names puts a '*' on the name it SHOWS for a playbook that does not match the career's; that mark is for the screen and must
+    never be written into a career's PLAB.BNAM (BNAM_UNMARKED keeps the real name)."""
+    row = dict(r)
+    if "BNAM_UNMARKED" in row:
+        row["BNAM"] = row.pop("BNAM_UNMARKED")
+    return row
+
+
 PLAYBOOK_CREATED_FORMATIONS = {"8190", "8191"}   # the per-save "Created Plays" formations (offense / defense)
 PLAYBOOK_SPECIAL_FORMATIONS = {"kickoff", "safety punt", "special teams", "kick return", "safety kick return", "special"}
 
@@ -8665,7 +8674,7 @@ class PlaybookData:
         v = lambda t: save.get(t, [])
         prof = self._custom_names_only(game, profile or {})
         self.profile_bgids = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()) for r in prof["plab"]}
-        self.profile_plab = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()): dict(r) for r in prof["plab"]}   # the profile's definitions of its custom playbooks
+        self.profile_plab = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()): unmarked_plab_row(r) for r in prof["plab"]}   # the profile's definitions of its custom playbooks
         self.profile_rows = {t: (profile or {}).get(t.lower(), []) for t in DEFINITION_TABLES}                                  # and of its custom plays
 
         self.book_names = defaultdict(list)
@@ -10535,7 +10544,7 @@ class App(tk.Tk):
                 rows.append(r)
             else:
                 flagged.append(name)
-                rows.append(dict(r, BNAM=name + " *"))
+                rows.append(dict(r, BNAM=name + " *", BNAM_UNMARKED=key(r, "BNAM")))
         return dict(names, plab=rows), flagged
 
     def on_pick_profile(self):
@@ -12307,18 +12316,38 @@ class App(tk.Tk):
         if self._career_open(path):
             self._load_db_path(path, error_title="Reload Error")
 
+    def _made_from_roots(self, profile_path, career_path, out_profile, out_career):
+        """The saves a made file pair goes back to: the profile and career it was made from. Plays can be chained (each made from the copies the one before made), so a copy made here remembers
+        the ORIGINAL saves its source copy was made from; install_custom_play puts the files only over those."""
+        roots = self.__dict__.setdefault("_made_roots", {})
+        key = lambda p: os.path.normcase(os.path.abspath(p))
+        prof, car = roots.get(key(profile_path), profile_path), roots.get(key(career_path), career_path)
+        roots[key(out_profile)], roots[key(out_career)] = prof, car
+        return {"profile": prof, "career": car}
+
     def install_custom_play(self, result, profile_path, career_path):
         """Copy the two files make_custom_play_files made over the profile and the career they were made from, after saving those in Documents\\hc09-test-backups\\<time>. Returns that folder."""
         why = self.install_blocker(career_path)
         if why:
             raise RuntimeError(why)
+        made, sources = result.get("made_from") or {}, result.get("made_sources") or {}
+        norm = lambda p_: os.path.normcase(os.path.abspath(p_))
+        for name, given in (("profile", profile_path), ("career", career_path)):
+            # the files go over the save they were made from, or over the original save at the start of a chain of plays (each made from the copies the one before made)
+            allowed = {norm(x) for x in (made.get(name), sources.get(name)) if x}
+            if allowed and norm(given) not in allowed:
+                raise RuntimeError(f"These files were made from another {name} save ({sources.get(name) or made.get(name)}), so they are not put over {given}. Make the files again with the save you want them in.")
         pairs = [("profile", result["profile"], profile_path), ("career", result["career"], career_path)]
         for name, new, old in pairs:
             if not os.path.isfile(new) or not os.path.isfile(old):
                 raise RuntimeError(f"The {name} file is missing: {new if not os.path.isfile(new) else old}")
             if os.path.abspath(new) == os.path.abspath(old):
                 raise RuntimeError(f"The new {name} file is the same file as your own; nothing was changed.")
-        dest = os.path.join(self.TEST_BACKUP_DIR, time.strftime("%Y%m%d-%H%M%S"))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest, n = os.path.join(self.TEST_BACKUP_DIR, stamp), 2
+        while os.path.exists(dest):                                    # two installs in the same second must not share (and overwrite) one backup
+            dest = os.path.join(self.TEST_BACKUP_DIR, f"{stamp}-{n}")
+            n += 1
         for name, new, old in pairs:
             os.makedirs(os.path.join(dest, name), exist_ok=True)
             shutil.copy2(old, os.path.join(dest, name, "USR-DATA"))
@@ -12525,11 +12554,13 @@ class App(tk.Tk):
             raise RuntimeError(str(e))
         self._replace_and_import(out_profile, rows, prof)
         # the playbook links hold the play type (PGPL.PLTP) in the profile and in the career
-        bokls = set()
+        bokls, career_linked = set(), True
         for path in (out_profile, out_career):
             t = prof if path == out_profile else self._export_tables(out_career, ["PGPL"])
             links = [r for r in t["PGPL"][1] if int(r["PLYL"]) == summary["plyl"] and int(r["SETL"]) == summary["setl"]]
             bokls.update(int(r["BOKL"]) for r in links)
+            if path == out_career:
+                career_linked = bool(links)
             if any(str(r["PLTP"]) != str(summary["plyt"]) for r in links):
                 for r in links:
                     r["PLTP"] = str(summary["plyt"])
@@ -12549,10 +12580,14 @@ class App(tk.Tk):
             if not ok.get("ok"):
                 raise RuntimeError(f"The structure check of {path} failed: {ok.get('issues')}")
         book = ", ".join(str(b) for b in sorted(bokls))
-        summary.update({"profile": out_profile, "career": out_career, "bokl": book})
+        summary.update({"profile": out_profile, "career": out_career, "bokl": book, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}, "career_linked": career_linked})
         summary["message"] = (f"Changed the custom play \"{name}\" (set {summary['setl']}, play {summary['plyl']}) in place; it is in custom playbook {book or '?'}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
+        if summary.get("left_out"):
+            summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
+        if summary.get("career_linked") is False:
+            summary["message"] += "\n\nNote: this career does not link the play in any playbook, so it will not show in this career (it was changed in the profile)."
         with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
             f.write(summary["message"] + "\n")
         return summary
@@ -12613,10 +12648,14 @@ class App(tk.Tk):
             ok = self.model.run_bridge(["verify-db", "--db", p])
             if not ok.get("ok"):
                 raise RuntimeError(f"The structure check of {p} failed: {ok.get('issues')}")
-        summary.update({"profile": out_profile, "career": out_career})
+        summary.update({"profile": out_profile, "career": out_career, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}})
         summary["message"] = (f"Made the custom play \"{name}\" (from {summary['from']}, set {summary['setl']}, play {summary['plyl']}) in playbook {bokl}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder (every career shares it) and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
+        if summary.get("left_out"):
+            summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
+        if summary.get("career_linked") is False:
+            summary["message"] += "\n\nNote: this career does not link the play in any playbook, so it will not show in this career (it was changed in the profile)."
         with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
             f.write(summary["message"] + "\n")
         return summary
@@ -13068,6 +13107,7 @@ class App(tk.Tk):
         headers = [h for h in desired if h in (self.model.trainer_headers or [])]
         if not headers:
             self._populate_tree_with_rows(self.tree_trainer, self.model.trainer_headers, self.model.trainers)
+            self._sync_vertical(self.tree_trainer)
             return
 
         # Prepare rows as (model_idx, row) for sorting
@@ -13577,6 +13617,7 @@ class App(tk.Tk):
         headers = [h for h in desired if h in (self.model.gm_headers or [])]
         if not headers:
             self._populate_tree_with_rows(self.tree_gm, self.model.gm_headers, self.model.gms)
+            self._sync_vertical(self.tree_gm)
             return
 
         # Confirmed Potential Evaluation + Rookie Scouting columns, joined from GMSK via PNid
