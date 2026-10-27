@@ -181,6 +181,17 @@ function rewriteHeaderCrc(table) {
 // prior-CRC chain between consecutive tables, the end-of-file checksum and
 // row counts within capacity. A save we wrote that fails this is not safe to
 // hand to the game.
+// The file header of a game database entry holds the entry's own size (bytes 8-11) and a checksum of the first 0x14 bytes (at 0x14). The library's writer does not keep the size right after a
+// table has changed its length (a rename in a compressed string table, a grown table): the stock entries of the play databases all have size == length, so every entry this bridge writes gets
+// the real length and a matching checksum.
+function fixDbHeader(buf) {
+    buf.writeUInt32BE(buf.length, 8);
+    buf.writeUInt32BE(crcOf(buf.slice(0, 0x14)), 0x14);
+    return buf;
+}
+function dbHeaderIsConsistent(buf) {
+    return buf.readUInt32BE(8) === buf.length && crcOf(buf.slice(0, 0x14)) === buf.readUInt32BE(0x14);
+}
 function verifyDbStructure(helper) {
     const tables = helper.file.tables;
     const issues = [];
@@ -868,7 +879,10 @@ async function patchEntry(target, mode, backupDir) {
     const out = path.join(os.tmpdir(), `hc09_entry_out_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
     try {
         await helper.save(out);
-        if (Buffer.compare(fs.readFileSync(out), raw) !== 0) {
+        const rawHeaderStale = !dbHeaderIsConsistent(raw);           // an earlier version of the tools (a rename in entry 46, a grown entry) left a size and checksum that do not match the entry
+        const unchanged = fs.readFileSync(out);
+        const same = rawHeaderStale ? Buffer.compare(fixDbHeader(Buffer.from(unchanged)), fixDbHeader(Buffer.from(raw))) === 0 : Buffer.compare(unchanged, raw) === 0;
+        if (!same) {
             throw new Error(`${path.basename(target.ast)} #${target.index}: saving the entry unchanged does not reproduce it byte for byte; nothing written`);
         }
         const done = [];
@@ -886,8 +900,23 @@ async function patchEntry(target, mode, backupDir) {
             done.push({ table: e.table, match: e.match, change });
         }
         await helper.save(out);
-        const patched = fs.readFileSync(out);
-        if (patched.length !== raw.length) throw new Error('the patched entry has a different length; nothing written');
+        const patched = fixDbHeader(fs.readFileSync(out));
+        if (patched.length !== raw.length) {
+            const playbookNameChanges = done
+                .filter((edit) => edit.table === 'PPPN')
+                .flatMap((edit) => Object.entries(edit.change)
+                    .filter(([field]) => field === 'PPPM')
+                    .map(([, values]) => values));
+            if (patched.length > raw.length && playbookNameChanges.length > 0) {
+                const growth = patched.length - raw.length;
+                throw new Error(
+                    `${path.basename(target.ast)} #${target.index}: the requested playbook-name edits need ${growth} more byte${growth === 1 ? '' : 's'} ` +
+                    `in the Huffman-compressed PPPN table, but game-file entries cannot grow in place; nothing written. ` +
+                    `Try a name that compresses to fewer bytes, or keep the existing playbook name.`
+                );
+            }
+            throw new Error(`${path.basename(target.ast)} #${target.index}: the patched entry has a different length (${raw.length} to ${patched.length} bytes); nothing written`);
+        }
         const check = await openEntryBuffer(patched);
         try {
             // A text column that the database keeps in a compressed string pool (a Huffman table) is written again as a whole, so most of the table's bytes change: every other value of the
@@ -1001,6 +1030,7 @@ async function cmdEntryGrow(args) {
             }
         }
         await helper.save(args.out);
+        fs.writeFileSync(args.out, fixDbHeader(fs.readFileSync(args.out)));
         report.after = fs.statSync(args.out).size;
         const check = await openDb(args.out);
         report.issues = verifyDbStructure(check);
@@ -1021,6 +1051,9 @@ async function cmdEntryRelocate(args) {
     const t = tocs.find((x) => x.index === Number(args.index));
     if (!t) throw new Error(`${path.basename(args.ast)} has no entry ${args.index}`);
     const data = fs.readFileSync(args.in);
+    // A zero 'uncompressed size' in the table of contents means "stored as it is". The game treats an entry whose field is not zero as a different kind of entry: v4/v5 had it set to the entry's size
+    // for entries 40, 42 and 46 and the game crashed in its save thread (the first Quick Save of a new career). This command only moves entries that are stored as they are and never writes the field.
+    if (t.uncompressedSizeInt !== 0) throw new Error(`entry ${args.index} of ${path.basename(args.ast)} has an uncompressed size (${t.uncompressedSizeInt}): compressed entries are not relocated`);
     const fd = fs.openSync(args.ast, 'r+');
     try {
         const head = Buffer.alloc(0x30);
@@ -1046,12 +1079,13 @@ async function cmdEntryRelocate(args) {
         };
         put(2, newStart / unit);
         put(3, data.length);
-        put(4, data.length);
         fs.fsyncSync(fd);
         console.log(JSON.stringify({ index: t.index, oldStart: t.startPositionInFile, oldSize: t.fileSizeInt, newStart, newSize: data.length, shift, widths: sizes }));
     } finally {
         fs.closeSync(fd);
     }
+    const moved = (await readToc(args.ast)).find((x) => x.index === t.index);
+    if (moved.fileSizeInt !== data.length || moved.uncompressedSizeInt !== 0) throw new Error(`the table of contents row of entry ${t.index} is wrong after the move (size ${moved.fileSizeInt}, uncompressed ${moved.uncompressedSizeInt}); restore the archive`);
 }
 
 // entry-locate --ast <archive> --index <n> [--out file]: where entry n is (start, size) so that entry-patch can address it; with --out the entry is written out as a database file.
