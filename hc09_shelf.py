@@ -20,8 +20,10 @@ import os
 import re
 import shutil
 import time
+import uuid
 
 META = "shelf.json"
+TEMP_PREFIX = ".hc09-shelf-"             # the temporary folder of a copy that is being checked
 VERSION = 1
 MOVABLE = ("rpcs3", "pcport")            # platforms whose save is exactly one folder
 _RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
@@ -61,6 +63,13 @@ def fingerprint(folder):
     return out
 
 
+def inside(path, root):
+    """Is `path` below (or the same as) the folder `root`?"""
+    a = os.path.normcase(os.path.abspath(path)) + os.sep
+    b = os.path.normcase(os.path.abspath(root)) + os.sep
+    return a.startswith(b)
+
+
 def _unique_dir(parent, label):
     """parent/label, or parent/label (2), (3)... when that exists."""
     path = os.path.join(parent, label)
@@ -83,9 +92,8 @@ def move_folder(src, dst, copy=False):
             return
         except OSError:
             pass                                                   # another drive (or a locked file): copy, check, then remove
-    part = dst + ".part"
-    if os.path.exists(part):
-        shutil.rmtree(part, ignore_errors=True)
+    # a temporary folder of this operation's own (never an existing path: the destination may be the game's save folder, which can hold anything), named so that no save list picks it up
+    part = os.path.join(os.path.dirname(dst), f"{TEMP_PREFIX}{uuid.uuid4().hex[:10]}-{os.path.basename(dst)}")
     try:
         shutil.copytree(src, part)
         if fingerprint(src) != fingerprint(part):
@@ -152,7 +160,7 @@ class Shelf:
         base = self._abs(rel)
         if not os.path.isdir(base):
             return []
-        return sorted(n for n in os.listdir(base) if os.path.isdir(os.path.join(base, n)) and not self.is_entry(os.path.join(base, n)) and not n.endswith(".part"))
+        return sorted(n for n in os.listdir(base) if os.path.isdir(os.path.join(base, n)) and not self.is_entry(os.path.join(base, n)) and not n.startswith(TEMP_PREFIX))
 
     def entries(self, rel=""):
         """The shelved saves directly inside a shelf folder."""
@@ -238,10 +246,10 @@ class Shelf:
         src = os.path.dirname(os.path.abspath(save["path"]))
         if not os.path.isdir(src):
             raise ShelfError("The save is not there any more.")
-        if os.path.normcase(src + os.sep).startswith(os.path.normcase(self.root + os.sep)):
+        if inside(src, self.root):
             raise ShelfError("That save is already inside the shelf.")
-        if os.path.normcase(self.root + os.sep).startswith(os.path.normcase(src + os.sep)):
-            raise ShelfError("The shelf is inside that save's folder; choose another shelf folder.")
+        if inside(self.root, os.path.dirname(src)):
+            raise ShelfError("The shelf is inside the game's save folder, where the game and the editor would list the shelved saves as saves of the game; choose another shelf folder.")
         stamp = time.strftime("%Y-%m-%d %H-%M")
         name = save.get("name") or os.path.basename(src)
         label = clean_name(label, "label") if label else clean_name(f"{name} {stamp}" if copy else name, "label")
