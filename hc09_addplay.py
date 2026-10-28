@@ -46,18 +46,25 @@ def free_play_id(lib, taken=()):
     return _highest_free(used, 1, max(used))[0]
 
 
+def _block_above(used, count):
+    """`count` consecutive ids, ascending, above every id in `used`."""
+    start = (max(used) if used else 0) + 1
+    return list(range(start, start + count))
+
+
 def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None):
-    """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}, the highest free ones below the
-    game's highest (the small ones are what custom plays in a profile take). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added
-    sets, ids a save holds)."""
+    """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}. The set id is the highest free
+    one below the game's highest (the rows are sorted by it). The slot, group and package ids are CONSECUTIVE ASCENDING blocks above every id in use, in the order of the rows: the game's own sets
+    number their slots that way (the id of a slot is the first one plus its number: 239 of the 240 sets; the first version took descending ids from the gaps below the highest and the game crashed
+    when it built the playbook of a game). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added sets, ids a save holds)."""
     taken = taken or {}
     quick = getattr(lib, "quick_subs", None) or {}
     used = {"SETL": {int(k) for k in lib.sets}, "SETP": {int(r["SETP"]) for r in lib.tables["SETP"]}, "SGF_": {int(r["SGF_"]) for r in lib.tables["SGFF"]},
             "SPF_": {int(r["SPF_"]) for r in quick.get("SPKF", [])}}
     for k in used:
         used[k] |= {int(x) for x in taken.get(k, ())}
-    return {"SETL": _highest_free(used["SETL"], 1, max(used["SETL"]))[0], "SETP": _highest_free(used["SETP"], slots, max(used["SETP"])),
-            "SGF_": _highest_free(used["SGF_"], groups, max(used["SGF_"])), "SPF_": _highest_free(used["SPF_"], packages, max(used["SPF_"] or {0})) if packages else []}
+    return {"SETL": _highest_free(used["SETL"], 1, max(used["SETL"]))[0], "SETP": _block_above(used["SETP"], slots), "SGF_": _block_above(used["SGF_"], groups),
+            "SPF_": _block_above(used["SPF_"], packages) if packages else []}
 
 
 def books_of(lib, base):
