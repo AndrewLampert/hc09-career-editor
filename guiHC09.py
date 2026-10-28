@@ -8061,21 +8061,24 @@ class AddPlayDialog(tk.Toplevel):
                       wraplength=780, foreground="gray").pack(anchor="w", padx=8, pady=2)
 
     def _taken_set_ids(self):
-        """The set ids the plays added so far use, and those the saves ticked here hold (a custom play's ids must not be ids the game's own data has)."""
+        """The set ids the plays added so far use, and those ANY save of the list holds, ticked or not: its own sets, slots and groups (a custom play's ids must not be ids the game's own data has) and the
+        sets its playbook links name (PGPL, PGSL, PGSS). A play taken out while a save is unticked leaves its links there, and the id must not be given to the next play: the link insertion would take
+        the stale row for the new play's and leave it under the old formation."""
         taken = AP.taken_ids(self.added)
-        for _label, path in self._selected_saves():
-            try:
+        for _label, path, _d in self._saves:
+            for tables, columns in (("SETL,SETP,SGFF", (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_"))),
+                                    ("PGPL,PGSL,PGSS", (("pgpl", "SETL", "SETL"), ("pgsl", "SETL", "SETL"), ("pgss", "SETL", "SETL")))):
                 tmpd = tempfile.mkdtemp(prefix="hc09_ids_")
                 try:
-                    self.app.model.run_bridge(["export", "--db", path, "--out", tmpd, "--tables", "SETL,SETP,SGFF"])
-                    for t, col, key in (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_")):
+                    self.app.model.run_bridge(["export", "--db", path, "--out", tmpd, "--tables", tables])
+                    for t, col, key in columns:
                         fn = os.path.join(tmpd, t + ".csv")
                         if os.path.isfile(fn):
                             taken[key] = list(taken[key]) + [int(r[col]) for r in read_csv_dicts(fn) if (r.get(col) or "").strip().isdigit()]
+                except Exception:
+                    pass                                        # a save without these tables (or one that cannot be read) holds no ids to keep
                 finally:
                     shutil.rmtree(tmpd, ignore_errors=True)
-            except Exception:
-                pass
         return taken
 
     def _fill_added(self):
