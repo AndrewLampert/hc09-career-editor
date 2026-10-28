@@ -8146,8 +8146,9 @@ class AddPlayDialog(tk.Toplevel):
             self.added = plays
             self._fill_added()
             lines = self._link(links=AP.links_of([play])) if self._selected_saves() else []
-            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it.")
-            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it.", parent=self)
+            note = " ".join(play.get("warnings") or [])
+            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it." + (" " + note if note else ""))
+            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it." + ("\n\n" + note if note else ""), parent=self)
 
         app.run_in_thread_with_busy("Adding the play to the game files...", work, done, error_title="Add a play")
 

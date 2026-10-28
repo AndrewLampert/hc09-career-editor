@@ -9,7 +9,7 @@ works out the ROWS from what the Play creator shows; the bridge puts them in, ch
 
 A play whose players line up somewhere else than in the stock formation (set) needs a formation of its own: every play of a set shares its alignment, so moving a player in the stock set
 would move him in all of them (the set "Big" has 86 plays). Such a play gets a NEW set, a copy of the stock one with only the moved players' places changed (its slots, the places in each
-alignment group, the groups, the quick-sub packages, the compact copy's row of each slot), linked into the same playbooks as the stock set.
+alignment group, the groups, the quick-sub packages; NOT the compact copy's slots, which crash the game: see new_set_rows), linked into the same playbooks as the stock set.
 """
 import copy
 
@@ -100,9 +100,9 @@ def set_ids_needed(lib, base):
 
 
 def new_set_rows(lib, base, new, alignment, ids, set_name):
-    """The rows of a copy of the base play's set with the moved players' places changed: ({"40": {SETL, SETP, SETG, SGFF, SPKF, SPKG}, "42": {SETP}}, the new set's id). The copy is the stock set's
+    """The rows of a copy of the base play's set with the moved players' places changed: ({"40": {SETL, SETP, SETG, SGFF, SPKF, SPKG}, "42": {}}, the new set's id). The copy is the stock set's
     own rows with only these values changed: the diagram places (SETP artx, arty) and the yards of the normal alignment group (SETG x___, y___, fx__, fy__, the flipped partner's too) of the players
-    that moved; the compact copy's rows hold the normal group's yards."""
+    that moved. Nothing goes into the compact copy (entry 42): its slot table cannot take another set."""
     d = lib.detail(base)
     st = d["set"]
     setl = int(st["setl"])
@@ -140,11 +140,9 @@ def new_set_rows(lib, base, new, alignment, ids, set_name):
     if packages:
         r40["SPKF"] = [clean({**r, "SETL": new_setl, "SPF_": pack_map[int(r["SPF_"])]}) for r in packages]
         r40["SPKG"] = [{**r, "SPF_": pack_map[int(r["SPF_"])]} for r in quick.get("SPKG", []) if int(r["SPF_"]) in pack_map]
-    new_dflt = group_map.get(dflt)
-    poso_of_new = {setp_map[old]: poso for old, poso in poso_of.items()}
-    yards = {poso_of_new[int(r["SETP"])]: r for r in setg_rows if int(r["SGF_"]) == new_dflt}
-    r42 = {"SETP": [{"SETL": new_setl, "x___": yards[int(r["poso"])]["x___"], "y___": yards[int(r["poso"])]["y___"], "poso": r["poso"], "DPos": r["DPos"], "EPos": r["EPos"]} for r in setp_rows]}
-    return {"40": r40, "42": r42}, new_setl
+    # The compact copy (entry 42, the simulation's playbooksim data) gets NO slot rows of the new set: found in the game (2026-10-28), eleven more SETP rows there (2640 = 240 sets x 11 is what it
+    # holds) crash the game on the day before the first game, even when the new set has no play and no links (a fixed-size area the simulation reads them into). The main database takes the whole set.
+    return {"40": r40, "42": {}}, new_setl
 
 
 def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False):
@@ -187,13 +185,18 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     for table in ("PLPD", "PLRD", "PLCM"):
         if new.get(table):
             r40[table] = [{**{k: v for k, v in row.items() if k != "PLYL"}, "PLYL": plyl} for row in new[table]]
-    pbai = []
-    for r in lib.tables["PBAI"]:
-        if int(r["PBPL"]) == base and int(r["BOKL"]) in books:
-            pbai.append({"BOKL": int(r["BOKL"]), "PBPL": plyl, "SETL": setl, "AIGR": int(r["AIGR"]), "PLYT": plyt, "PLF_": pbpl["PLF_"], "vpos": pbpl["vpos"], "prct": int(r["prct"])})
-    if not pbai:
-        raise ValueError("The play has no CPU rows (PBAI) in those playbooks.")
-    r40["PBAI"] = pbai
+    warnings = []
+    if own_set:
+        # no CPU rows (PBAI): the simulation (which also plays the quarterback's offensive coordinator) would look the new set up in the compact copy, which cannot hold it
+        warnings.append("The computer will not call this play (a play in a formation of its own is not in the simulation's data); you can call it yourself.")
+    else:
+        pbai = []
+        for r in lib.tables["PBAI"]:
+            if int(r["PBPL"]) == base and int(r["BOKL"]) in books:
+                pbai.append({"BOKL": int(r["BOKL"]), "PBPL": plyl, "SETL": setl, "AIGR": int(r["AIGR"]), "PLYT": plyt, "PLF_": pbpl["PLF_"], "vpos": pbpl["vpos"], "prct": int(r["prct"])})
+        if not pbai:
+            raise ValueError("The play has no CPU rows (PBAI) in those playbooks.")
+        r40["PBAI"] = pbai
     row42 = compact_row(setl, plyl, plyt, (r40.get("PLPD") or [None])[0], (r40.get("PLRD") or [None])[0])
     r42 = {"PBPL": [row42], "PLYS": [{"PLYL": plyl, "PLRR": r["PLRR"], "poso": r["poso"]} for r in plys]}
     r47 = {"PGPL": [{"BOKL": b, "SETL": setl, "PLYL": plyl, "PLTP": plyt} for b in books]}
@@ -202,7 +205,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     r47.update(extra47)
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
-    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "plyt": plyt, "books": books, "rows": rows}
+    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "plyt": plyt, "books": books, "rows": rows, "warnings": warnings}
 
 
 def merge(plays):
