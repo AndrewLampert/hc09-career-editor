@@ -46,6 +46,10 @@ def free_play_id(lib, taken=()):
     return _highest_free(used, 1, max(used))[0]
 
 
+MAX_SETL = 511                  # the set id field is 9 bits wide
+STOCK_MAX_SETL = 500            # the game's highest set
+
+
 def _block_above(used, count):
     """`count` consecutive ids, ascending, above every id in `used`."""
     start = (max(used) if used else 0) + 1
@@ -53,18 +57,21 @@ def _block_above(used, count):
 
 
 def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None):
-    """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}. The set id is the highest free
-    one below the game's highest (the rows are sorted by it). The slot, group and package ids are CONSECUTIVE ASCENDING blocks above every id in use, in the order of the rows: the game's own sets
-    number their slots that way (the id of a slot is the first one plus its number: 239 of the 240 sets; the first version took descending ids from the gaps below the highest and the game crashed
-    when it built the playbook of a game). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added sets, ids a save holds)."""
+    """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}. EVERY id is above all ids in use,
+    so that the new rows come AFTER every stock row in the tables (which are sorted by set): found in the game (2026-10-28) that rows put BEFORE stock rows crash it (one set inserted before the
+    last stock set survived, two did not; two appended after the last one play). The set id field is 9 bits wide and the game's highest set is 500, so there is room for 11 sets of our own (501 to
+    511). The slot, group and package ids are consecutive ascending blocks in the order of the rows, as the game's own sets number them (the id of a slot is the first one plus its number: 239 of 240
+    sets). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added sets, ids a save holds)."""
     taken = taken or {}
     quick = getattr(lib, "quick_subs", None) or {}
     used = {"SETL": {int(k) for k in lib.sets}, "SETP": {int(r["SETP"]) for r in lib.tables["SETP"]}, "SGF_": {int(r["SGF_"]) for r in lib.tables["SGFF"]},
             "SPF_": {int(r["SPF_"]) for r in quick.get("SPKF", [])}}
     for k in used:
         used[k] |= {int(x) for x in taken.get(k, ())}
-    return {"SETL": _highest_free(used["SETL"], 1, max(used["SETL"]))[0], "SETP": _block_above(used["SETP"], slots), "SGF_": _block_above(used["SGF_"], groups),
-            "SPF_": _block_above(used["SPF_"], packages) if packages else []}
+    setl = _block_above(used["SETL"], 1)[0]
+    if setl > MAX_SETL:
+        raise ValueError(f"The game has room for {MAX_SETL - STOCK_MAX_SETL} formations of its own (set ids {STOCK_MAX_SETL + 1} to {MAX_SETL}) and they are all taken. Take a play with its own formation out first.")
+    return {"SETL": setl, "SETP": _block_above(used["SETP"], slots), "SGF_": _block_above(used["SGF_"], groups), "SPF_": _block_above(used["SPF_"], packages) if packages else []}
 
 
 def books_of(lib, base):
@@ -102,7 +109,7 @@ def set_ids_needed(lib, base):
 def new_set_rows(lib, base, new, alignment, ids, set_name):
     """The rows of a copy of the base play's set with the moved players' places changed: ({"40": {SETL, SETP, SETG, SGFF, SPKF, SPKG}, "42": {}}, the new set's id). The copy is the stock set's
     own rows with only these values changed: the diagram places (SETP artx, arty) and the yards of the normal alignment group (SETG x___, y___, fx__, fy__, the flipped partner's too) of the players
-    that moved. Nothing goes into the compact copy (entry 42): its slot table cannot take another set."""
+    that moved. Nothing goes into the compact copy (entry 42): its slot table cannot take another set (found in the game: even one extra set of slot rows there crashes it)."""
     d = lib.detail(base)
     st = d["set"]
     setl = int(st["setl"])

@@ -42,3 +42,22 @@ A route is a short list of steps: `8(68,32,254) 9(2,1,0) 8(200,42,254) 10` means
 **What the tester saw:** the longer stem (B1) put the break at 17 yards, which also shows **the game reads edits to the master copy of its play database**; heading 64 (B3) gave a flat In, heading 16 on the stem (B7) a diagonal start; changing only the cut (B2, B4, B9) gave glitchy routes that plant for one cut and then run another; cut 5 (B5) gave a Curl-like stop before the post break; B6 and B8 showed nothing because the throw came before the second leg was run. **The play's picture did not change in any test:** it is drawn from separate art data, not from the steps.
 
 **Status: parked.** Settled: choosing among the game's own routes works (A, T5), and a leg's length and heading and the cut's animation mean what the code says. Not settled: the third number as speed and cuts that match the next leg running clean (B6, B8, B11 to B14, the receiver must be watched while the quarterback holds the ball). They matter only for *building* routes from numbers, which the editor does not do: the play creator works with the game's own routes, the game's route tables are full (a new route would need free rows in the step and the art tables), and a route's picture comes from separate art data. If a route lab is wanted later the tests above are the starting point and the details are in [hc09_play_creator.md](hc09_play_creator.md) (*Making your own routes and steps*) and [hc09_game_internals.md](hc09_game_internals.md).
+
+## C: plays added to the game files, and formations of their own (RPCS3, 2026-10-28)
+
+Each run used a copy of the game with the editor's **Add a play...** applied, the matching profile, and a NEW Cowboys career with the Wishbone playbook; the game was simmed past Friday 8/8/2008 12:00 PM (the day the game builds the playbooks of week 1) to the first game. A crash there is `TibMemcardPS3 ... Access violation reading location 0x0` (the game's session pointer is empty because an earlier setup step failed silently).
+
+| Copy | What it added | Result |
+|---|---|---|
+| a play in the stock formation (PA Test) | one play, no new set | plays |
+| the same + a set row only (id 499, no slots) | an empty new set | plays |
+| the slot rows only in the compact copy (entry 42) | 11 rows in its slot table | crash |
+| a copy of PA Middle's formation (id 499, whole set in the main database, nothing in the compact copy, no CPU rows) | one formation | plays; lines up like stock, snaps, flips, hot routes, handoff |
+| the same with the left receiver moved next to the left tackle and a changed route | one formation | plays; he stands there, the handoff works |
+| two formations with ids 499 and 495 (before set 500) | rows inserted before a stock row | crash |
+| two formations with ids 501 and 502 (after every stock row) | rows appended | plays |
+| one formation with id 501, receiver moved | rows appended | plays; he stands where the editor put him |
+| three formations 501 to 503, a different player moved in each | rows appended | plays; each play lines up with its own moved player |
+
+What the runs fix: a new set's rows go into the main database only, **after** the stock rows (set ids 501 to 511: the id field is 9 bits wide, so 11 formations of your own); its slot rows must not go into the compact copy; the play gets no CPU rows because the simulation would look the set up in the compact copy. One run with an unmoved copy at 501 and a moved one at 502 showed the moved receiver at his stock place; it did not come back in the later runs and is unexplained.
+
