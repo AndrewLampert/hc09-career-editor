@@ -65,3 +65,15 @@ Each run used a copy of the game with the editor's **Add a play...** applied, th
 
 What the runs fix: a new set's rows go into the main database only, **after** the stock rows (set ids 501 to 511: the id field is 9 bits wide, so 11 formations of your own); its slot rows must not go into the compact copy; an added play has an id above 7459 and no CPU rows. The earlier "two plays in one formation crash" runs were the ids, not the formation: plays that share a formation work. One run with an unmoved copy at 501 and a moved one at 502 showed the moved receiver at his stock place; it did not come back in later runs and is unexplained.
 
+## D: converting "Plays I made" into game plays (RPCS3, 2026-10-29)
+
+New Cowboys career with the playbook "Payton Spread Attack" (278), simmed past Friday 8/8 12:00 PM, then the plays tried in the game. Each copy converted 11 of the profile's 25 custom plays (ids 7460 to 7470, one formation each).
+
+| Copy | What was different | Result |
+|---|---|---|
+| v11b | the formation was a copy of the custom set (placeholder slot columns), the play family kept the custom play's | reached the game; plays lined up wrong or ran another play (a play-action toss ran as a run only); **editing one in the game's own editor crashed the game** (LoopSimulation thread, a read of address 0x63c) |
+| v11c | the formation is a copy of the stock look-alike formation with the custom places, the family is a stock play's | reached the game; **flipping a play and calling it froze the game** (the audio kept playing; every flipped place was 0.0 / 0.0) |
+| v11d | the flipped places follow the game's rule | **reached the game; the plays worked** (they lined up, ran and flipped) |
+| v11e | all 18 convertible plays, in 9 formations (plays with the same lineup share one) | **reached the game; all the plays worked** (the plays that share a formation lined up, ran their own routes and flipped) |
+
+What the runs fix: build a converted play's formation from the stock look-alike formation with only the custom places on it, take the play family from stock plays of the same kind, and compute the flipped places from the flip partner. Added plays cannot be edited in the game's own play editor.
