@@ -7961,7 +7961,8 @@ class AddPlayDialog(tk.Toplevel):
         ttk.Label(self, text=f"Add {d['play']['name']} as a new play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=820, justify="left", padding=(14, 0, 14, 6),
                   text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts, but the computer will not call it (the game's play list holds only the stock plays), so you call it yourself. It keeps "
-                       "the formation of the play it was made from (a moved player is not added: that changes a formation every play of it shares). Close RPCS3 first. The first time, the "
+                       "the formation of the play it was made from; if you moved a player it gets a formation of its own (a copy with the player moved; plays with the same lineup share one, and the game has room for 11 of "
+                       "them). Close RPCS3 first. The first time, the "
                        "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 with several plays; "
                        "defense plays are not tried.").pack(anchor="w")
         form = ttk.Frame(self)
