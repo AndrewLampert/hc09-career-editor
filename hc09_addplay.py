@@ -207,12 +207,51 @@ class FormationGroups:
         return max(plain, key=lambda g: (self.sets_in[g], -self.order.get(g, 0)), default=None)
 
 
-def set_ids_needed(lib, base):
-    """How many ids a copy of the base play's set needs: (slots, alignment groups, quick-sub packages)."""
-    setl = lib.detail(base)["set"]["setl"]
+def set_ids_needed(lib, base, like=None):
+    """How many ids a copy of the base play's set needs: (slots, alignment groups, quick-sub packages). like: the stock set a converted custom play copies instead (see convert_changes)."""
+    setl = int(like) if like is not None else lib.detail(base)["set"]["setl"]
     quick = getattr(lib, "quick_subs", None) or {}
     return (len([r for r in lib.tables["SETP"] if int(r["SETL"]) == setl]), len([g for g in lib.tables["SGFF"] if int(g["SETL"]) == setl]),
             len([r for r in quick.get("SPKF", []) if int(r["SETL"]) == setl]))
+
+
+def convert_changes(lib, custom_setl, like):
+    """A custom set converted into a copy of the stock look-alike set `like`: ({slot: {artx, arty}}, {slot: {x___, y___, fx__, fy__}}, the id of the stock set's normal alignment group): only the
+    custom set's PLACES go onto the stock set's rows. The custom set's other slot columns are placeholders (SGT_ 0, arti 4, opnm 0, odep 0, flas 0 in every slot), the stock set's are the game's;
+    a play converted with the placeholders lined up wrong or ran another play in the game (RPCS3, 2026-10-29)."""
+    c_setp = {int(r["poso"]): r for r in lib.tables["SETP"] if int(r["SETL"]) == int(custom_setl)}
+    c_ids = {int(r["SETP"]): p for p, r in c_setp.items()}
+    c_dflt = next(int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == int(custom_setl) and g["dflt"] == "1")
+    c_setg = {c_ids[int(r["SETP"])]: r for r in lib.tables["SETG"] if int(r["SETP"]) in c_ids and int(r["SGF_"]) == c_dflt}
+    l_setp = {int(r["poso"]): r for r in lib.tables["SETP"] if int(r["SETL"]) == int(like)}
+    l_ids = {int(r["SETP"]): p for p, r in l_setp.items()}
+    l_dflt = next(int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == int(like) and g["dflt"] == "1")
+    l_setg = {l_ids[int(r["SETP"])]: r for r in lib.tables["SETG"] if int(r["SETP"]) in l_ids and int(r["SGF_"]) == l_dflt}
+    setp_diff, setg_diff = {}, {}
+    for poso, row in l_setp.items():
+        c = c_setp.get(poso)
+        if c is not None:
+            diff = {k: int(c[k]) for k in ("artx", "arty") if int(c[k]) != int(row[k])}
+            if diff:
+                setp_diff[poso] = diff
+        gc, gl = c_setg.get(poso), l_setg.get(poso)
+        if gc is not None and gl is not None:
+            diff = {k: int(gc[k]) for k in ("x___", "y___", "fx__", "fy__") if int(gc[k]) != int(gl[k])}
+            if diff:
+                setg_diff[poso] = diff
+    return setp_diff, setg_diff, l_dflt
+
+
+def stock_plf(lib, plyt, like):
+    """The play family (PBPL.PLF_) of a converted play: the commonest one among the stock plays of the same kind (PLYT), preferring those of the stock set `like`, then those of its formation
+    (FORM), then all of them. A custom play keeps the family of the play it was made from, so a pass kind carried a run's family (PLYT 4 with 288, PLYT 13 with 33): pairs that no stock play has."""
+    stock = [p for k, p in lib.plays.items() if int(k) < P.CUSTOM_OFFSETS["PLYL"] and p["plyt"] == plyt]
+    form = lib.sets[int(like)]["form"]
+    for pick in (lambda p: p["setl"] == int(like), lambda p: lib.sets.get(p["setl"], {}).get("form") == form, lambda p: True):
+        counts = collections.Counter(p["plf"] for p in stock if pick(p))
+        if counts:
+            return max(counts.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+    raise ValueError("No stock play has that kind.")
 
 
 def new_set_rows(lib, base, new, alignment, ids, set_name, like=None):
@@ -223,7 +262,11 @@ def new_set_rows(lib, base, new, alignment, ids, set_name, like=None):
     st = d["set"]
     setl = int(st["setl"])
     set_name = GF.clean_name(set_name)
-    setp_diff, setg_diff, dflt = GF.alignment_changes(lib, d, new, alignment)
+    if like is not None:                                      # a custom play: a copy of the stock look-alike set with the custom set's places
+        setp_diff, setg_diff, dflt = convert_changes(lib, setl, like)
+        setl = int(like)
+    else:
+        setp_diff, setg_diff, dflt = GF.alignment_changes(lib, d, new, alignment)
     stock_setl = next(r for r in lib.tables["SETL"] if int(r["SETL"]) == setl)
     stock_setp = sorted((r for r in lib.tables["SETP"] if int(r["SETL"]) == setl), key=lambda r: int(r["poso"]))
     groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == setl]
@@ -236,11 +279,7 @@ def new_set_rows(lib, base, new, alignment, ids, set_name, like=None):
     group_map = {int(g["SGF_"]): ids["SGF_"][i] for i, g in enumerate(groups)}
     pack_map = {int(r["SPF_"]): ids["SPF_"][i] for i, r in enumerate(packages)}
     poso_of = {int(r["SETP"]): int(r["poso"]) for r in stock_setp}
-    kind = {}
-    if like is not None:
-        like_row = next(r for r in lib.tables["SETL"] if int(r["SETL"]) == int(like))
-        kind = {k: like_row[k] for k in ("FORM", "SETT", "SITT", "SLF_")}          # a custom set's own values are not the game's (FORM 8190 "Created Plays")
-    r40 = {"SETL": [{**stock_setl, **kind, "SETL": new_setl, "name": set_name}]}
+    r40 = {"SETL": [{**stock_setl, "SETL": new_setl, "name": set_name}]}
     clean = lambda row: {**row, "name": GF._text(row["name"])} if "name" in row else row
     setp_rows = []
     for r in stock_setp:
@@ -317,7 +356,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
             extra47["PGSS"] = [{"BOKL": b, "SETL": setl} for b in books]            # a set with no quick-sub packages has no PGSS row (32 of the game's 240 sets are like that)
     base_play = lib.plays[base]
     sitt = int(next(r["SITT"] for r in lib.tables["SETL"] if int(r["SETL"]) == int(like))) if convert else int(base_play["sitt"])
-    pbpl = {"SETL": setl, "PLYL": plyl, "SITT": sitt, "PLYT": plyt, "PLF_": int(nb["PLF_"]), "name": name, "risk": int(nb["risk"]), "motn": int(nb["motn"]), "vpos": int(nb["vpos"])}
+    pbpl = {"SETL": setl, "PLYL": plyl, "SITT": sitt, "PLYT": plyt, "PLF_": stock_plf(lib, plyt, like) if convert else int(nb["PLF_"]), "name": name, "risk": int(nb["risk"]), "motn": int(nb["motn"]), "vpos": int(nb["vpos"])}
     plys = [{"PSAL": int(r["PSAL"]), "ARTL": int(r["ARTL"]), "PLYL": plyl, "PLRR": int(r["PLRR"]), "poso": int(r["poso"])} for r in new["PLYS"]]
     r40 = {"PBPL": [pbpl], "PLYS": plys}
     for table in ("PLPD", "PLRD", "PLCM"):
@@ -359,7 +398,7 @@ def convert_mine(lib, bases, books, groups, taken_plays=()):
             missing = [r for r in lib.slot_rows[base].values() if r["psal"] not in {int(x["PSAL"]) for x in lib.tables["PSLO"]} or r["artl"] not in {int(x["ARTL"]) for x in lib.tables["ARTO"]}]
             if missing:
                 raise ValueError("It uses a route or diagram art the game's own database does not have.")
-            ids = free_set_ids(lib, *set_ids_needed(lib, base), taken=taken_ids(plays, custom_ids(lib)))
+            ids = free_set_ids(lib, *set_ids_needed(lib, base, like=like), taken=taken_ids(plays, custom_ids(lib)))
             plyl = free_play_id(lib, taken_plays + [p["plyl"] for p in plays])
             play = build(lib, base, name, ok, plyl, set_name=name, set_ids=ids, book_pbfm={b: groups.pick(b, like) for b in ok}, like=like)
             play["from_custom"] = lib.custom[base]["plyl"]
