@@ -8044,6 +8044,10 @@ class AddPlayDialog(tk.Toplevel):
         except Exception as e:
             self.added = []
             self.lbl_result.configure(text=f"Could not read what was added before: {e}")
+        try:
+            AP.check_ids(self.added)
+        except ValueError as e:
+            self.lbl_result.configure(text=str(e))
         share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
         if share is not None:
             self.lbl_set.configure(text=f"The formation \"{share['rows']['40']['SETL'][0]['name']}\", added before, already has the players in these places, so this play goes into it. "
@@ -8127,6 +8131,7 @@ class AddPlayDialog(tk.Toplevel):
             name = GF.clean_name(self.name_var.get())
             books = [self._books[i] for i in self.lst_books.curselection()]
             lib = self.designer.lib
+            AP.check_ids(self.added)
             plyl = AP.free_play_id(lib, [p["plyl"] for p in self.added])
             kw = {}
             if AP.moved_players(lib, self.base, self._args()["alignment"]):

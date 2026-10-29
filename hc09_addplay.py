@@ -1,5 +1,5 @@
 """
-Adding a play to the game's own play database, so that the game treats it as a normal play (flip, hot routes, adjustments, the CPU calls it): the rows of a new play go into the master
+Adding a play to the game's own play database, so that the game treats it as a normal play (flip, hot routes, adjustments; the computer does not call it, see free_play_id): the rows of a new play go into the master
 play database (qkl_boot.ast entry 40), its compact copy (entry 42), the playbooks' names for it (entry 46, PPPN) and the user-profile template's links (entry 47, PGPL), and the
 playbook links go into the profile (a new career copies its links from the PROFILE, not from the game file) and into the careers that should have the play.
 
@@ -30,22 +30,35 @@ def _num(row):
     return {k: (str(v) if k in TEXT_COLS else int(v)) for k, v in row.items()}
 
 
-def _highest_free(used, count, top):
-    """`count` ids below `top` that are not in `used`, the highest first."""
-    out = []
-    for i in range(top - 1, 0, -1):
-        if i not in used:
-            out.append(i)
-            if len(out) == count:
-                return out
-    raise ValueError("The game has no free ids left for that.")
+STOCK_MAX_PLYL = 7459           # the highest play id of the stock game (Man Blitz)
+MAX_PLYL = 16383                # the play id field is 14 bits wide
 
 
 def free_play_id(lib, taken=()):
-    """The play id for a new play: the highest id below the game's highest that no play uses (the proven way: 7455 to 7458 were free), so the ids that custom plays take (the small
-    numbers) and the ones the game gives to plays made in it later are left alone."""
-    used = set(lib.plays) | {int(t) for t in taken}
-    return _highest_free(used, 1, max(used))[0]
+    """The play id for a new play: the next id above the game's highest stock play (7459) and every id in use (7460 first). It must be ABOVE the stock maximum: found in the game (RPCS3,
+    2026-10-29) that the game builds an in-memory list of plays from the compact copy (qkl_boot.ast entry 42) and reads only its FIRST 3,099 rows, the stock count. A play with an id below
+    the stock maximum sorts in front of the last stock plays and pushes them out of that list; the game then asks for one of them (a side's current play, Man Blitz 7459) on the day before the
+    first game, finds nothing and crashes (two added plays in one formation crashed, two in different formations did not, only because of which play was pushed out). With ids above 7459 the first
+    3,099 rows are exactly the stock plays. The added plays are then not in that list, so the computer cannot call them (build writes no CPU rows)."""
+    top = max([STOCK_MAX_PLYL] + [int(p) for p in lib.plays] + [int(t) for t in taken])
+    if top + 1 > MAX_PLYL:
+        raise ValueError("The game has no free play id left.")
+    return top + 1
+
+
+def check_play_id(plyl):
+    """Raises ValueError for a play id that is not above the stock maximum (see free_play_id)."""
+    if int(plyl) <= STOCK_MAX_PLYL:
+        raise ValueError(f"A play added to the game files needs an id above {STOCK_MAX_PLYL}, the game's highest play: a lower id pushes a stock play out of the game's play list and the game crashes "
+                         "on the day before the first game.")
+
+
+def check_ids(plays):
+    """Raises ValueError when an added play has an id that is not above the stock maximum: a play added by an older version of the editor (ids 7455 to 7458) crashes the game."""
+    low = sorted(int(p["plyl"]) for p in plays if int(p["plyl"]) <= STOCK_MAX_PLYL)
+    if low:
+        raise ValueError(f"The plays {', '.join(str(i) for i in low)} were added by an older version of the editor with ids that crash the game on the day before the first game. Press Put the game files back "
+                         "and add the plays again (they get ids above 7459).")
 
 
 MAX_SETL = 511                  # the set id field is 9 bits wide
@@ -191,6 +204,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
         raise ValueError("Only offensive plays can be added for now.")
     if plyl in lib.plays:
         raise ValueError(f"The game already has a play {plyl}.")
+    check_play_id(plyl)
     own_set = bool(moved_players(lib, base, alignment)) or new_set
     have = set(books_of(lib, base))
     books = sorted({int(b) for b in books})
@@ -228,18 +242,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     for table in ("PLPD", "PLRD", "PLCM"):
         if new.get(table):
             r40[table] = [{**{k: v for k, v in row.items() if k != "PLYL"}, "PLYL": plyl} for row in new[table]]
-    warnings = []
-    if own_set:
-        # no CPU rows (PBAI): the simulation (which also plays the quarterback's offensive coordinator) would look the new set up in the compact copy, which cannot hold it
-        warnings.append("The computer will not call this play (a play in a formation of its own is not in the simulation's data); you can call it yourself.")
-    else:
-        pbai = []
-        for r in lib.tables["PBAI"]:
-            if int(r["PBPL"]) == base and int(r["BOKL"]) in books:
-                pbai.append({"BOKL": int(r["BOKL"]), "PBPL": plyl, "SETL": setl, "AIGR": int(r["AIGR"]), "PLYT": plyt, "PLF_": pbpl["PLF_"], "vpos": pbpl["vpos"], "prct": int(r["prct"])})
-        if not pbai:
-            raise ValueError("The play has no CPU rows (PBAI) in those playbooks.")
-        r40["PBAI"] = pbai
+    # No CPU rows (PBAI): the game's play list (the first 3,099 rows of the compact copy) cannot hold an added play, and a CPU pick of a play that is not in it would crash the game.
     row42 = compact_row(setl, plyl, plyt, (r40.get("PLPD") or [None])[0], (r40.get("PLRD") or [None])[0])
     r42 = {"PBPL": [row42], "PLYS": [{"PLYL": plyl, "PLRR": r["PLRR"], "poso": r["poso"]} for r in plys]}
     r47 = {"PGPL": [{"BOKL": b, "SETL": setl, "PLYL": plyl, "PLTP": plyt} for b in books]}
@@ -248,6 +251,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     r47.update(extra47)
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
+    warnings = ["The computer will not call this play (the game's play list holds only the stock plays); you can call it yourself."]
     return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "moved": moved_places(lib, base, alignment) if own_set else {},
             "plyt": plyt, "books": books, "rows": rows, "warnings": warnings}
 
@@ -258,6 +262,7 @@ def merge(plays):
     for p in plays:
         by_id[p["plyl"]] = p
     plays = [by_id[k] for k in sorted(by_id)]
+    check_ids(plays)
     rows = {}
     for p in plays:
         for entry, tables in p["rows"].items():
