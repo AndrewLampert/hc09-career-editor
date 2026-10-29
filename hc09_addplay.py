@@ -127,6 +127,25 @@ def find_shared(lib, base, alignment, added):
     return None
 
 
+def convert_places(lib, custom_setl):
+    """Where every player of a custom set stands, as a converted play keeps it to know which formation it is in: {"slot": [x, y]} for all eleven slots."""
+    al = lib.alignment(custom_setl)
+    return {str(p): [round(float(al[p]["x"]), 3), round(float(al[p]["y"]), 3)] for p in sorted(al)}
+
+
+def find_shared_convert(lib, base, like, added):
+    """The converted play (among `added`) whose formation is a copy of the same stock set `like` with the players in the same places as the custom play `base`'s set, or None: custom plays
+    with the same lineup go into one formation (the game has room for 11 formations of its own, and a play of the user's often shares its lineup with others: 18 plays had 9 lineups)."""
+    mine = convert_places(lib, lib.detail(base)["set"]["setl"])
+    for p in added:
+        have = p.get("moved")
+        if not p.get("new_set") or p.get("like") != like or not have or set(have) != set(mine):
+            continue
+        if all(abs(have[k][0] - mine[k][0]) <= 0.0011 and abs(have[k][1] - mine[k][1]) <= 0.0011 for k in mine):
+            return p
+    return None
+
+
 def check_name(name):
     return GF.clean_name(name)
 
@@ -355,7 +374,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
         if book_pbfm is None or any(b not in book_pbfm for b in books):
             raise ValueError("The formation of the play was not found in every playbook chosen.")
         if share is not None:
-            if find_shared(lib, base, alignment, [share]) is None:
+            if (find_shared_convert(lib, base, like, [share]) if convert else find_shared(lib, base, alignment, [share])) is None:
                 raise ValueError("That formation has the players somewhere else than this play.")
             setl = int(share["new_set"])
             extra40 = {t: copy.deepcopy(share["rows"]["40"][t]) for t in SET_TABLES if t in share["rows"]["40"]}
@@ -383,16 +402,18 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
     warnings = ["The computer will not call this play (the game's play list holds only the stock plays); you can call it yourself."]
-    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "moved": moved_places(lib, base, alignment) if own_set else {},
+    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "moved": convert_places(lib, lib.detail(base)["set"]["setl"]) if convert else (moved_places(lib, base, alignment) if own_set else {}),
             "plyt": plyt, "books": books, "rows": rows, "like": like if convert else None, "warnings": warnings}
 
 
-def convert_mine(lib, bases, books, groups, taken_plays=()):
-    """Convert the user's custom plays (lib.mount_custom) into plays of the game's own database: each gets a new play id and a set of its own (a copy of its custom set, with the formation type of the
-    stock set it is closest to), in the playbooks `books`, each formation in the playbook's formation group that suits it (FormationGroups.pick). Returns (plays, skipped): the built plays, and
-    [(base, why)] for the ones that cannot be converted."""
+def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None):
+    """Convert the user's custom plays (lib.mount_custom) into plays of the game's own database: each gets a new play id and a formation (a copy of the stock set it is closest to, with the
+    custom set's places), in the playbooks `books`, each formation in the playbook's formation group that suits it (FormationGroups.pick). Plays with the same lineup share one formation (the game has
+    room for 11). added: the plays added to the game files before (their ids and formations stay, and a new play can go into one of their formations); taken: set, slot, group and package ids that
+    saves still name (the window's _taken_set_ids). Returns (plays, skipped): the built plays, and [(base, why)] for the ones that cannot be converted."""
     plays, skipped = [], []
-    taken_plays = list(taken_plays)
+    taken_plays = list(taken_plays) + [p["plyl"] for p in added]
+    extra = {k: list(v) for k, v in (taken or {}).items()}
     for base in bases:
         name = lib.plays[base]["name"]
         try:
@@ -409,9 +430,15 @@ def convert_mine(lib, bases, books, groups, taken_plays=()):
             missing = [r for r in lib.slot_rows[base].values() if r["psal"] not in {int(x["PSAL"]) for x in lib.tables["PSLO"]} or r["artl"] not in {int(x["ARTL"]) for x in lib.tables["ARTO"]}]
             if missing:
                 raise ValueError("It uses a route or diagram art the game's own database does not have.")
-            ids = free_set_ids(lib, *set_ids_needed(lib, base, like=like), taken=taken_ids(plays, custom_ids(lib)))
+            shared = find_shared_convert(lib, base, like, list(added) + plays)
+            ids = None
+            if shared is None:
+                used = taken_ids(list(added) + plays, custom_ids(lib))
+                for k, v in extra.items():
+                    used[k] = list(used.get(k, [])) + v
+                ids = free_set_ids(lib, *set_ids_needed(lib, base, like=like), taken=used)
             plyl = free_play_id(lib, taken_plays + [p["plyl"] for p in plays])
-            play = build(lib, base, name, ok, plyl, set_name=name, set_ids=ids, book_pbfm={b: groups.pick(b, like) for b in ok}, like=like)
+            play = build(lib, base, name, ok, plyl, set_name=name, set_ids=ids, book_pbfm={b: groups.pick(b, like) for b in ok}, like=like, share=shared)
             play["from_custom"] = lib.custom[base]["plyl"]
             plays.append(play)
         except ValueError as e:

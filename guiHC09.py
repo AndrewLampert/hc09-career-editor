@@ -6335,6 +6335,8 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_files.pack(side="right", padx=(0, 8))
         self.btn_add = ttk.Button(bottom, text="Add a play...", command=self._open_add_play)
         self.btn_add.pack(side="right", padx=(0, 8))
+        self.btn_convert = ttk.Button(bottom, text="Convert my plays...", command=self._open_convert)
+        self.btn_convert.pack(side="right", padx=(0, 8))
         self.lbl_make = ttk.Label(bottom, wraplength=500, justify="left", foreground="gray")
         self.lbl_make.pack(side="left")
         ttk.Button(bottom, text="All assignments (advanced)...", command=lambda: AssignmentPickerDialog(self.app, self, None, None)).pack(side="right", padx=(0, 8))
@@ -6383,6 +6385,7 @@ class PlayDesignerDialog(tk.Toplevel):
         if not ids:
             messagebox.showinfo("Plays I made", "Your profile has no custom plays yet. Make one first (pick a play, Make custom play...).", parent=self)
         self._fill()
+        self._refresh_make()
         if keep is not None and self.tree.exists(str(keep)):
             self.tree.selection_set(str(keep))
         return True
@@ -6602,6 +6605,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_make.configure(state=state, text="Save changes..." if self.is_mine() else "Make custom play...")
         self.btn_files.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
         self.btn_add.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None and AP is not None else "disabled")
+        self.btn_convert.configure(state="normal" if getattr(self.lib, "custom", None) and GF is not None and AP is not None else "disabled")
         self.lbl_make.configure(text=note)
 
     def _job_text(self, sl):
@@ -6729,6 +6733,12 @@ class PlayDesignerDialog(tk.Toplevel):
         if self.detail is None or self.is_mine() or GF is None or AP is None:
             return
         AddPlayDialog(self.app, self)
+
+    def _open_convert(self):
+        if not getattr(self.lib, "custom", None) or GF is None or AP is None:
+            messagebox.showinfo("Convert my plays", "Choose 'Plays I made (my profile)' in the playbook list first: the editor reads your custom plays from your profile.", parent=self)
+            return
+        ConvertPlaysDialog(self.app, self)
 
     def _make_custom(self):
         if self.detail is None:
@@ -8056,6 +8066,10 @@ class AddPlayDialog(tk.Toplevel):
             self.ent_set.configure(state="disabled")
         self._fill_added()
         self.lbl_info.configure(text=f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation).")
+        self._fill_saves()
+
+    def _fill_saves(self):
+        app = self.app
         self._saves = []
         db = getattr(app.model, "db_path", None)
         if db and os.path.isfile(db):
@@ -8220,6 +8234,184 @@ class AddPlayDialog(tk.Toplevel):
             messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
 
         app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
+
+
+class ConvertPlaysDialog(AddPlayDialog):
+    """Convert my plays: the custom plays of the profile ("Plays I made") added to the game's own play database as NORMAL plays, in the playbooks you pick: they can be flipped and hot-routed and the
+    quarterback adjusts; the computer does not call them and they cannot be edited in the game (the game's play list holds only the stock plays). Each play's formation is a copy of the stock
+    formation with the same players, with the places of the custom set; plays with the same lineup share one formation (the game has room for 11). The list of added plays, Take out, Put the game
+    files back and the links in the saves are those of the Add a play window."""
+
+    def __init__(self, app, designer):
+        tk.Toplevel.__init__(self, designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Convert my plays")
+        self.transient(designer)
+        self.geometry("900x900")
+        self.app, self.designer = app, designer
+        self.boot = None
+        self.added = []
+        self._bases = []
+        self._books = []
+        ttk.Label(self, text="Convert my plays into plays of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=860, justify="left", padding=(14, 0, 14, 6),
+                  text="Your custom plays go into the game's own files as normal plays of the playbooks you pick: they can be flipped and hot-routed and the quarterback adjusts, but the computer will not call them "
+                       "(the game's play list holds only the stock plays) and they cannot be edited in the game. Each play keeps its routes and gets a formation that is a copy of the game's formation with the same "
+                       "players, with your places; plays with the same lineup share one formation (the game has room for 11, so a play whose lineup is the twelfth is skipped). Offense plays only; a play "
+                       "whose formation no game formation matches is skipped. Close RPCS3 first. The first time, the archive's original table of contents is saved in Documents\\hc09-game-file-backup, and "
+                       "Put the game files back puts qkl_boot.ast back byte for byte. Your custom plays stay in your profile.").pack(anchor="w")
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=14, pady=(0, 4))
+        ttk.Label(form, text="Plays to convert:").grid(row=0, column=0, sticky="nw", pady=3)
+        lf = ttk.Frame(form)
+        lf.grid(row=0, column=1, sticky="w", padx=6)
+        self.lst_plays = tk.Listbox(lf, selectmode="extended", height=8, width=58, exportselection=False)
+        self.lst_plays.pack(side="left")
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self.lst_plays.yview)
+        sb.pack(side="left", fill="y")
+        self.lst_plays.configure(yscrollcommand=sb.set)
+        ttk.Label(form, text="Put them in these playbooks:").grid(row=1, column=0, sticky="nw", pady=3)
+        lf2 = ttk.Frame(form)
+        lf2.grid(row=1, column=1, sticky="w", padx=6)
+        self.lst_books = tk.Listbox(lf2, selectmode="extended", height=7, width=58, exportselection=False)
+        self.lst_books.pack(side="left")
+        sb2 = ttk.Scrollbar(lf2, orient="vertical", command=self.lst_books.yview)
+        sb2.pack(side="left", fill="y")
+        self.lst_books.configure(yscrollcommand=sb2.set)
+        self.lbl_info = ttk.Label(self, wraplength=860, justify="left", padding=(14, 4, 14, 2))
+        self.lbl_info.pack(anchor="w")
+        self.saves_frame = ttk.LabelFrame(self, text="Also link the plays in these saves (a new career copies its playbook links from the profile)")
+        self.saves_frame.pack(fill="x", padx=14, pady=(4, 4))
+        self.save_vars = []
+        self._saves = []
+        ttk.Label(self, text="Plays added to the game files so far:", padding=(14, 4, 14, 0)).pack(anchor="w")
+        lf3 = ttk.Frame(self)
+        lf3.pack(fill="x", padx=14)
+        self.lst_added = tk.Listbox(lf3, height=5, width=90, exportselection=False)
+        self.lst_added.pack(side="left")
+        ttk.Button(lf3, text="Take the selected play out", command=self._take_out).pack(side="left", padx=8, anchor="n")
+        self.lbl_result = ttk.Label(self, wraplength=860, justify="left", foreground="gray", padding=(14, 6, 14, 2))
+        self.lbl_result.pack(anchor="w")
+        self.txt_skipped = tk.Text(self, height=6, width=100, wrap="word", state="disabled")
+        self.txt_skipped.pack(fill="x", padx=14, pady=(0, 4))
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_apply = ttk.Button(btn, text="Convert the selected plays", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Put the game files back...", command=self._restore).pack(side="left")
+        self._populate()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _set_skipped(self, lines):
+        self.txt_skipped.configure(state="normal")
+        self.txt_skipped.delete("1.0", "end")
+        self.txt_skipped.insert("1.0", "\n".join(lines))
+        self.txt_skipped.configure(state="disabled")
+
+    def _populate(self):
+        app = self.app
+        archives = self._archives()
+        if not archives:
+            self.btn_apply.configure(state="disabled")
+            self.lbl_info.configure(text="The game files were not found: pick qkl_boot.ast in the Playbooks tab first.")
+            return
+        self.boot = archives[0]
+        lib = self.designer.lib
+        try:
+            names = app.playbook_name_map(self.boot)
+        except Exception:
+            names = {}
+        self._bases = [b for b in sorted(lib.custom, key=lambda b: lib.plays[b]["name"].lower()) if lib.detail(b)["side"] == "offense"]
+        for b in self._bases:
+            self.lst_plays.insert("end", lib.plays[b]["name"])
+        self.lst_plays.selection_set(0, "end")
+        kinds = getattr(self.designer, "books", {}) or {}                       # {playbook: (name, "offense" / "defense" / "")}: offense plays go into offense playbooks only
+        self._books = sorted((b for b in names if kinds.get(b, (None, ""))[1] in ("offense", "")), key=lambda b: (names[b].lower(), b))
+        for b in self._books:
+            self.lst_books.insert("end", f"{names[b]} ({b})")
+        try:
+            self.added = app.add_play_state(self.boot).get("plays") or []
+        except Exception as e:
+            self.added = []
+            self.lbl_result.configure(text=f"Could not read what was added before: {e}")
+        try:
+            AP.check_ids(self.added)
+        except ValueError as e:
+            self.lbl_result.configure(text=str(e))
+        self._fill_added()
+        self.lbl_info.configure(text=f"{len(self._bases)} offense play{'s' if len(self._bases) != 1 else ''} of yours. Pick the playbook(s) of the team you will play with (a play goes into a playbook only where "
+                                     "that playbook has a formation group for it).")
+        self._fill_saves()
+
+    def _formation_groups(self):
+        """The playbooks' formation groups (the menus of the play-call screen) from the game files: AP.FormationGroups."""
+        app = self.app
+        roles = app.model.run_bridge(["add-play-layout", "--ast", self.boot]).get("roles") or {}
+        tmp = tempfile.mkdtemp(prefix="hc09_conv_")
+        try:
+            def export(role, tables, name):
+                out = os.path.join(tmp, name)
+                app.model.run_bridge(["shipped-table-export", "--ast", self.boot, "--top-index", str(roles.get(role, role)), "--tables", tables, "--out-dir", out])
+                return {t: read_csv_dicts(os.path.join(out, t.lower() + ".csv")) for t in tables.split(",")}
+            e47, e40 = export("47", "PGSL,PGFM", "e47"), export("40", "PBFM", "e40")
+            return AP.FormationGroups(e47["PGSL"], e40["PBFM"], e47["PGFM"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _apply(self):
+        app = self.app
+        if self.boot is None:
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Convert my plays", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        db = getattr(app.model, "db_path", None)
+        if db and getattr(app, "dirty", False) and any(path == db for _l, path in self._selected_saves()):
+            messagebox.showerror("Convert my plays", "The open save has changes that are not saved yet. Save it first (or untick it here), then try again.", parent=self)
+            return
+        bases = [self._bases[i] for i in self.lst_plays.curselection()]
+        books = [self._books[i] for i in self.lst_books.curselection()]
+        if not bases or not books:
+            messagebox.showerror("Convert my plays", "Pick at least one play and one playbook.", parent=self)
+            return
+        try:
+            AP.check_ids(self.added)
+            groups = self._formation_groups()
+            plays, skipped = AP.convert_mine(self.designer.lib, bases, books, groups, added=self.added, taken=self._taken_set_ids())
+        except ValueError as e:
+            messagebox.showerror("Convert my plays", str(e), parent=self)
+            return
+        lib = self.designer.lib
+        notes = [f"{lib.plays[b]['name']}: {why}" for b, why in skipped]
+        if not plays:
+            self._set_skipped(["Nothing could be converted:"] + notes)
+            messagebox.showerror("Convert my plays", "None of the selected plays can be converted. The reasons are listed in the window.", parent=self)
+            return
+        n_sets = len({p["new_set"] for p in plays if p["new_set"] not in {q["new_set"] for q in self.added}})
+        if not messagebox.askyesno("Convert my plays", f"Convert {len(plays)} play{'s' if len(plays) != 1 else ''} ({n_sets} new formation{'s' if n_sets != 1 else ''}) into {len(books)} playbook{'s' if len(books) != 1 else ''}?\n\n"
+                                   + (f"{len(skipped)} cannot be converted (listed afterwards).\n\n" if skipped else "") +
+                                   "This writes qkl_boot.ast (four of its entries are written again at the end of the file, about 15 MB). The original table of contents is saved first and Put the game "
+                                   "files back restores the file byte for byte.", parent=self):
+            return
+        everything = self.added + plays
+
+        def work():
+            return app.add_play_write(self.boot, everything)
+
+        def done(rep):
+            self.added = everything
+            self._fill_added()
+            lines = self._link(links=AP.links_of(plays)) if self._selected_saves() else []
+            self.lbl_result.configure(text=f"Done: {len(plays)} play{'s' if len(plays) != 1 else ''} converted. " + "; ".join(lines) + (" " if lines else "") +
+                                      "Start the game, make a NEW career and look in the playbook. The computer will not call these plays; do not edit them in the game.")
+            self._set_skipped([f"{p['name']}: play {p['plyl']}, formation {p['new_set']}" for p in plays] + (["", "Not converted:"] + notes if notes else []))
+            messagebox.showinfo("Convert my plays", f"{len(plays)} play{'s' if len(plays) != 1 else ''} are in the game files.\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links "
+                                "were written here) to find them." + (f"\n\n{len(skipped)} play{'s' if len(skipped) != 1 else ''} could not be converted: see the list in the window." if skipped else ""), parent=self)
+
+        app.run_in_thread_with_busy("Converting the plays...", work, done, error_title="Convert my plays")
 
 
 class TeamPhilosophyDialog(tk.Toplevel):
