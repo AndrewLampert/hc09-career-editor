@@ -58,6 +58,7 @@ Each run used a copy of the game with the editor's **Add a play...** applied, th
 | two formations with ids 501 and 502 (after every stock row) | rows appended | plays |
 | one formation with id 501, receiver moved | rows appended | plays; he stands where the editor put him |
 | three formations 501 to 503, a different player moved in each | rows appended | plays; each play lines up with its own moved player |
+| two plays in ONE added formation (501), with or without a third play in a second formation (502) | rows appended | crash (twice) |
 
-What the runs fix: a new set's rows go into the main database only, **after** the stock rows (set ids 501 to 511: the id field is 9 bits wide, so 11 formations of your own); its slot rows must not go into the compact copy; the play gets no CPU rows because the simulation would look the set up in the compact copy. One run with an unmoved copy at 501 and a moved one at 502 showed the moved receiver at his stock place; it did not come back in the later runs and is unexplained.
+What the runs fix: a new set's rows go into the main database only, **after** the stock rows (set ids 501 to 511: the id field is 9 bits wide, so 11 formations of your own); its slot rows must not go into the compact copy; the play gets no CPU rows because the simulation would look the set up in the compact copy; one play per added formation (two plays in one crashed). One run with an unmoved copy at 501 and a moved one at 502 showed the moved receiver at his stock place; it did not come back in the later runs and is unexplained.
 
