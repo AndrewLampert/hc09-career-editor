@@ -42,3 +42,17 @@ A route is a short list of steps: `8(68,32,254) 9(2,1,0) 8(200,42,254) 10` means
 **What the tester saw:** the longer stem (B1) put the break at 17 yards, which also shows **the game reads edits to the master copy of its play database**; heading 64 (B3) gave a flat In, heading 16 on the stem (B7) a diagonal start; changing only the cut (B2, B4, B9) gave glitchy routes that plant for one cut and then run another; cut 5 (B5) gave a Curl-like stop before the post break; B6 and B8 showed nothing because the throw came before the second leg was run. **The play's picture did not change in any test:** it is drawn from separate art data, not from the steps.
 
 **Status: parked.** Settled: choosing among the game's own routes works (A, T5), and a leg's length and heading and the cut's animation mean what the code says. Not settled: the third number as speed and cuts that match the next leg running clean (B6, B8, B11 to B14, the receiver must be watched while the quarterback holds the ball). They matter only for *building* routes from numbers, which the editor does not do: the play creator works with the game's own routes, the game's route tables are full (a new route would need free rows in the step and the art tables), and a route's picture comes from separate art data. If a route lab is wanted later the tests above are the starting point and the details are in [hc09_play_creator.md](hc09_play_creator.md) (*Making your own routes and steps*) and [hc09_game_internals.md](hc09_game_internals.md).
+
+## C: plays added to the game files (RPCS3, 2026-10-28 and 29)
+
+Each run used a copy of the game with the editor's **Add a play...** applied, the matching profile, and a NEW Cowboys career with the Wishbone playbook; the game was simmed past Friday 8/8/2008 12:00 PM (the day the game builds the plays of both sides for week 1) to the first game. A crash there is `TibMemcardPS3 ... Access violation reading location 0x0`.
+
+| Copy | Ids | Result |
+|---|---|---|
+| one play (PA Test) in the stock formation, CPU rows | 7455 | plays |
+| two plays in two different stock formations | 7455, 7456 | plays |
+| two plays in the SAME stock formation, CPU rows | 7455, 7456 | **crash** (also when the second is only in playbooks the career does not use, and when it has no compact-copy rows) |
+| two plays in the same stock formation in different playbooks | 7456, 7457 | **crash** |
+| two plays in the same stock formation, **no CPU rows, ids above the stock maximum** | 7460, 7461 | **plays** |
+
+The registers of the frozen game explained it: the game's sorted play list held 3,099 plays, from id 2 up to 7455 (our play), and the lookup that failed was for the stock play 7459, which the list had lost. See the paragraph "Why the id must be above 7459" in [hc09_play_creator.md](hc09_play_creator.md).
