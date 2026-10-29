@@ -5032,10 +5032,11 @@ def load_personnel_data(model, archives, backup_dir=None, cache_dir=None):
     return data
 
 
-def link_plays_in_save(model, db_path, links=None, remove_plays=()):
+def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=()):
     """The playbook links of a save (PGPL, and PGSL / PGSS for a play with a formation of its own): the links of plays added to the game files put in (a profile is what a NEW career copies its links
     from), and the links of plays that are no longer in the game files taken out. links: {"PGPL": [...], "PGSL": [...], "PGSS": [...]} (hc09_addplay.links_of); remove_plays: the added plays
-    (dicts) to take out. The save is copied to <save>.bak first and put back if the write fails. Returns (rows added, rows removed)."""
+    (dicts) to take out; keep_plays: the added plays that stay (a formation they still use keeps its PGSL / PGSS links). The save is copied to <save>.bak first and put back if the write fails.
+    Returns (rows added, rows removed)."""
     links = links or {}
     tables = [t for t in AP.LINK_TABLES if links.get(t) or remove_plays]
     if not tables:
@@ -5054,7 +5055,7 @@ def link_plays_in_save(model, db_path, links=None, remove_plays=()):
                 if t == "PGPL":
                     rows, n_rm = AP.remove_links(rows, [p["plyl"] for p in remove_plays])
                 else:
-                    rows, n_rm = AP.remove_set_links(rows, [p["new_set"] for p in remove_plays if p.get("new_set")])
+                    rows, n_rm = AP.remove_set_pairs(rows, AP.unused_set_pairs(remove_plays, keep_plays))
             if links.get(t):
                 rows, n_add = AP.insert_rows(rows, links[t], AP.LINK_KEYS[t])
             if not n_add and not n_rm:
@@ -8043,6 +8044,11 @@ class AddPlayDialog(tk.Toplevel):
         except Exception as e:
             self.added = []
             self.lbl_result.configure(text=f"Could not read what was added before: {e}")
+        share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
+        if share is not None:
+            self.lbl_set.configure(text=f"The formation \"{share['rows']['40']['SETL'][0]['name']}\", added before, already has the players in these places, so this play goes into it. "
+                                        "The other plays of the stock formation stay as they are.")
+            self.ent_set.configure(state="disabled")
         self._fill_added()
         self.lbl_info.configure(text=f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation).")
         self._saves = []
@@ -8089,11 +8095,11 @@ class AddPlayDialog(tk.Toplevel):
     def _selected_saves(self):
         return [(label, path) for (label, path, _d), v in zip(self._saves, self.save_vars) if v.get()]
 
-    def _link(self, links=None, remove=()):
+    def _link(self, links=None, remove=(), keep=()):
         out = []
         for label, path in self._selected_saves():
             try:
-                a, r = link_plays_in_save(self.app.model, path, links, remove)
+                a, r = link_plays_in_save(self.app.model, path, links, remove, keep)
                 out.append(f"{label}: {a} link{'s' if a != 1 else ''} added, {r} taken out")
             except Exception as e:
                 out.append(f"{label}: NOT changed ({e})")
@@ -8124,9 +8130,13 @@ class AddPlayDialog(tk.Toplevel):
             plyl = AP.free_play_id(lib, [p["plyl"] for p in self.added])
             kw = {}
             if AP.moved_players(lib, self.base, self._args()["alignment"]):
-                kw["set_name"] = GF.clean_name(self.set_var.get())
-                n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
-                kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids())
+                share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added)
+                if share is not None:
+                    kw["share"] = share
+                else:
+                    kw["set_name"] = GF.clean_name(self.set_var.get())
+                    n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
+                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids())
                 kw["book_pbfm"] = app.book_set_formations(self.boot, self.designer.detail["set"]["setl"])
             play = AP.build(lib, self.base, name, books, plyl, **self._args(), **kw)
         except ValueError as e:
@@ -8174,7 +8184,7 @@ class AddPlayDialog(tk.Toplevel):
         def done(rep):
             self.added = plays
             self._fill_added()
-            lines = self._link(remove=[gone]) if self._selected_saves() else []
+            lines = self._link(remove=[gone], keep=plays) if self._selected_saves() else []
             self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
 
         app.run_in_thread_with_busy("Taking the play out...", work, done, error_title="Add a play")
