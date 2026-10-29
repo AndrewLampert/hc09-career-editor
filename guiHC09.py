@@ -7925,7 +7925,7 @@ class GameFilesDialog(tk.Toplevel):
 
 class AddPlayDialog(tk.Toplevel):
     """Add a play: the play shown in the designer, with the changes made there, added to the game's own play database as a NEW play (a normal play for the game: it can be flipped and hot-routed,
-    the quarterback adjusts, the CPU calls it), in the playbooks you pick. The game has no free rows, so the bridge writes bigger copies of the entries it changes at the end of qkl_boot.ast
+    the quarterback adjusts; the computer does not call it: the game's play list holds only the stock plays), in the playbooks you pick. The game has no free rows, so the bridge writes bigger copies of the entries it changes at the end of qkl_boot.ast
     (see hc09_addplay.py); Put the game files back restores the file byte for byte. The play's links also go into your profile, which is what a NEW career copies its playbooks from."""
 
     def __init__(self, app, designer):
@@ -7943,10 +7943,10 @@ class AddPlayDialog(tk.Toplevel):
         self.added = []
         ttk.Label(self, text=f"Add {d['play']['name']} as a new play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=820, justify="left", padding=(14, 0, 14, 6),
-                  text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed, the quarterback adjusts and the CPU calls it. It keeps "
+                  text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts, but the computer will not call it (the game's play list holds only the stock plays), so you call it yourself. It keeps "
                        "the formation of the play it was made from (a moved player is not added: that changes a formation every play of it shares). Close RPCS3 first. The first time, the "
-                       "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 on one play; "
-                       "the CPU's use and defense plays are not tried.").pack(anchor="w")
+                       "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 with several plays; "
+                       "defense plays are not tried.").pack(anchor="w")
         form = ttk.Frame(self)
         form.pack(fill="x", padx=14, pady=(0, 4))
         ttk.Label(form, text="Name of the play (24 characters):").grid(row=0, column=0, sticky="w", pady=3)
@@ -8013,6 +8013,10 @@ class AddPlayDialog(tk.Toplevel):
         except Exception as e:
             self.added = []
             self.lbl_result.configure(text=f"Could not read what was added before: {e}")
+        try:
+            AP.check_ids(self.added)
+        except ValueError as e:
+            self.lbl_result.configure(text=str(e))
         self._fill_added()
         self.lbl_info.configure(text=f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation).")
         self._saves = []
@@ -8069,6 +8073,7 @@ class AddPlayDialog(tk.Toplevel):
         try:
             name = GF.clean_name(self.name_var.get())
             books = [self._books[i] for i in self.lst_books.curselection()]
+            AP.check_ids(self.added)
             plyl = AP.free_play_id(self.designer.lib, [p["plyl"] for p in self.added])
             play = AP.build(self.designer.lib, self.base, name, books, plyl, **self._args())
         except ValueError as e:
@@ -8091,8 +8096,9 @@ class AddPlayDialog(tk.Toplevel):
             self.added = plays
             self._fill_added()
             lines = self._link(links=AP.links_of([play])) if self._selected_saves() else []
-            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it.")
-            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it.", parent=self)
+            note = " ".join(play.get("warnings") or [])
+            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it." + (" " + note if note else ""))
+            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it." + ("\n\n" + note if note else ""), parent=self)
 
         app.run_in_thread_with_busy("Adding the play to the game files...", work, done, error_title="Add a play")
 
