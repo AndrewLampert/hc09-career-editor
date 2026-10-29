@@ -8260,7 +8260,7 @@ class ConvertPlaysDialog(AddPlayDialog):
                   text="Your custom plays go into the game's own files as normal plays of the playbooks you pick: they can be flipped and hot-routed and the quarterback adjusts, but the computer will not call them "
                        "(the game's play list holds only the stock plays) and they cannot be edited in the game. Each play keeps its routes and gets a formation that is a copy of the game's formation with the same "
                        "players, with your places; plays with the same lineup share one formation (the game has room for 11, so a play whose lineup is the twelfth is skipped). Offense plays only; a play "
-                       "whose formation no game formation matches is skipped. Close RPCS3 first. The first time, the archive's original table of contents is saved in Documents\\hc09-game-file-backup, and "
+                       "whose formation no game formation matches is skipped, and so is a play that is already converted (to convert an edited play again, take the old copy out first with the button below). Close RPCS3 first. The first time, the archive's original table of contents is saved in Documents\\hc09-game-file-backup, and "
                        "Put the game files back puts qkl_boot.ast back byte for byte. Your custom plays stay in your profile.").pack(anchor="w")
         form = ttk.Frame(self)
         form.pack(fill="x", padx=14, pady=(0, 4))

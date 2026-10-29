@@ -420,6 +420,9 @@ def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None
             d = lib.detail(base)
             if d["side"] != "offense":
                 raise ValueError("Only offensive plays can be converted for now.")
+            before = next((p for p in added if p.get("from_custom") == lib.custom[base]["plyl"]), None)
+            if before is not None:
+                raise ValueError(f"It is already converted (play {before['plyl']}): take that copy out first, then convert the edited play again, or the game files would hold both versions.")
             match = stock_match(lib, d["set"]["setl"])
             if match is None:
                 raise ValueError("No set of the game has the same players as the play's formation.")
