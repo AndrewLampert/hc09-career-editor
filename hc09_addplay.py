@@ -234,11 +234,22 @@ def convert_changes(lib, custom_setl, like):
             diff = {k: int(c[k]) for k in ("artx", "arty") if int(c[k]) != int(row[k])}
             if diff:
                 setp_diff[poso] = diff
-        gc, gl = c_setg.get(poso), l_setg.get(poso)
-        if gc is not None and gl is not None:
-            diff = {k: int(gc[k]) for k in ("x___", "y___", "fx__", "fy__") if int(gc[k]) != int(gl[k])}
-            if diff:
-                setg_diff[poso] = diff
+    # The places a flipped play stands at (SETG fx__, fy__) are NOT the custom set's: its rows hold 0.0 / 0.0 in every slot (a created play cannot be flipped), and a converted play that was
+    # flipped in the game froze it (RPCS3, 2026-10-29: every player sent to the same spot). The rule of the game's own formations (true for 2,552 of their 2,640 slots, the rest are special teams
+    # sets): a slot stands, flipped, where its flip partner stands mirrored (fx = -x of the partner, fy = y of the partner); a slot without a partner stays where it is.
+    final = {}
+    for poso, gl in l_setg.items():
+        src = c_setg.get(poso) or gl
+        final[poso] = (int(src["x___"]) & 0xFFFFFFFF, int(src["y___"]) & 0xFFFFFFFF)
+    partner = {p: v.get("partner") for p, v in lib.alignment(int(like)).items()}
+    mirror = lambda bits: bits if (bits & 0x7FFFFFFF) == 0 else bits ^ 0x80000000          # the sign bit of the float (a zero stays +0.0 as in the game's rows)
+    for poso, gl in l_setg.items():
+        q = partner.get(poso)
+        x, y = final[poso]
+        fx, fy = (x, y) if q is None or q not in final else (mirror(final[q][0]), final[q][1])
+        diff = {k: v for k, v in (("x___", x), ("y___", y), ("fx__", fx), ("fy__", fy)) if v != int(gl[k]) & 0xFFFFFFFF}
+        if diff:
+            setg_diff[poso] = diff
     return setp_diff, setg_diff, l_dflt
 
 
