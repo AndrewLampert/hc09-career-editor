@@ -68,9 +68,13 @@ def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None):
             "SPF_": {int(r["SPF_"]) for r in quick.get("SPKF", [])}}
     for k in used:
         used[k] |= {int(x) for x in taken.get(k, ())}
-    setl = _block_above(used["SETL"], 1)[0]
+    setl = _block_above(used["SETL"], 1)[0]                 # the next id above every one in use: the new rows come last (the order that was tried in the game)
     if setl > MAX_SETL:
-        raise ValueError(f"The game has room for {MAX_SETL - STOCK_MAX_SETL} formations of its own (set ids {STOCK_MAX_SETL + 1} to {MAX_SETL}) and they are all taken. Take a play with its own formation out first.")
+        # a save's stale link may name a high id (511) while lower ones are free: use the lowest free id of the supported range before refusing
+        free = [i for i in range(STOCK_MAX_SETL + 1, MAX_SETL + 1) if i not in used["SETL"]]
+        if not free:
+            raise ValueError(f"The game has room for {MAX_SETL - STOCK_MAX_SETL} formations of its own (set ids {STOCK_MAX_SETL + 1} to {MAX_SETL}) and they are all taken. Take a play with its own formation out first.")
+        setl = free[0]
     return {"SETL": setl, "SETP": _block_above(used["SETP"], slots), "SGF_": _block_above(used["SGF_"], groups), "SPF_": _block_above(used["SPF_"], packages) if packages else []}
 
 
