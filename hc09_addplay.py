@@ -104,12 +104,29 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     return {"plyl": plyl, "name": name, "base": base, "setl": setl, "plyt": plyt, "books": books, "rows": rows}
 
 
+def check_one_per_set(plays):
+    """Raises ValueError when two of the added plays are in the same set (formation). Found in the game (RPCS3, 2026-10-28): with two added plays in one formation the game crashes on the day
+    before the first game (TibMemcardPS3 reads address 0), whether the formation is a stock one or a new one and whatever playbooks the plays are in; with every added play in a formation of
+    its own (up to four were tried) the game plays."""
+    seen = {}
+    for p in plays:
+        if p.get("setl") is None:
+            continue                                        # a play record without its set (an old one) cannot be checked
+        setl = int(p["setl"])
+        if setl in seen and seen[setl]["plyl"] != p["plyl"]:
+            raise ValueError(f"\"{seen[setl]['name']}\" and \"{p['name']}\" are in the same formation. The game crashes on the day before the first game when two added plays share a formation "
+                             "(found in RPCS3), so each added play needs a formation of its own: take one of them out, or make this play from a play of another formation.")
+        seen[setl] = p
+
+
 def merge(plays):
-    """The spec for the bridge: the rows of all the plays that are to be in the game files (a play with the same id as an earlier one replaces it)."""
+    """The spec for the bridge: the rows of all the plays that are to be in the game files (a play with the same id as an earlier one replaces it). At most one play per formation: see
+    check_one_per_set."""
     by_id = {}
     for p in plays:
         by_id[p["plyl"]] = p
     plays = [by_id[k] for k in sorted(by_id)]
+    check_one_per_set(plays)
     rows = {}
     for p in plays:
         for entry, tables in p["rows"].items():

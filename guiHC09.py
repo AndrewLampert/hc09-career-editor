@@ -8071,6 +8071,7 @@ class AddPlayDialog(tk.Toplevel):
             books = [self._books[i] for i in self.lst_books.curselection()]
             plyl = AP.free_play_id(self.designer.lib, [p["plyl"] for p in self.added])
             play = AP.build(self.designer.lib, self.base, name, books, plyl, **self._args())
+            AP.check_one_per_set(self.added + [play])
         except ValueError as e:
             messagebox.showerror("Add a play", str(e), parent=self)
             return
