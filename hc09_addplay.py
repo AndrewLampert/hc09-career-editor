@@ -21,6 +21,8 @@ PASS_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "rcv"))
 TEXT_COLS = {"name", "PPPM"}
 LINK_TABLES = {"PGPL": ("BOKL", "SETL", "PLYL", "PLTP"), "PGSL": ("BOKL", "SETL", "PBFM"), "PGSS": ("BOKL", "SETL")}      # the playbook link tables of a save and their columns
 LINK_KEYS = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSL": ("BOKL", "SETL"), "PGSS": ("BOKL", "SETL")}
+SET_TABLES = ("SETL", "SETP", "SETG", "SGFF", "SPKF", "SPKG")          # the tables of entry 40 that hold a set: every play in an added formation carries these rows, merge() writes them once
+SHARED_ROWS = {"40": SET_TABLES, "47": ("PGSL", "PGSS")}
 
 
 def _num(row):
@@ -87,6 +89,27 @@ def moved_players(lib, base, alignment):
     """The slots of an alignment that are not where the stock set has them."""
     stock = lib.alignment(lib.detail(base)["set"]["setl"])
     return sorted(poso for poso, (x, y) in (alignment or {}).items() if poso in stock and (abs(float(x) - stock[poso]["x"]) > 0.001 or abs(float(y) - stock[poso]["y"]) > 0.001))
+
+
+def moved_places(lib, base, alignment):
+    """Where the moved players stand, as the play keeps it to know which formation it is in: {"slot": [x, y]} for the slots that are not where the stock set has them."""
+    return {str(poso): [round(float(alignment[poso][0]), 3), round(float(alignment[poso][1]), 3)] for poso in moved_players(lib, base, alignment)}
+
+
+def find_shared(lib, base, alignment, added):
+    """The added play whose formation already has the players where this play wants them (a copy of the same stock set with the same moved players in the same places), or None. A formation is a
+    lineup, and many plays can use one (the stock set Big holds 87), so a second play with the same lineup goes into it instead of taking one of the 11 places for formations of our own."""
+    places = moved_places(lib, base, alignment)
+    if not places:
+        return None
+    stock_setl = int(lib.detail(base)["set"]["setl"])
+    for p in added:
+        have = p.get("moved")
+        if not p.get("new_set") or p.get("stock_setl") != stock_setl or not have or set(have) != set(places):
+            continue
+        if all(abs(have[k][0] - places[k][0]) <= 0.0011 and abs(have[k][1] - places[k][1]) <= 0.0011 for k in places):
+            return p
+    return None
 
 
 def check_name(name):
@@ -156,11 +179,12 @@ def new_set_rows(lib, base, new, alignment, ids, set_name):
     return {"40": r40, "42": {}}, new_setl
 
 
-def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False):
+def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False, share=None):
     """What the bridge needs for a new play id `plyl`, made from the stock play `base` as the Play creator shows it (overrides, plan, reads, alignment as in hc09_gamefiles.changes_for), put into
     the playbooks `books`: {"plyl", "name", "base", "setl", "new_set", "plyt", "books", "rows": {"40": {table: [row]}, "42": ..., "46": ..., "47": ...}}. When players are moved (or new_set is
     asked for) the play gets a set of its own: set_name (its name), set_ids (free_set_ids) and book_pbfm ({playbook: the formation id the playbook gives the stock set}, the PBFM of its PGSL row)
-    are needed. Raises ValueError for what cannot be added."""
+    are needed. share: an added play (find_shared) whose formation has the same players in the same places; the play goes into that formation instead of a new one (no ids or name needed: the play
+    carries a copy of the formation's rows, which merge() writes once, so the formation stays while any play of it is in the game files). Raises ValueError for what cannot be added."""
     name = GF.clean_name(name)
     d = lib.detail(base)
     if d["side"] != "offense":
@@ -182,13 +206,21 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     setl = stock_setl
     extra40, extra42, extra47 = {}, {}, {}
     if own_set:
-        if not set_name or not set_ids or book_pbfm is None:
+        if share is None and (not set_name or not set_ids or book_pbfm is None):
             raise ValueError("A play whose players are somewhere else than in the stock formation needs a formation of its own: a name for it and free ids are needed.")
-        if any(b not in book_pbfm for b in books):
+        if book_pbfm is None or any(b not in book_pbfm for b in books):
             raise ValueError("The formation of the play was not found in every playbook chosen.")
-        sets, setl = new_set_rows(lib, base, new, alignment, set_ids, set_name)
-        extra40, extra42 = sets["40"], sets["42"]
-        extra47 = {"PGSL": [{"BOKL": b, "SETL": setl, "PBFM": book_pbfm[b]} for b in books], "PGSS": [{"BOKL": b, "SETL": setl} for b in books]}
+        if share is not None:
+            if find_shared(lib, base, alignment, [share]) is None:
+                raise ValueError("That formation has the players somewhere else than this play.")
+            setl = int(share["new_set"])
+            extra40 = {t: copy.deepcopy(share["rows"]["40"][t]) for t in SET_TABLES if t in share["rows"]["40"]}
+        else:
+            sets, setl = new_set_rows(lib, base, new, alignment, set_ids, set_name)
+            extra40, extra42 = sets["40"], sets["42"]
+        extra47 = {"PGSL": [{"BOKL": b, "SETL": setl, "PBFM": book_pbfm[b]} for b in books]}
+        if extra40.get("SPKF"):
+            extra47["PGSS"] = [{"BOKL": b, "SETL": setl} for b in books]            # a set with no quick-sub packages has no PGSS row (32 of the game's 240 sets are like that)
     base_play = lib.plays[base]
     pbpl = {"SETL": setl, "PLYL": plyl, "SITT": int(base_play["sitt"]), "PLYT": plyt, "PLF_": int(nb["PLF_"]), "name": name, "risk": int(nb["risk"]), "motn": int(nb["motn"]), "vpos": int(nb["vpos"])}
     plys = [{"PSAL": int(r["PSAL"]), "ARTL": int(r["ARTL"]), "PLYL": plyl, "PLRR": int(r["PLRR"]), "poso": int(r["poso"])} for r in new["PLYS"]]
@@ -216,7 +248,8 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     r47.update(extra47)
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
-    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "plyt": plyt, "books": books, "rows": rows, "warnings": warnings}
+    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "moved": moved_places(lib, base, alignment) if own_set else {},
+            "plyt": plyt, "books": books, "rows": rows, "warnings": warnings}
 
 
 def merge(plays):
@@ -229,7 +262,11 @@ def merge(plays):
     for p in plays:
         for entry, tables in p["rows"].items():
             for table, rs in tables.items():
-                rows.setdefault(entry, {}).setdefault(table, []).extend(copy.deepcopy(rs))
+                have = rows.setdefault(entry, {}).setdefault(table, [])
+                for r in rs:
+                    if table in SHARED_ROWS.get(entry, ()) and r in have:
+                        continue                            # plays in one added formation each carry its rows; the game files get them once
+                    have.append(copy.deepcopy(r))
     return {"rows": rows, "plays": plays}
 
 
@@ -293,4 +330,17 @@ def remove_set_links(rows, setls):
     """The save's PGSL or PGSS rows without the links of these (added) sets. Returns (rows, number removed)."""
     gone = {int(s) for s in setls}
     out = [dict(r) for r in rows if int(r["SETL"]) not in gone]
+    return out, len(rows) - len(out)
+
+
+def unused_set_pairs(removed, kept):
+    """The (playbook, set) pairs of the formations of the removed plays that no kept play uses any more: a formation shared by several plays keeps its PGSL / PGSS links in a playbook while a play of
+    it is still in that playbook."""
+    pairs = lambda plays: {(int(r["BOKL"]), int(r["SETL"])) for p in plays for r in p["rows"]["47"].get("PGSL", [])}
+    return pairs(removed) - pairs(kept)
+
+
+def remove_set_pairs(rows, pairs):
+    """The save's PGSL or PGSS rows without these (playbook, set) pairs. Returns (rows, number removed)."""
+    out = [dict(r) for r in rows if (int(r["BOKL"]), int(r["SETL"])) not in pairs]
     return out, len(rows) - len(out)
