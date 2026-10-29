@@ -74,5 +74,6 @@ New Cowboys career with the playbook "Payton Spread Attack" (278), simmed past F
 | v11b | the formation was a copy of the custom set (placeholder slot columns), the play family kept the custom play's | reached the game; plays lined up wrong or ran another play (a play-action toss ran as a run only); **editing one in the game's own editor crashed the game** (LoopSimulation thread, a read of address 0x63c) |
 | v11c | the formation is a copy of the stock look-alike formation with the custom places, the family is a stock play's | reached the game; **flipping a play and calling it froze the game** (the audio kept playing; every flipped place was 0.0 / 0.0) |
 | v11d | the flipped places follow the game's rule | **reached the game; the plays worked** (they lined up, ran and flipped) |
+| v11e | all 18 convertible plays, in 9 formations (plays with the same lineup share one) | **reached the game; all the plays worked** (the plays that share a formation lined up, ran their own routes and flipped) |
 
 What the runs fix: build a converted play's formation from the stock look-alike formation with only the custom places on it, take the play family from stock plays of the same kind, and compute the flipped places from the flip partner. Added plays cannot be edited in the game's own play editor.
