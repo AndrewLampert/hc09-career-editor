@@ -60,6 +60,11 @@ except ImportError:                  # without it the play designer still works,
     PlayTypes = None
 
 try:
+    import hc09_shelf as SHELF
+except ImportError:                  # without it only the Save shelf window is missing
+    SHELF = None
+
+try:
     import hc09_reference as GREF
 except ImportError:                  # without it only the Game reference window is missing
     GREF = None
@@ -4086,6 +4091,15 @@ PLAYBOOK_TABLE_HEADERS = {
     "PLCM": ["per1", "dir1", "ply1", "per2", "dir2", "ply2", "per3", "dir3", "ply3", "per4", "dir4", "ply4", "per5", "dir5", "ply5", "PLYL"],
 }
 PLAYBOOK_PLAY_CAP = 200   # in-game limit per playbook (200 offensive or 200 defensive), special teams not counted
+def unmarked_plab_row(r):
+    """A PLAB row of the profile as the profile has it. _verified_names puts a '*' on the name it SHOWS for a playbook that does not match the career's; that mark is for the screen and must
+    never be written into a career's PLAB.BNAM (BNAM_UNMARKED keeps the real name)."""
+    row = dict(r)
+    if "BNAM_UNMARKED" in row:
+        row["BNAM"] = row.pop("BNAM_UNMARKED")
+    return row
+
+
 PLAYBOOK_CREATED_FORMATIONS = {"8190", "8191"}   # the per-save "Created Plays" formations (offense / defense)
 PLAYBOOK_SPECIAL_FORMATIONS = {"kickoff", "safety punt", "special teams", "kick return", "safety kick return", "special"}
 
@@ -5018,10 +5032,11 @@ def load_personnel_data(model, archives, backup_dir=None, cache_dir=None):
     return data
 
 
-def link_plays_in_save(model, db_path, links=None, remove_plays=()):
+def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=()):
     """The playbook links of a save (PGPL, and PGSL / PGSS for a play with a formation of its own): the links of plays added to the game files put in (a profile is what a NEW career copies its links
     from), and the links of plays that are no longer in the game files taken out. links: {"PGPL": [...], "PGSL": [...], "PGSS": [...]} (hc09_addplay.links_of); remove_plays: the added plays
-    (dicts) to take out. The save is copied to <save>.bak first and put back if the write fails. Returns (rows added, rows removed)."""
+    (dicts) to take out; keep_plays: the added plays that stay (a formation they still use keeps its PGSL / PGSS links). The save is copied to <save>.bak first and put back if the write fails.
+    Returns (rows added, rows removed)."""
     links = links or {}
     tables = [t for t in AP.LINK_TABLES if links.get(t) or remove_plays]
     if not tables:
@@ -5040,7 +5055,7 @@ def link_plays_in_save(model, db_path, links=None, remove_plays=()):
                 if t == "PGPL":
                     rows, n_rm = AP.remove_links(rows, [p["plyl"] for p in remove_plays])
                 else:
-                    rows, n_rm = AP.remove_set_links(rows, [p["new_set"] for p in remove_plays if p.get("new_set")])
+                    rows, n_rm = AP.remove_set_pairs(rows, AP.unused_set_pairs(remove_plays, keep_plays))
             if links.get(t):
                 rows, n_add = AP.insert_rows(rows, links[t], AP.LINK_KEYS[t])
             if not n_add and not n_rm:
@@ -5657,10 +5672,21 @@ class SavesDialog(tk.Toplevel):
         ttk.Button(row, text="Show folder", command=self._show_folder).pack(side="left", padx=(8, 0))
         ttk.Button(row, text="Look in another folder...", command=self._add_folder).pack(side="left", padx=(8, 0))
         ttk.Button(row, text="Search this computer", command=lambda: self._refresh(search=True)).pack(side="left", padx=(8, 0))
+        ttk.Button(row, text="Save shelf...", command=self._open_shelf).pack(side="right")
 
         self.bind("<Escape>", lambda e: self.destroy())
         self._refresh()
         self._rebuild_recent()
+
+    def _open_shelf(self):
+        """Save shelf...: put saves away (and back), or back them up, in a folder of your own."""
+        if SHELF is None:
+            messagebox.showerror("Save shelf", "hc09_shelf.py is missing next to the editor.", parent=self)
+            return
+        if getattr(self, "_shelf_dlg", None) is not None and self._shelf_dlg.winfo_exists():
+            self._shelf_dlg.lift()
+            return
+        self._shelf_dlg = ShelfDialog(self.app, on_change=self._refresh)
 
     def _refresh(self, search=False):
         self.config(cursor="watch")
@@ -5741,6 +5767,330 @@ class SavesDialog(tk.Toplevel):
     def _reopen_toggled(self):
         self.app.ui_prefs["reopen_last"] = bool(self.reopen_var.get())
         save_ui_prefs(self.app.ui_prefs)
+
+
+class ShelfDialog(tk.Toplevel):
+    """Save shelf: the career saves in the game's save folder on the left, your shelf (a folder of your own, with folders inside folders) on the right. The game lists 10 saves; the shelf is not in
+    the game, so any number of saves and backups can wait there. Put on shelf moves a save out of the game, Shelve a copy backs it up (the game keeps it), Bring back puts it where it came from,
+    Bring back a copy restores a backup (the shelf keeps it), and Replace puts the save that is in the game on the shelf first, so nothing is lost. See hc09_shelf.py."""
+
+    def __init__(self, app, on_change=None):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Save shelf")
+        self.transient(app)
+        self.geometry("1120x660")
+        self.minsize(940, 500)
+        self.app = app
+        self.on_change = on_change
+        self.shelf = SHELF.Shelf(app.ui_prefs.get("shelf_dir") or SHELF.default_shelf_dir())
+        self.game = []
+        self._shelf_rows = {}
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=(10, 2))
+        self.lbl_where = ttk.Label(top, text="")
+        self.lbl_where.pack(side="left")
+        ttk.Button(top, text="Open shelf folder", command=self._show_shelf).pack(side="right")
+        ttk.Button(top, text="Change shelf folder...", command=self._change_dir).pack(side="right", padx=(0, 8))
+        self.lbl_note = ttk.Label(self, foreground="gray", wraplength=1080, justify="left", padding=(12, 0, 12, 6),
+                                  text="Close the game and the emulator first. A save on the shelf is not in the game, so it does not use one of its 10 slots. Moving a save keeps its folder name (the save remembers it). "
+                                       "Xenia saves cannot be moved yet (Xenia keeps a header file for each save elsewhere).")
+        self.lbl_note.pack(anchor="w")
+
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=12, pady=(6, 10))
+        self.lbl_status = ttk.Label(bottom, text="", foreground="gray", wraplength=900, justify="left")
+        self.lbl_status.pack(side="left")
+        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True, padx=12)
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(2, weight=1)
+        body.rowconfigure(1, weight=1)
+        self.lbl_game = ttk.Label(body, text="In the game", font=("", 11, "bold"))
+        self.lbl_game.grid(row=0, column=0, sticky="w")
+        ttk.Label(body, text="On the shelf", font=("", 11, "bold")).grid(row=0, column=2, sticky="w")
+
+        gframe = ttk.Frame(body)
+        gframe.grid(row=1, column=0, sticky="nsew")
+        self.tree_game = ttk.Treeview(gframe, columns=("saved", "size", "where"), selectmode="extended", height=12)
+        self.tree_game.heading("#0", text="Save")
+        self.tree_game.column("#0", width=200, anchor="w")
+        for c, (t, w, a) in zip(("saved", "size", "where"), [("Last saved", 120, "w"), ("Size", 62, "e"), ("Folder", 160, "w")]):
+            self.tree_game.heading(c, text=t)
+            self.tree_game.column(c, width=w, anchor=a, stretch=(c == "where"))
+        gs = ttk.Scrollbar(gframe, orient="vertical", command=self.tree_game.yview)
+        self.tree_game.configure(yscrollcommand=gs.set)
+        self.tree_game.pack(side="left", fill="both", expand=True)
+        gs.pack(side="right", fill="y")
+
+        mid = ttk.Frame(body)
+        mid.grid(row=1, column=1, padx=10)
+        for text, cmd in (("Put on shelf  →", lambda: self._put(copy=False)), ("Shelve a copy  →", lambda: self._put(copy=True))):
+            ttk.Button(mid, text=text, width=24, command=cmd).pack(pady=(0, 6))
+        ttk.Separator(mid, orient="horizontal").pack(fill="x", pady=6)
+        for text, cmd in (("←  Bring back", lambda: self._bring()), ("←  Bring back a copy", lambda: self._bring(copy=True)),
+                          ("←  Restore, replacing the game's", lambda: self._bring(copy=True, replace=True))):
+            ttk.Button(mid, text=text, width=28, command=cmd).pack(pady=(0, 6))
+
+        sframe = ttk.Frame(body)
+        sframe.grid(row=1, column=2, sticky="nsew")
+        self.tree_shelf = ttk.Treeview(sframe, columns=("saved", "size", "from"), selectmode="browse", height=12)
+        self.tree_shelf.heading("#0", text="Folder / save")
+        self.tree_shelf.column("#0", width=250, anchor="w")
+        for c, (t, w, a) in zip(("saved", "size", "from"), [("Last saved", 120, "w"), ("Size", 62, "e"), ("Came from", 150, "w")]):
+            self.tree_shelf.heading(c, text=t)
+            self.tree_shelf.column(c, width=w, anchor=a, stretch=(c == "from"))
+        ss = ttk.Scrollbar(sframe, orient="vertical", command=self.tree_shelf.yview)
+        self.tree_shelf.configure(yscrollcommand=ss.set)
+        self.tree_shelf.pack(side="left", fill="both", expand=True)
+        ss.pack(side="right", fill="y")
+        srow = ttk.Frame(body)
+        srow.grid(row=2, column=2, sticky="w", pady=(6, 0))
+        for text, cmd in (("New folder...", self._new_folder), ("Rename...", self._rename), ("Move to folder...", self._move_to), ("Note...", self._note)):
+            ttk.Button(srow, text=text, command=cmd).pack(side="left", padx=(0, 6))
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        self._refresh()
+
+    # ---- what is shown
+    def _refresh(self):
+        self.lbl_where.configure(text=f"Shelf: {self.shelf.root}")
+        self.game = self.app.detected_saves()
+        for iid in self.tree_game.get_children():
+            self.tree_game.delete(iid)
+        by_root = Counter(sv["root"] for sv in self.game if sv.get("platform", "rpcs3") == "rpcs3")
+        for i, sv in enumerate(self.game):
+            self.tree_game.insert("", tk.END, iid=str(i), text=sv["name"], values=(time.strftime("%Y-%m-%d %H:%M", time.localtime(sv["mtime"])), f"{sv['size'] / 1048576:.1f} MB", sv["root"]))
+        most = max(by_root.values(), default=0)
+        self.lbl_game.configure(text=f"In the game ({len(self.game)} career save{'s' if len(self.game) != 1 else ''}" + (f"; one folder holds {most}, the game lists 10" if most > 10 else "") + ")")
+        for iid in self.tree_shelf.get_children():
+            self.tree_shelf.delete(iid)
+        self._shelf_rows = {}
+        folders, entries = self.shelf.walk()
+        for rel in sorted(folders):
+            parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+            iid = "f:" + rel
+            self.tree_shelf.insert("f:" + parent if parent else "", tk.END, iid=iid, text=rel.rsplit("/", 1)[-1], open=True, values=("", "", ""))
+            self._shelf_rows[iid] = ("folder", rel)
+        for e in sorted(entries, key=lambda e: e["label"].lower()):
+            iid = "e:" + e["rel"]
+            parent = e["folder_rel"]
+            where = {"rpcs3": "RPCS3", "pcport": "HC09 PC", "xenia": "Xenia"}.get(e["meta"].get("platform"), "") + (" (backup)" if e["meta"].get("copy") else "")
+            self.tree_shelf.insert("f:" + parent if parent else "", tk.END, iid=iid, text=e["label"], values=(time.strftime("%Y-%m-%d %H:%M", time.localtime(e["mtime"])), f"{e['size'] / 1048576:.1f} MB", where))
+            self._shelf_rows[iid] = ("entry", e["rel"])
+        if self.on_change:
+            self.on_change()
+
+    def _say(self, text):
+        self.lbl_status.configure(text=text)
+
+    # ---- picking
+    def _game_picked(self):
+        return [self.game[int(i)] for i in self.tree_game.selection()]
+
+    def _shelf_picked(self):
+        sel = self.tree_shelf.selection()
+        return self._shelf_rows.get(sel[0]) if sel else None
+
+    def _target_folder(self):
+        pick = self._shelf_picked()
+        if not pick:
+            return ""
+        kind, rel = pick
+        return rel if kind == "folder" else (rel.rsplit("/", 1)[0] if "/" in rel else "")
+
+    def _open_in_shelf(self, rel):
+        """Is the save open in the editor inside this place of the shelf? Then moving or renaming it would leave the editor with a path that is not there any more (a later Save to File would
+        fail), so it is refused with a message. (A save opened from the shelf through Load Save File or the recent list can be in there.)"""
+        path = getattr(self.app.model, "db_path", None)
+        if path and SHELF.inside(path, self.shelf._abs(rel)):
+            messagebox.showerror("Save shelf", "The save that is open in the editor is on the shelf there. Open another save first, then try again.", parent=self)
+            return True
+        return False
+
+    def _guard(self):
+        if self.app._rpcs3_running():
+            messagebox.showerror("Save shelf", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return False
+        return True
+
+    # ---- saves in and out
+    def _put(self, copy):
+        saves = self._game_picked()
+        if not saves:
+            messagebox.showinfo("Save shelf", "Pick one or more saves on the left first.", parent=self)
+            return
+        if not self._guard():
+            return
+        folder = self._target_folder()
+        done, problems = [], []
+        for sv in saves:
+            if not copy and self.app._career_open(sv["path"]):
+                problems.append(f"{sv['name']}: it is open in the editor; open another save first.")
+                continue
+            label = None
+            if copy and len(saves) == 1:
+                label = simpledialog.askstring("Shelve a copy", "Name for the backup:", parent=self, initialvalue=f"{sv['name']} {time.strftime('%Y-%m-%d %H-%M')}")
+                if label is None:
+                    return
+            try:
+                self.shelf.put_away(sv, folder_rel=folder, label=label, copy=copy)
+                done.append(sv["name"])
+            except SHELF.ShelfError as e:
+                problems.append(f"{sv['name']}: {e}")
+        self._refresh()
+        self._say(("Shelved " + (", ".join(done) + ". ") if done else "") + (" ".join(problems) if problems else ""))
+        if problems:
+            messagebox.showerror("Save shelf", "\n".join(problems), parent=self)
+
+    def _bring(self, copy=False, replace=False):
+        pick = self._shelf_picked()
+        if not pick or pick[0] != "entry":
+            messagebox.showinfo("Save shelf", "Pick a saved game on the right first.", parent=self)
+            return
+        entry = self.shelf.entry(self.shelf._abs(pick[1]))
+        if entry is None:
+            self._refresh()
+            return
+        if not self._guard():
+            return
+        if not copy and self._open_in_shelf(pick[1]):
+            return
+        meta = entry["meta"]
+        if meta.get("platform") not in SHELF.MOVABLE:
+            messagebox.showerror("Save shelf", "That save cannot be put back by the shelf.", parent=self)
+            return
+        target = meta["root"]
+        if not os.path.isdir(target):
+            target = filedialog.askdirectory(title=f"The folder {meta['root']} is not there any more. Pick the folder the save goes into", parent=self)
+            if not target:
+                return
+        game_save = next((sv for sv in self.game if os.path.normcase(os.path.dirname(os.path.dirname(sv["path"]))) == os.path.normcase(os.path.abspath(target))
+                          and os.path.basename(os.path.dirname(sv["path"])) == meta["folder"]), None)
+        if replace:
+            if game_save and self.app._career_open(game_save["path"]):
+                messagebox.showerror("Save shelf", "The save in the game is open in the editor; open another save first.", parent=self)
+                return
+            if not messagebox.askyesno("Save shelf", f"Replace the save {meta['folder']} in the game with this one?\n\nThe save that is in the game now is put on the shelf first (next to this one), so nothing is lost.", parent=self):
+                return
+        try:
+            self.shelf.bring_back(entry, target_root=target, copy=copy, replace=replace, game_save=game_save)
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            self._say(str(e))
+            return
+        self._refresh()
+        self._say(f"{'Copied' if copy else 'Brought'} {entry['label']} back into the game.")
+
+    # ---- folders on the shelf
+    def _new_folder(self):
+        name = simpledialog.askstring("New folder", "Name of the new folder (inside the folder picked on the right, or at the top):", parent=self)
+        if not name:
+            return
+        try:
+            self.shelf.new_folder(self._target_folder(), name)
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            return
+        self._refresh()
+
+    def _rename(self):
+        pick = self._shelf_picked()
+        if not pick:
+            messagebox.showinfo("Save shelf", "Pick a folder or a saved game on the right first.", parent=self)
+            return
+        if self._open_in_shelf(pick[1]):
+            return
+        name = simpledialog.askstring("Rename", "New name:", parent=self, initialvalue=pick[1].rsplit("/", 1)[-1])
+        if not name:
+            return
+        try:
+            self.shelf.rename(pick[1], name)
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            return
+        self._refresh()
+
+    def _move_to(self):
+        pick = self._shelf_picked()
+        if not pick:
+            messagebox.showinfo("Save shelf", "Pick a folder or a saved game on the right first.", parent=self)
+            return
+        if self._open_in_shelf(pick[1]):
+            return
+        folders, _entries = self.shelf.walk()
+        own = pick[1] if pick[0] == "folder" else None
+        choices = [""] + [f for f in sorted(folders) if own is None or not (f == own or f.startswith(own + "/"))]
+        dlg = tk.Toplevel(self)
+        dlg.title("Move to folder")
+        dlg.transient(self)
+        dlg.geometry("360x360")
+        ttk.Label(dlg, text="Move to which folder?", padding=8).pack(anchor="w")
+        box = tk.Listbox(dlg, exportselection=False)
+        box.pack(fill="both", expand=True, padx=8)
+        for c in choices:
+            box.insert(tk.END, c or "(the top of the shelf)")
+        chosen = []
+
+        def ok():
+            sel = box.curselection()
+            if sel:
+                chosen.append(choices[sel[0]])
+            dlg.destroy()
+        row = ttk.Frame(dlg)
+        row.pack(fill="x", padx=8, pady=8)
+        ttk.Button(row, text="Move", style="Accent.TButton", command=ok).pack(side="right")
+        ttk.Button(row, text="Cancel", command=dlg.destroy).pack(side="right", padx=(0, 6))
+        box.bind("<Double-1>", lambda e: ok())
+        dlg.grab_set()
+        self.wait_window(dlg)
+        if not chosen:
+            return
+        try:
+            self.shelf.move_within(pick[1], chosen[0])
+        except SHELF.ShelfError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+            return
+        self._refresh()
+
+    def _note(self):
+        pick = self._shelf_picked()
+        if not pick or pick[0] != "entry":
+            messagebox.showinfo("Save shelf", "Pick a saved game on the right first.", parent=self)
+            return
+        entry = self.shelf.entry(self.shelf._abs(pick[1]))
+        note = simpledialog.askstring("Note", "A note for this saved game (week, trade, why you kept it):", parent=self, initialvalue=(entry["meta"].get("note") or "") if entry else "")
+        if note is None or entry is None:
+            return
+        self.shelf.set_note(pick[1], note)
+        self._say("Note saved.")
+
+    def _show_shelf(self):
+        try:
+            os.makedirs(self.shelf.root, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(self.shelf.root)
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", self.shelf.root])
+        except OSError as e:
+            messagebox.showerror("Save shelf", str(e), parent=self)
+
+    def _change_dir(self):
+        folder = filedialog.askdirectory(title="Pick the folder the shelf lives in (it can be on another drive)", parent=self, initialdir=self.shelf.root if os.path.isdir(self.shelf.root) else None)
+        if not folder:
+            return
+        if any(SHELF.inside(folder, sv["root"]) or SHELF.inside(sv["root"], folder) for sv in self.game):
+            messagebox.showerror("Save shelf", "That folder is inside, or holds, a folder where the game keeps its saves, so the shelved saves and the game's own would be mixed up. Pick another folder.", parent=self)
+            return
+        self.app.ui_prefs["shelf_dir"] = folder
+        save_ui_prefs(self.app.ui_prefs)
+        self.shelf = SHELF.Shelf(folder)
+        self._refresh()
 
 
 PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 20: ("#d96ad0", 14, 6), 21: ("#e0c040", 12, 7)}   # zone step code (deep, curl, flat, hook) -> (colour, half width, half height)
@@ -7694,6 +8044,15 @@ class AddPlayDialog(tk.Toplevel):
         except Exception as e:
             self.added = []
             self.lbl_result.configure(text=f"Could not read what was added before: {e}")
+        try:
+            AP.check_ids(self.added)
+        except ValueError as e:
+            self.lbl_result.configure(text=str(e))
+        share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
+        if share is not None:
+            self.lbl_set.configure(text=f"The formation \"{share['rows']['40']['SETL'][0]['name']}\", added before, already has the players in these places, so this play goes into it. "
+                                        "The other plays of the stock formation stay as they are.")
+            self.ent_set.configure(state="disabled")
         self._fill_added()
         self.lbl_info.configure(text=f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation).")
         self._saves = []
@@ -7712,21 +8071,24 @@ class AddPlayDialog(tk.Toplevel):
                       wraplength=780, foreground="gray").pack(anchor="w", padx=8, pady=2)
 
     def _taken_set_ids(self):
-        """The set ids the plays added so far use, and those the saves ticked here hold (a custom play's ids must not be ids the game's own data has)."""
+        """The set ids the plays added so far use, and those ANY save of the list holds, ticked or not: its own sets, slots and groups (a custom play's ids must not be ids the game's own data has) and the
+        sets its playbook links name (PGPL, PGSL, PGSS). A play taken out while a save is unticked leaves its links there, and the id must not be given to the next play: the link insertion would take
+        the stale row for the new play's and leave it under the old formation."""
         taken = AP.taken_ids(self.added)
-        for _label, path in self._selected_saves():
-            try:
+        for _label, path, _d in self._saves:
+            for tables, columns in (("SETL,SETP,SGFF", (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_"))),
+                                    ("PGPL,PGSL,PGSS", (("pgpl", "SETL", "SETL"), ("pgsl", "SETL", "SETL"), ("pgss", "SETL", "SETL")))):
                 tmpd = tempfile.mkdtemp(prefix="hc09_ids_")
                 try:
-                    self.app.model.run_bridge(["export", "--db", path, "--out", tmpd, "--tables", "SETL,SETP,SGFF"])
-                    for t, col, key in (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_")):
+                    self.app.model.run_bridge(["export", "--db", path, "--out", tmpd, "--tables", tables])
+                    for t, col, key in columns:
                         fn = os.path.join(tmpd, t + ".csv")
                         if os.path.isfile(fn):
                             taken[key] = list(taken[key]) + [int(r[col]) for r in read_csv_dicts(fn) if (r.get(col) or "").strip().isdigit()]
+                except Exception:
+                    pass                                        # a save without these tables (or one that cannot be read) holds no ids to keep
                 finally:
                     shutil.rmtree(tmpd, ignore_errors=True)
-            except Exception:
-                pass
         return taken
 
     def _fill_added(self):
@@ -7737,11 +8099,11 @@ class AddPlayDialog(tk.Toplevel):
     def _selected_saves(self):
         return [(label, path) for (label, path, _d), v in zip(self._saves, self.save_vars) if v.get()]
 
-    def _link(self, links=None, remove=()):
+    def _link(self, links=None, remove=(), keep=()):
         out = []
         for label, path in self._selected_saves():
             try:
-                a, r = link_plays_in_save(self.app.model, path, links, remove)
+                a, r = link_plays_in_save(self.app.model, path, links, remove, keep)
                 out.append(f"{label}: {a} link{'s' if a != 1 else ''} added, {r} taken out")
             except Exception as e:
                 out.append(f"{label}: NOT changed ({e})")
@@ -7769,12 +8131,17 @@ class AddPlayDialog(tk.Toplevel):
             name = GF.clean_name(self.name_var.get())
             books = [self._books[i] for i in self.lst_books.curselection()]
             lib = self.designer.lib
+            AP.check_ids(self.added)
             plyl = AP.free_play_id(lib, [p["plyl"] for p in self.added])
             kw = {}
             if AP.moved_players(lib, self.base, self._args()["alignment"]):
-                kw["set_name"] = GF.clean_name(self.set_var.get())
-                n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
-                kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids())
+                share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added)
+                if share is not None:
+                    kw["share"] = share
+                else:
+                    kw["set_name"] = GF.clean_name(self.set_var.get())
+                    n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
+                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids())
                 kw["book_pbfm"] = app.book_set_formations(self.boot, self.designer.detail["set"]["setl"])
             play = AP.build(lib, self.base, name, books, plyl, **self._args(), **kw)
         except ValueError as e:
@@ -7797,8 +8164,9 @@ class AddPlayDialog(tk.Toplevel):
             self.added = plays
             self._fill_added()
             lines = self._link(links=AP.links_of([play])) if self._selected_saves() else []
-            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it.")
-            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it.", parent=self)
+            note = " ".join(play.get("warnings") or [])
+            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it." + (" " + note if note else ""))
+            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it." + ("\n\n" + note if note else ""), parent=self)
 
         app.run_in_thread_with_busy("Adding the play to the game files...", work, done, error_title="Add a play")
 
@@ -7821,7 +8189,7 @@ class AddPlayDialog(tk.Toplevel):
         def done(rep):
             self.added = plays
             self._fill_added()
-            lines = self._link(remove=[gone]) if self._selected_saves() else []
+            lines = self._link(remove=[gone], keep=plays) if self._selected_saves() else []
             self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
 
         app.run_in_thread_with_busy("Taking the play out...", work, done, error_title="Add a play")
@@ -8380,7 +8748,7 @@ class PlaybookData:
         v = lambda t: save.get(t, [])
         prof = self._custom_names_only(game, profile or {})
         self.profile_bgids = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()) for r in prof["plab"]}
-        self.profile_plab = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()): dict(r) for r in prof["plab"]}   # the profile's definitions of its custom playbooks
+        self.profile_plab = {((r.get("BOFF") or "").strip(), (r.get("BGID") or "").strip()): unmarked_plab_row(r) for r in prof["plab"]}   # the profile's definitions of its custom playbooks
         self.profile_rows = {t: (profile or {}).get(t.lower(), []) for t in DEFINITION_TABLES}                                  # and of its custom plays
 
         self.book_names = defaultdict(list)
@@ -10250,7 +10618,7 @@ class App(tk.Tk):
                 rows.append(r)
             else:
                 flagged.append(name)
-                rows.append(dict(r, BNAM=name + " *"))
+                rows.append(dict(r, BNAM=name + " *", BNAM_UNMARKED=key(r, "BNAM")))
         return dict(names, plab=rows), flagged
 
     def on_pick_profile(self):
@@ -10976,15 +11344,18 @@ class App(tk.Tk):
         a PC version's "(HC09 PC)" with the game version when it has one."""
         if hc09_detect is None:
             return []
-        found = hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))
+        found = [{**f, "platform": "rpcs3"} for f in hc09_detect.list_saves(hc09_detect.savedata_roots(self._detect_rpcs3_dirs(search)))]
         for sv in hc09_detect.list_xenia_saves(self._detect_xenia_dirs(search)):
             if sv["kind"] == "career":
-                found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"]})
+                found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"], "platform": "xenia"})
         have = {os.path.normcase(os.path.abspath(f["path"])) for f in found}
         for sv in hc09_detect.list_pcport_saves(self._detect_pcport_roots()):
             if sv["kind"] == "career" and os.path.normcase(os.path.abspath(sv["path"])) not in have:
                 found.append({"name": f"{sv['name']} (HC09 PC{' ' + sv['version'] if sv['version'] else ''})", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"],
-                              "size": sv["size"], "root": sv["root"]})
+                              "size": sv["size"], "root": sv["root"], "platform": "pcport"})
+        if SHELF is not None:                       # saves on the shelf are not saves of the game, even when the shelf folder sits inside a folder that is searched
+            shelf_root = self.ui_prefs.get("shelf_dir") or SHELF.default_shelf_dir()
+            found = [f for f in found if not SHELF.in_entry(f["path"], shelf_root)]
         return sorted(found, key=lambda s: -s["mtime"])
 
     def _detected_game_file(self, name):
@@ -12023,18 +12394,38 @@ class App(tk.Tk):
         if self._career_open(path):
             self._load_db_path(path, error_title="Reload Error")
 
+    def _made_from_roots(self, profile_path, career_path, out_profile, out_career):
+        """The saves a made file pair goes back to: the profile and career it was made from. Plays can be chained (each made from the copies the one before made), so a copy made here remembers
+        the ORIGINAL saves its source copy was made from; install_custom_play puts the files only over those."""
+        roots = self.__dict__.setdefault("_made_roots", {})
+        key = lambda p: os.path.normcase(os.path.abspath(p))
+        prof, car = roots.get(key(profile_path), profile_path), roots.get(key(career_path), career_path)
+        roots[key(out_profile)], roots[key(out_career)] = prof, car
+        return {"profile": prof, "career": car}
+
     def install_custom_play(self, result, profile_path, career_path):
         """Copy the two files make_custom_play_files made over the profile and the career they were made from, after saving those in Documents\\hc09-test-backups\\<time>. Returns that folder."""
         why = self.install_blocker(career_path)
         if why:
             raise RuntimeError(why)
+        made, sources = result.get("made_from") or {}, result.get("made_sources") or {}
+        norm = lambda p_: os.path.normcase(os.path.abspath(p_))
+        for name, given in (("profile", profile_path), ("career", career_path)):
+            # the files go over the save they were made from, or over the original save at the start of a chain of plays (each made from the copies the one before made)
+            allowed = {norm(x) for x in (made.get(name), sources.get(name)) if x}
+            if allowed and norm(given) not in allowed:
+                raise RuntimeError(f"These files were made from another {name} save ({sources.get(name) or made.get(name)}), so they are not put over {given}. Make the files again with the save you want them in.")
         pairs = [("profile", result["profile"], profile_path), ("career", result["career"], career_path)]
         for name, new, old in pairs:
             if not os.path.isfile(new) or not os.path.isfile(old):
                 raise RuntimeError(f"The {name} file is missing: {new if not os.path.isfile(new) else old}")
             if os.path.abspath(new) == os.path.abspath(old):
                 raise RuntimeError(f"The new {name} file is the same file as your own; nothing was changed.")
-        dest = os.path.join(self.TEST_BACKUP_DIR, time.strftime("%Y%m%d-%H%M%S"))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest, n = os.path.join(self.TEST_BACKUP_DIR, stamp), 2
+        while os.path.exists(dest):                                    # two installs in the same second must not share (and overwrite) one backup
+            dest = os.path.join(self.TEST_BACKUP_DIR, f"{stamp}-{n}")
+            n += 1
         for name, new, old in pairs:
             os.makedirs(os.path.join(dest, name), exist_ok=True)
             shutil.copy2(old, os.path.join(dest, name, "USR-DATA"))
@@ -12241,11 +12632,13 @@ class App(tk.Tk):
             raise RuntimeError(str(e))
         self._replace_and_import(out_profile, rows, prof)
         # the playbook links hold the play type (PGPL.PLTP) in the profile and in the career
-        bokls = set()
+        bokls, career_linked = set(), True
         for path in (out_profile, out_career):
             t = prof if path == out_profile else self._export_tables(out_career, ["PGPL"])
             links = [r for r in t["PGPL"][1] if int(r["PLYL"]) == summary["plyl"] and int(r["SETL"]) == summary["setl"]]
             bokls.update(int(r["BOKL"]) for r in links)
+            if path == out_career:
+                career_linked = bool(links)
             if any(str(r["PLTP"]) != str(summary["plyt"]) for r in links):
                 for r in links:
                     r["PLTP"] = str(summary["plyt"])
@@ -12265,10 +12658,14 @@ class App(tk.Tk):
             if not ok.get("ok"):
                 raise RuntimeError(f"The structure check of {path} failed: {ok.get('issues')}")
         book = ", ".join(str(b) for b in sorted(bokls))
-        summary.update({"profile": out_profile, "career": out_career, "bokl": book})
+        summary.update({"profile": out_profile, "career": out_career, "bokl": book, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}, "career_linked": career_linked})
         summary["message"] = (f"Changed the custom play \"{name}\" (set {summary['setl']}, play {summary['plyl']}) in place; it is in custom playbook {book or '?'}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
+        if summary.get("left_out"):
+            summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
+        if summary.get("career_linked") is False:
+            summary["message"] += "\n\nNote: this career does not link the play in any playbook, so it will not show in this career (it was changed in the profile)."
         with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
             f.write(summary["message"] + "\n")
         return summary
@@ -12329,10 +12726,14 @@ class App(tk.Tk):
             ok = self.model.run_bridge(["verify-db", "--db", p])
             if not ok.get("ok"):
                 raise RuntimeError(f"The structure check of {p} failed: {ok.get('issues')}")
-        summary.update({"profile": out_profile, "career": out_career})
+        summary.update({"profile": out_profile, "career": out_career, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}})
         summary["message"] = (f"Made the custom play \"{name}\" (from {summary['from']}, set {summary['setl']}, play {summary['plyl']}) in playbook {bokl}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder (every career shares it) and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
+        if summary.get("left_out"):
+            summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
+        if summary.get("career_linked") is False:
+            summary["message"] += "\n\nNote: this career does not link the play in any playbook, so it will not show in this career (it was changed in the profile)."
         with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
             f.write(summary["message"] + "\n")
         return summary
@@ -12791,6 +13192,7 @@ class App(tk.Tk):
         headers = [h for h in desired if h in (self.model.trainer_headers or [])]
         if not headers:
             self._populate_tree_with_rows(self.tree_trainer, self.model.trainer_headers, self.model.trainers)
+            self._sync_vertical(self.tree_trainer)
             return
 
         # Prepare rows as (model_idx, row) for sorting
@@ -13300,6 +13702,7 @@ class App(tk.Tk):
         headers = [h for h in desired if h in (self.model.gm_headers or [])]
         if not headers:
             self._populate_tree_with_rows(self.tree_gm, self.model.gm_headers, self.model.gms)
+            self._sync_vertical(self.tree_gm)
             return
 
         # Confirmed Potential Evaluation + Rookie Scouting columns, joined from GMSK via PNid
