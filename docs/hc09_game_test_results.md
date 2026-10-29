@@ -43,16 +43,25 @@ A route is a short list of steps: `8(68,32,254) 9(2,1,0) 8(200,42,254) 10` means
 
 **Status: parked.** Settled: choosing among the game's own routes works (A, T5), and a leg's length and heading and the cut's animation mean what the code says. Not settled: the third number as speed and cuts that match the next leg running clean (B6, B8, B11 to B14, the receiver must be watched while the quarterback holds the ball). They matter only for *building* routes from numbers, which the editor does not do: the play creator works with the game's own routes, the game's route tables are full (a new route would need free rows in the step and the art tables), and a route's picture comes from separate art data. If a route lab is wanted later the tests above are the starting point and the details are in [hc09_play_creator.md](hc09_play_creator.md) (*Making your own routes and steps*) and [hc09_game_internals.md](hc09_game_internals.md).
 
-## C: plays added to the game files (RPCS3, 2026-10-28 and 29)
+## C: plays added to the game files, and formations of their own (RPCS3, 2026-10-28 and 29)
 
 Each run used a copy of the game with the editor's **Add a play...** applied, the matching profile, and a NEW Cowboys career with the Wishbone playbook; the game was simmed past Friday 8/8/2008 12:00 PM (the day the game builds the plays of both sides for week 1) to the first game. A crash there is `TibMemcardPS3 ... Access violation reading location 0x0`.
+
+**The cause of most crashes: the ids of the added plays.** The game builds a sorted list of plays from the compact copy and reads only its first 3,099 rows (the stock count). Added plays with ids below the stock maximum 7459 (the first version used 7455 to 7458) push stock plays out of that list, and the game crashes when it asks for the one it lost (Man Blitz, 7459). With ids above 7459 the list is exactly the stock plays. See the paragraph "Why the id must be above 7459" in [hc09_play_creator.md](hc09_play_creator.md).
 
 | Copy | Ids | Result |
 |---|---|---|
 | one play (PA Test) in the stock formation, CPU rows | 7455 | plays |
 | two plays in two different stock formations | 7455, 7456 | plays |
-| two plays in the SAME stock formation, CPU rows | 7455, 7456 | **crash** (also when the second is only in playbooks the career does not use, and when it has no compact-copy rows) |
-| two plays in the same stock formation in different playbooks | 7456, 7457 | **crash** |
-| two plays in the same stock formation, **no CPU rows, ids above the stock maximum** | 7460, 7461 | **plays** |
+| two plays in the SAME stock formation, CPU rows (also: the second only in playbooks the career does not use; without compact-copy rows; in different playbooks) | 7455 to 7457 | **crash** |
+| two plays in the same stock formation, **no CPU rows** | **7460, 7461** | **plays** |
+| a set row only (id 499, no slots), one play | 7455 | plays |
+| the slot rows of a new set only in the compact copy (entry 42) | | crash |
+| one new formation (id 499 or 501, whole set in the main database, nothing in the compact copy), nobody moved: lines up like stock, snaps, flips, hot routes, handoff | 7455, 7458 | plays |
+| the same with the left receiver moved next to the left tackle and a changed route | 7455, 7458 | plays; he stands there |
+| two new formations with ids 499 and 495 (rows inserted before a stock row) | 7455, 7457, 7458 | crash |
+| two or three new formations with ids 501 to 503 (after every stock row), a different player moved in each | 7455 to 7458 | plays; each play lines up with its own moved player |
+| two plays in ONE new formation (501) plus a second new formation (502), **ids above 7459**, no CPU rows | **7460 to 7462** | **plays** |
 
-The registers of the frozen game explained it: the game's sorted play list held 3,099 plays, from id 2 up to 7455 (our play), and the lookup that failed was for the stock play 7459, which the list had lost. See the paragraph "Why the id must be above 7459" in [hc09_play_creator.md](hc09_play_creator.md).
+What the runs fix: a new set's rows go into the main database only, **after** the stock rows (set ids 501 to 511: the id field is 9 bits wide, so 11 formations of your own); its slot rows must not go into the compact copy; an added play has an id above 7459 and no CPU rows. The earlier "two plays in one formation crash" runs were the ids, not the formation: plays that share a formation work. One run with an unmoved copy at 501 and a moved one at 502 showed the moved receiver at his stock place; it did not come back in later runs and is unexplained.
+

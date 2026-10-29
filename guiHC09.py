@@ -5032,31 +5032,48 @@ def load_personnel_data(model, archives, backup_dir=None, cache_dir=None):
     return data
 
 
-def link_plays_in_save(model, db_path, links=(), remove_plyls=()):
-    """The playbook links (PGPL) of a save: the links of plays added to the game files put in (a profile is what a NEW career copies its links from), and the links of plays that are no
-    longer in the game files taken out. The save is copied to <save>.bak first and put back if the write fails. Returns (added, removed)."""
+def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=()):
+    """The playbook links of a save (PGPL, and PGSL / PGSS for a play with a formation of its own): the links of plays added to the game files put in (a profile is what a NEW career copies its links
+    from), and the links of plays that are no longer in the game files taken out. links: {"PGPL": [...], "PGSL": [...], "PGSS": [...]} (hc09_addplay.links_of); remove_plays: the added plays
+    (dicts) to take out; keep_plays: the added plays that stay (a formation they still use keeps its PGSL / PGSS links). The save is copied to <save>.bak first and put back if the write fails.
+    Returns (rows added, rows removed)."""
+    links = links or {}
+    tables = [t for t in AP.LINK_TABLES if links.get(t) or remove_plays]
+    if not tables:
+        return 0, 0
     tmp = tempfile.mkdtemp(prefix="hc09_link_")
     try:
-        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PGPL"])
-        rows = read_csv_dicts(os.path.join(tmp, "pgpl.csv"))
-        removed = added = 0
-        if remove_plyls:
-            rows, removed = AP.remove_links(rows, remove_plyls)
-        if links:
-            rows, added = AP.insert_links(rows, links)
-        if not added and not removed:
-            return 0, 0
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", ",".join(tables)])
         out = os.path.join(tmp, "in")
         os.makedirs(out)
-        with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f, lineterminator="\r\n")
-            w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
-            for r in rows:
-                w.writerow([r["BOKL"], r["SETL"], r["PLYL"], r["PLTP"]])
+        added = removed = 0
+        changed = []
+        for t in tables:
+            rows = read_csv_dicts(os.path.join(tmp, t.lower() + ".csv"))
+            n_rm = n_add = 0
+            if remove_plays:
+                if t == "PGPL":
+                    rows, n_rm = AP.remove_links(rows, [p["plyl"] for p in remove_plays])
+                else:
+                    rows, n_rm = AP.remove_set_pairs(rows, AP.unused_set_pairs(remove_plays, keep_plays))
+            if links.get(t):
+                rows, n_add = AP.insert_rows(rows, links[t], AP.LINK_KEYS[t])
+            if not n_add and not n_rm:
+                continue
+            added, removed = added + n_add, removed + n_rm
+            changed.append(t)
+            with open(os.path.join(out, t.lower() + ".csv"), "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f, lineterminator="\r\n")
+                w.writerow(AP.LINK_TABLES[t])
+                for r in rows:
+                    w.writerow([r[c] for c in AP.LINK_TABLES[t]])
+        if not changed:
+            return 0, 0
         bak = db_path + ".bak"
         shutil.copy2(db_path, bak)
         try:
-            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", "PGPL", "--allow-append", "PGPL", "--allow-shrink", "PGPL"])
+            names = ",".join(changed)
+            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", names, "--allow-append", names, "--allow-shrink", names])
             bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
             if bad:
                 raise RuntimeError("The bridge did not write the playbook links: " + str(bad)[:300])
@@ -7944,7 +7961,8 @@ class AddPlayDialog(tk.Toplevel):
         ttk.Label(self, text=f"Add {d['play']['name']} as a new play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=820, justify="left", padding=(14, 0, 14, 6),
                   text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts, but the computer will not call it (the game's play list holds only the stock plays), so you call it yourself. It keeps "
-                       "the formation of the play it was made from (a moved player is not added: that changes a formation every play of it shares). Close RPCS3 first. The first time, the "
+                       "the formation of the play it was made from; if you moved a player it gets a formation of its own (a copy with the player moved; plays with the same lineup share one, and the game has room for 11 of "
+                       "them). Close RPCS3 first. The first time, the "
                        "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 with several plays; "
                        "defense plays are not tried.").pack(anchor="w")
         form = ttk.Frame(self)
@@ -7952,6 +7970,12 @@ class AddPlayDialog(tk.Toplevel):
         ttk.Label(form, text="Name of the play (24 characters):").grid(row=0, column=0, sticky="w", pady=3)
         self.name_var = tk.StringVar(value=d["play"]["name"][:24])
         ttk.Entry(form, width=30, textvariable=self.name_var).grid(row=0, column=1, sticky="w", padx=6)
+        ttk.Label(form, text="Name of its formation:").grid(row=2, column=0, sticky="w", pady=3)
+        self.set_var = tk.StringVar(value=(d["set"]["name"] or "Normal")[:24])
+        self.ent_set = ttk.Entry(form, width=30, textvariable=self.set_var)
+        self.ent_set.grid(row=2, column=1, sticky="w", padx=6)
+        self.lbl_set = ttk.Label(form, wraplength=560, justify="left", foreground="gray")
+        self.lbl_set.grid(row=3, column=1, sticky="w", padx=6)
         ttk.Label(form, text="Put it in these playbooks:").grid(row=1, column=0, sticky="nw", pady=3)
         lf = ttk.Frame(form)
         lf.grid(row=1, column=1, sticky="w", padx=6)
@@ -8005,6 +8029,14 @@ class AddPlayDialog(tk.Toplevel):
         except Exception:
             names = {}
         self._books = AP.books_of(lib, self.base)
+        moved = AP.moved_players(lib, self.base, self._args()["alignment"])
+        if moved:
+            self.lbl_set.configure(text=f"{len(moved)} player{'s are' if len(moved) != 1 else ' is'} moved, so the play gets a formation of its own: a copy of \"{self.designer.detail['set']['name']}\" with them "
+                                        "somewhere else. The other plays of the stock formation stay as they are.")
+            self.ent_set.configure(state="normal")
+        else:
+            self.lbl_set.configure(text="No player is moved: the play uses the stock formation.")
+            self.ent_set.configure(state="disabled")
         for b in self._books:
             self.lst_books.insert("end", f"{names.get(b, 'playbook')} ({b})")
         self.lst_books.selection_set(0, "end")
@@ -8017,6 +8049,11 @@ class AddPlayDialog(tk.Toplevel):
             AP.check_ids(self.added)
         except ValueError as e:
             self.lbl_result.configure(text=str(e))
+        share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
+        if share is not None:
+            self.lbl_set.configure(text=f"The formation \"{share['rows']['40']['SETL'][0]['name']}\", added before, already has the players in these places, so this play goes into it. "
+                                        "The other plays of the stock formation stay as they are.")
+            self.ent_set.configure(state="disabled")
         self._fill_added()
         self.lbl_info.configure(text=f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation).")
         self._saves = []
@@ -8034,6 +8071,27 @@ class AddPlayDialog(tk.Toplevel):
             ttk.Label(self.saves_frame, text="No save is open: open your profile in the editor to link the play there (a play is only in a new career's playbook when the profile has its links).",
                       wraplength=780, foreground="gray").pack(anchor="w", padx=8, pady=2)
 
+    def _taken_set_ids(self):
+        """The set ids the plays added so far use, and those ANY save of the list holds, ticked or not: its own sets, slots and groups (a custom play's ids must not be ids the game's own data has) and the
+        sets its playbook links name (PGPL, PGSL, PGSS). A play taken out while a save is unticked leaves its links there, and the id must not be given to the next play: the link insertion would take
+        the stale row for the new play's and leave it under the old formation."""
+        taken = AP.taken_ids(self.added)
+        for _label, path, _d in self._saves:
+            for tables, columns in (("SETL,SETP,SGFF", (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_"))),
+                                    ("PGPL,PGSL,PGSS", (("pgpl", "SETL", "SETL"), ("pgsl", "SETL", "SETL"), ("pgss", "SETL", "SETL")))):
+                tmpd = tempfile.mkdtemp(prefix="hc09_ids_")
+                try:
+                    self.app.model.run_bridge(["export", "--db", path, "--out", tmpd, "--tables", tables])
+                    for t, col, key in columns:
+                        fn = os.path.join(tmpd, t + ".csv")
+                        if os.path.isfile(fn):
+                            taken[key] = list(taken[key]) + [int(r[col]) for r in read_csv_dicts(fn) if (r.get(col) or "").strip().isdigit()]
+                except Exception:
+                    pass                                        # a save without these tables (or one that cannot be read) holds no ids to keep
+                finally:
+                    shutil.rmtree(tmpd, ignore_errors=True)
+        return taken
+
     def _fill_added(self):
         self.lst_added.delete(0, "end")
         for p in self.added:
@@ -8042,11 +8100,11 @@ class AddPlayDialog(tk.Toplevel):
     def _selected_saves(self):
         return [(label, path) for (label, path, _d), v in zip(self._saves, self.save_vars) if v.get()]
 
-    def _link(self, links=(), remove=()):
+    def _link(self, links=None, remove=(), keep=()):
         out = []
         for label, path in self._selected_saves():
             try:
-                a, r = link_plays_in_save(self.app.model, path, links, remove)
+                a, r = link_plays_in_save(self.app.model, path, links, remove, keep)
                 out.append(f"{label}: {a} link{'s' if a != 1 else ''} added, {r} taken out")
             except Exception as e:
                 out.append(f"{label}: NOT changed ({e})")
@@ -8073,9 +8131,20 @@ class AddPlayDialog(tk.Toplevel):
         try:
             name = GF.clean_name(self.name_var.get())
             books = [self._books[i] for i in self.lst_books.curselection()]
+            lib = self.designer.lib
             AP.check_ids(self.added)
-            plyl = AP.free_play_id(self.designer.lib, [p["plyl"] for p in self.added])
-            play = AP.build(self.designer.lib, self.base, name, books, plyl, **self._args())
+            plyl = AP.free_play_id(lib, [p["plyl"] for p in self.added])
+            kw = {}
+            if AP.moved_players(lib, self.base, self._args()["alignment"]):
+                share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added)
+                if share is not None:
+                    kw["share"] = share
+                else:
+                    kw["set_name"] = GF.clean_name(self.set_var.get())
+                    n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
+                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids())
+                kw["book_pbfm"] = app.book_set_formations(self.boot, self.designer.detail["set"]["setl"])
+            play = AP.build(lib, self.base, name, books, plyl, **self._args(), **kw)
         except ValueError as e:
             messagebox.showerror("Add a play", str(e), parent=self)
             return
@@ -8121,7 +8190,7 @@ class AddPlayDialog(tk.Toplevel):
         def done(rep):
             self.added = plays
             self._fill_added()
-            lines = self._link(remove=[gone["plyl"]]) if self._selected_saves() else []
+            lines = self._link(remove=[gone], keep=plays) if self._selected_saves() else []
             self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
 
         app.run_in_thread_with_busy("Taking the play out...", work, done, error_title="Add a play")
@@ -8138,7 +8207,7 @@ class AddPlayDialog(tk.Toplevel):
                                    "back to its original length) and the Set personnel and Make a game play changes are undone.\n\nThe links of the added plays are taken out of the ticked saves.",
                                    parent=self):
             return
-        gone = [p["plyl"] for p in self.added]
+        gone = list(self.added)
 
         def work():
             return app.game_file_restore(archives)
@@ -12244,7 +12313,7 @@ class App(tk.Tk):
         )
 
     # ---- Play designer (a prototype of Create-A-Play outside the game; see hc09_plays.py and docs/hc09_play_data.md)
-    PLAY_TABLES = "SETL,PBPL,PLYS,PSLO,PSLD,ARTO,ARTD,PLPD,PLRD,PLCM,SETG,SGFF,FORM,PBAI"
+    PLAY_TABLES = "SETL,PBPL,PLYS,PSLO,PSLD,ARTO,ARTD,PLPD,PLRD,PLCM,SETG,SGFF,FORM,PBAI,SPKF,SPKG"
 
     def load_play_library(self, archives=None):
         """Read the game's plays from the archives (the bridge's play-sets-scan): the master play database holds all of them. About a second; may run
@@ -12267,6 +12336,10 @@ class App(tk.Tk):
         tabs["FORM"] = list(forms.values())
         lib = PlayLibrary(tabs)
         lib._master = master             # which archive entry it was read from (the Route test writes there)
+        lib.quick_subs = {}              # the quick-sub packages of the sets (SPKF, SPKG): a copy of a set for a play with moved players needs them
+        for name in ("SPKF", "SPKG"):
+            path = os.path.join(cache, f"{name.lower()}_{master['base']}.csv")
+            lib.quick_subs[name] = read_csv(path) if os.path.isfile(path) else []
         try:                              # the names the playbooks give their plays, if they can be read (the master names are shown otherwise)
             if self._ensure_book_play_names(archives[0]):
                 lib.set_book_play_names(read_csv(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE)))
@@ -12719,6 +12792,13 @@ class App(tk.Tk):
             if pbgi is not None:
                 names[pbgi] = (r.get("BNAM") or "").strip() or f"playbook {pbgi}"
         return names
+
+    def book_set_formations(self, boot_ast, setl):
+        """{playbook (BOKL): the formation id (PBFM) the playbook gives the set}: the PGSL rows of the set in the user-profile template of the game (qkl_boot.ast entry 47)."""
+        cache = os.path.join(self.GAMEFILE_CACHE_DIR, "pgsl")
+        shutil.rmtree(cache, ignore_errors=True)
+        self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PGSL", "--top-index", "47", "--require-fields", "BOKL,SETL,PBFM", "--require-rows", "--out-dir", cache])
+        return {int(r["BOKL"]): int(r["PBFM"]) for r in read_csv_dicts(os.path.join(cache, "pgsl.csv")) if int(r["SETL"]) == int(setl)}
 
     def add_play_state(self, boot_ast):
         """What Add a play has put into qkl_boot.ast: {"active", "plays": [the plays as hc09_addplay.build made them], "originalLength", "length"}."""

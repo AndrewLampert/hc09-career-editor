@@ -1425,13 +1425,18 @@ function parseArgs(argv) {
 // Another version of the game (the Xbox 360 files, a rebuilt archive) numbers them differently, so the bridge looks for each by what it holds (resolveAddPlayEntries); the spec and the report keep the roles.
 const ADD_PLAY_ROLES = [40, 42, 46, 47];
 const ADD_PLAY_HOLDS = { 40: ['PBPL', 'PLYS', 'PLPD', 'PBAI', 'SETL', 'SETP', 'SETG'], 42: ['PBPL', 'PLYS', 'SETP'], 46: ['PPPN'], 47: ['PGPL', 'PGSL', 'PGSS'] };
-const ADD_PLAY_PLACE = {                       // per role: table -> the columns its rows are sorted by (the game's own order, checked at run time: a table that is not sorted gets the rows at its end)
-    40: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'], PLPD: ['PLYL'], PLRD: ['PLYL'], PLCM: ['PLYL'], PBAI: ['BOKL'] },
-    42: { PBPL: ['PLYL'], PLYS: ['PLYL', 'poso'] },
-    46: { PPPN: ['BOKL', 'PLYL'] },
-    47: { PGPL: ['BOKL', 'SETL', 'PLYL'] },
+const ADD_PLAY_PLACE = {                       // per role: table -> { sort: the columns its rows are sorted by (the game's own order, checked at run time: a table that is not sorted gets the rows at its end), unique: the columns that identify a row (null: several rows may be alike) }
+    40: {
+        PBPL: { sort: ['PLYL'], unique: ['PLYL'] }, PLYS: { sort: ['PLYL', 'poso'], unique: ['PLYL', 'poso'] }, PLPD: { sort: ['PLYL'], unique: ['PLYL'] }, PLRD: { sort: ['PLYL'], unique: ['PLYL'] },
+        PLCM: { sort: ['PLYL'], unique: ['PLYL'] }, PBAI: { sort: ['BOKL'], unique: null },
+        // a new formation (set) for a play whose players are somewhere else than in the stock set: the set, its eleven slots, their places in each alignment group, the groups, the quick-sub packages
+        SETL: { sort: ['SETL'], unique: ['SETL'] }, SETP: { sort: ['SETL'], unique: ['SETP'] }, SETG: { sort: ['SETP', 'SGF_'], unique: ['SETP', 'SGF_'] }, SGFF: { sort: ['SETL'], unique: ['SGF_'] },
+        SPKF: { sort: ['SETL'], unique: ['SPF_'] }, SPKG: { sort: ['SPF_'], unique: ['SPF_', 'poso'] },
+    },
+    42: { PBPL: { sort: ['PLYL'], unique: ['PLYL'] }, PLYS: { sort: ['PLYL', 'poso'], unique: ['PLYL', 'poso'] }, SETP: { sort: ['SETL', 'poso'], unique: ['SETL', 'poso'] } },
+    46: { PPPN: { sort: ['BOKL', 'PLYL'], unique: ['BOKL', 'PLYL'] } },
+    47: { PGPL: { sort: ['BOKL', 'SETL', 'PLYL'], unique: ['BOKL', 'SETL', 'PLYL'] }, PGSL: { sort: ['BOKL'], unique: ['BOKL', 'SETL'] }, PGSS: { sort: ['BOKL', 'SETL'], unique: ['BOKL', 'SETL'] } },
 };
-const ADD_PLAY_UNIQUE = (table) => table !== 'PBAI';       // PBAI has several rows per book and play (the CPU's chances per situation)
 
 const ADD_PLAY_MIN_ROWS = 100;                  // the templates (a career's or a profile's own) have the same tables with none or a few rows; the game's own play data has thousands
 function roleFits(role, tables) {                  // tables: Map table name -> its number of rows
@@ -1573,7 +1578,8 @@ async function buildAddPlayEntry(raw, place, rowsByTable) {
     const report = {};
     try {
         const expected = {};
-        for (const [tname, keys] of Object.entries(place)) {
+        for (const [tname, tplace] of Object.entries(place)) {
+            const keys = tplace.sort;
             const added = (rowsByTable || {})[tname];
             if (!added || added.length === 0) continue;
             const t = helper.file[tname];
@@ -1593,8 +1599,13 @@ async function buildAddPlayEntry(raw, place, rowsByTable) {
                 for (const c of Object.keys(r)) if (!names.includes(c)) throw new Error(`${tname} has no column ${c}`);
                 return Object.fromEntries(names.map((n) => [n, r[n] === undefined ? 0 : r[n]]));
             });
-            if (ADD_PLAY_UNIQUE(tname)) {
-                for (const r of rows) if (cur.some((c) => keyCompare(c, r, keys) === 0)) throw new Error(`${tname} already has a row for ${keys.map((k) => `${k} ${r[k]}`).join(', ')}`);
+            if (tplace.unique) {
+                const seen = new Set(cur.map((c) => tplace.unique.map((k) => Number(c[k])).join(',')));
+                for (const r of rows) {
+                    const id = tplace.unique.map((k) => Number(r[k])).join(',');
+                    if (seen.has(id)) throw new Error(`${tname} already has a row for ${tplace.unique.map((k) => `${k} ${r[k]}`).join(', ')}`);
+                    seen.add(id);
+                }
             }
             const sorted = isSortedBy(cur, keys);
             const items = cur.map((v, o) => ({ o, v }));                          // o: the row's place before, -1 for a new row

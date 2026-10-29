@@ -55,6 +55,41 @@ def candidates(lib, base, overrides, plan=None, reads=None, alignment=None):
     return [(base, lib.plays[base]["name"], len(lib.books_of_play.get(base, ())))] + out
 
 
+def alignment_changes(lib, d, new, alignment):
+    """Where moved players line up, against the stock set: ({slot: {artx, arty}} the diagram's places, {slot: {x___, y___, fx__, fy__}} the yards of the set's normal alignment group (with the flipped
+    partner's), the id of that group). `new` is what build_custom_play made for the play with that alignment. Only the slots that moved are in the first two."""
+    st = d["set"]
+    setp_changes, setg_changes = {}, {}
+    slots = {s["poso"]: s for s in st["slots"]}
+    stock_al = lib.alignment(st["setl"])
+    moved = {poso for poso, (x, y) in (alignment or {}).items() if poso in stock_al and (abs(float(x) - stock_al[poso]["x"]) > 0.001 or abs(float(y) - stock_al[poso]["y"]) > 0.001)}
+    for nr in new["SETP"]:
+        poso = int(nr["poso"])
+        if poso not in moved:
+            continue                          # only the diagram's place of a moved player (artx, arty); the formation columns (fmtx, fmty) are design-time values of the stock set and stay
+        sl = slots[poso]
+        diff = {c: int(nr[c]) for c, o in (("artx", sl["x"]), ("arty", sl["y"])) if int(nr[c]) != o}
+        if diff:
+            setp_changes[poso] = diff
+    dflt = next((int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == st["setl"] and g["dflt"] == "1"), None)
+    if dflt is not None and setp_changes:
+        poso_of_new = {int(r["SETP"]): int(r["poso"]) for r in new["SETP"]}
+        new_dflt = next((int(g["SGF_"]) for g in new["SGFF"] if g["dflt"] == "1"), None)
+        setp_of = {s["setp"]: s["poso"] for s in st["slots"]}
+        stock_rows = {setp_of[int(r["SETP"])]: r for r in lib.tables["SETG"] if int(r["SGF_"]) == dflt and int(r["SETP"]) in setp_of}
+        for nr in new["SETG"]:
+            if int(nr["SGF_"]) != new_dflt:
+                continue
+            poso = poso_of_new[int(nr["SETP"])]
+            old_row = stock_rows.get(poso)
+            if old_row is None:
+                continue
+            diff = {c: int(nr[c]) for c in ("x___", "y___", "fx__", "fy__") if int(nr[c]) != int(old_row[c])}
+            if diff:
+                setg_changes[poso] = diff
+    return setp_changes, setg_changes, dflt
+
+
 def changes_for(lib, base, overrides, plan=None, reads=None, alignment=None, target=None, name=None):
     """What has to change in the game's rows for the play TARGET (default: the base play itself) to become the play the Play creator shows for base (overrides: {slot: (PSAL, ARTL, PLRR)},
     plan: a kind conversion, reads: [(slot, chance)] x5, alignment: {slot: (x, y)} yards), with the new name if one is given. Returns {"plyl" (the target), "base", "setl", "name",
@@ -104,34 +139,7 @@ def changes_for(lib, base, overrides, plan=None, reads=None, alignment=None, tar
         raise ValueError("Making the play this kind needs another number of run-hole rows (PLRD) than the game's play has, so it cannot be done in place. Make it a custom play instead.")
     if have_run and int(want_run[0]["hole"]) != int(have_run[0]["hole"]):
         out["plrd"] = {"hole": int(want_run[0]["hole"])}
-    slots = {s["poso"]: s for s in st["slots"]}
-    stock_al = lib.alignment(st["setl"])
-    moved = {poso for poso, (x, y) in (alignment or {}).items() if poso in stock_al and (abs(float(x) - stock_al[poso]["x"]) > 0.001 or abs(float(y) - stock_al[poso]["y"]) > 0.001)}
-    for nr in new["SETP"]:
-        poso = int(nr["poso"])
-        if poso not in moved:
-            continue                          # only the diagram's place of a moved player (artx, arty); the formation columns (fmtx, fmty) are design-time values of the stock set and stay
-        sl = slots[poso]
-        diff = {c: int(nr[c]) for c, o in (("artx", sl["x"]), ("arty", sl["y"])) if int(nr[c]) != o}
-        if diff:
-            out["setp"][poso] = diff
-    dflt = next((int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == st["setl"] and g["dflt"] == "1"), None)
-    out["default_group"] = dflt
-    if dflt is not None and out["setp"]:
-        poso_of_new = {int(r["SETP"]): int(r["poso"]) for r in new["SETP"]}
-        new_dflt = next((int(g["SGF_"]) for g in new["SGFF"] if g["dflt"] == "1"), None)
-        setp_of = {s["setp"]: s["poso"] for s in st["slots"]}
-        stock_rows = {setp_of[int(r["SETP"])]: r for r in lib.tables["SETG"] if int(r["SGF_"]) == dflt and int(r["SETP"]) in setp_of}
-        for nr in new["SETG"]:
-            if int(nr["SGF_"]) != new_dflt:
-                continue
-            poso = poso_of_new[int(nr["SETP"])]
-            old = stock_rows.get(poso)
-            if old is None:
-                continue
-            diff = {c: int(nr[c]) for c in ("x___", "y___", "fx__", "fy__") if int(nr[c]) != int(old[c])}
-            if diff:
-                out["setg"][poso] = diff
+    out["setp"], out["setg"], out["default_group"] = alignment_changes(lib, d, new, alignment)
     out["shared_with"] = sorted(((q["plyl"], q["name"]) for q in lib.plays.values() if q["setl"] == st["setl"] and q["plyl"] != target), key=lambda t: (t[1].lower(), t[0]))
     return out
 
