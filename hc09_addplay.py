@@ -31,8 +31,37 @@ def _num(row):
     return {k: (str(v) if k in TEXT_COLS else int(v)) for k, v in row.items()}
 
 
-STOCK_MAX_PLYL = 7459           # the highest play id of the stock game (Man Blitz)
+STOCK_MAX_PLYL = 7459           # the highest play id of the stock PS3 game (Man Blitz): the fallback when the library has no plays; the archive's own highest id is used (stock_max_play)
 MAX_PLYL = 16383                # the play id field is 14 bits wide
+TESTED_GAME = {"plays": 3099, "sets": 240, "max_play": 7459, "max_set": 500}          # the stock game the editor was tried on (RPCS3, the PS3 game): game_differs compares an archive with it
+
+
+def stock_max_play(lib, added=()):
+    """The highest play id of the stock game in THIS archive: the highest id of the library that is not an added play (added: the added plays or their ids; the mounted custom plays sit far above
+    and are not the game's). The PS3 game's 7459 when the library has no plays."""
+    skip = {int(a["plyl"]) if isinstance(a, dict) else int(a) for a in added}
+    ids = [int(k) for k in lib.plays if int(k) < P.CUSTOM_OFFSETS["PLYL"] and int(k) not in skip]
+    return max(ids) if ids else STOCK_MAX_PLYL
+
+
+def stock_max_set(lib, added=()):
+    """The highest set (formation) id of the stock game in this archive, without the sets of the added plays."""
+    skip = {int(a["new_set"]) for a in added if isinstance(a, dict) and a.get("new_set")}
+    ids = [int(k) for k in lib.sets if int(k) < P.CUSTOM_OFFSETS["SETL"] and int(k) not in skip]
+    return max(ids) if ids else STOCK_MAX_SETL
+
+
+def game_differs(lib, added=()):
+    """How this archive differs from the game the editor was tried on: a list of sentences, empty when the counts and the highest ids are those of the stock PS3 game (3,099 plays, 240 sets, highest
+    play 7459, highest set 500). The game reads its plays from a list with a fixed size, so another version of the game (the Xbox 360 one, an update) may not take the added plays the way the
+    PS3 game does: the editor asks before it writes."""
+    skip_p = {int(a["plyl"]) for a in added if isinstance(a, dict)}
+    skip_s = {int(a["new_set"]) for a in added if isinstance(a, dict) and a.get("new_set")}
+    plays = [int(k) for k in lib.plays if int(k) < P.CUSTOM_OFFSETS["PLYL"] and int(k) not in skip_p]
+    sets = [int(k) for k in lib.sets if int(k) < P.CUSTOM_OFFSETS["SETL"] and int(k) not in skip_s]
+    got = {"plays": len(plays), "sets": len(sets), "max_play": max(plays) if plays else 0, "max_set": max(sets) if sets else 0}
+    names = {"plays": "plays", "sets": "formations (sets)", "max_play": "highest play id", "max_set": "highest formation id"}
+    return [f"{names[k]}: {got[k]:,} here, {TESTED_GAME[k]:,} in the game the editor was tried on" for k in TESTED_GAME if got[k] != TESTED_GAME[k]]
 
 
 def free_play_id(lib, taken=()):
@@ -41,22 +70,26 @@ def free_play_id(lib, taken=()):
     the stock maximum sorts in front of the last stock plays and pushes them out of that list; the game then asks for one of them (a side's current play, Man Blitz 7459) on the day before the
     first game, finds nothing and crashes (two added plays in one formation crashed, two in different formations did not, only because of which play was pushed out). With ids above 7459 the first
     3,099 rows are exactly the stock plays. The added plays are then not in that list, so the computer cannot call them (build writes no CPU rows)."""
-    top = max([STOCK_MAX_PLYL] + [int(p) for p in lib.plays if int(p) < P.CUSTOM_OFFSETS["PLYL"]] + [int(t) for t in taken])          # mounted custom plays (Plays I made) sit above the offset
+    taken = [int(t) for t in taken]                      # the ids of the plays added so far (they are not the stock game's)
+    top = max([stock_max_play(lib, taken)] + taken)
     if top + 1 > MAX_PLYL:
         raise ValueError("The game has no free play id left.")
     return top + 1
 
 
-def check_play_id(plyl):
-    """Raises ValueError for a play id that is not above the stock maximum (see free_play_id)."""
-    if int(plyl) <= STOCK_MAX_PLYL:
-        raise ValueError(f"A play added to the game files needs an id above {STOCK_MAX_PLYL}, the game's highest play: a lower id pushes a stock play out of the game's play list and the game crashes "
+def check_play_id(plyl, stock_max=None):
+    """Raises ValueError for a play id that is not above the stock maximum (see free_play_id); stock_max: this archive's own (stock_max_play), the PS3 game's by default."""
+    limit = STOCK_MAX_PLYL if stock_max is None else int(stock_max)
+    if int(plyl) <= limit:
+        raise ValueError(f"A play added to the game files needs an id above {limit}, the game's highest play: a lower id pushes a stock play out of the game's play list and the game crashes "
                          "on the day before the first game.")
 
 
-def check_ids(plays):
-    """Raises ValueError when an added play has an id that is not above the stock maximum: a play added by an older version of the editor (ids 7455 to 7458) crashes the game."""
-    low = sorted(int(p["plyl"]) for p in plays if int(p["plyl"]) <= STOCK_MAX_PLYL)
+def check_ids(plays, stock_max=None):
+    """Raises ValueError when an added play has an id that is not above the stock maximum: a play added by an older version of the editor (ids 7455 to 7458) crashes the game. A play knows the
+    stock maximum it was built against ("stock_max"); one that does not (an older version's) is checked against stock_max, or the PS3 game's."""
+    default = STOCK_MAX_PLYL if stock_max is None else int(stock_max)
+    low = sorted(int(p["plyl"]) for p in plays if int(p["plyl"]) <= int(p.get("stock_max", default)))
     if low:
         raise ValueError(f"The plays {', '.join(str(i) for i in low)} were added by an older version of the editor with ids that crash the game on the day before the first game. Press Put the game files back "
                          "and add the plays again (they get ids above 7459).")
@@ -72,12 +105,13 @@ def _block_above(used, count):
     return list(range(start, start + count))
 
 
-def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None):
+def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None, added=()):
     """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}. EVERY id is above all ids in use,
     so that the new rows come AFTER every stock row in the tables (which are sorted by set): found in the game (2026-10-28) that rows put BEFORE stock rows crash it (one set inserted before the
     last stock set survived, two did not; two appended after the last one play). The set id field is 9 bits wide and the game's highest set is 500, so there is room for 11 sets of our own (501 to
     511). The slot, group and package ids are consecutive ascending blocks in the order of the rows, as the game's own sets number them (the id of a slot is the first one plus its number: 239 of 240
-    sets). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added sets, ids a save holds)."""
+    sets). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added sets, ids a save holds); added: the added plays (their sets are not the stock
+    game's: the highest stock set of this archive decides where the room for our own starts)."""
     taken = taken or {}
     quick = getattr(lib, "quick_subs", None) or {}
     off = P.CUSTOM_OFFSETS
@@ -88,9 +122,10 @@ def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None):
     setl = _block_above(used["SETL"], 1)[0]                 # the next id above every one in use: the new rows come last (the order that was tried in the game)
     if setl > MAX_SETL:
         # a save's stale link may name a high id (511) while lower ones are free: use the lowest free id of the supported range before refusing
-        free = [i for i in range(STOCK_MAX_SETL + 1, MAX_SETL + 1) if i not in used["SETL"]]
+        top = stock_max_set(lib, added)
+        free = [i for i in range(top + 1, MAX_SETL + 1) if i not in used["SETL"]]
         if not free:
-            raise ValueError(f"The game has room for {MAX_SETL - STOCK_MAX_SETL} formations of its own (set ids {STOCK_MAX_SETL + 1} to {MAX_SETL}) and they are all taken. Take a play with its own formation out first.")
+            raise ValueError(f"The game has room for {max(MAX_SETL - top, 0)} formations of its own (set ids {top + 1} to {MAX_SETL}) and they are all taken. Take a play with its own formation out first.")
         setl = free[0]
     return {"SETL": setl, "SETP": _block_above(used["SETP"], slots), "SGF_": _block_above(used["SGF_"], groups), "SPF_": _block_above(used["SPF_"], packages) if packages else []}
 
@@ -334,13 +369,14 @@ def new_set_rows(lib, base, new, alignment, ids, set_name, like=None):
     return {"40": r40, "42": {}}, new_setl
 
 
-def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False, share=None, like=None):
+def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False, share=None, like=None, stock_max=None):
     """What the bridge needs for a new play id `plyl`, made from the stock play `base` as the Play creator shows it (overrides, plan, reads, alignment as in hc09_gamefiles.changes_for), put into
     the playbooks `books`: {"plyl", "name", "base", "setl", "new_set", "plyt", "books", "rows": {"40": {table: [row]}, "42": ..., "46": ..., "47": ...}}. When players are moved (or new_set is
     asked for) the play gets a set of its own: set_name (its name), set_ids (free_set_ids) and book_pbfm ({playbook: the formation id the playbook gives the stock set}, the PBFM of its PGSL row)
     are needed. share: an added play (find_shared) whose formation has the same players in the same places; the play goes into that formation instead of a new one (no ids or name needed: the play
     carries a copy of the formation's rows, which merge() writes once, so the formation stays while any play of it is in the game files). A custom play of the user's profile (lib.mount_custom) can be the base too (\"convert\"): it always gets a set of its own, made like the stock set `like` (default: stock_match), and goes into any playbooks that
-    have a formation for it (book_pbfm). Raises ValueError for what cannot be added."""
+    have a formation for it (book_pbfm). stock_max: the highest play id of the stock game in this archive (stock_max_play, the plays added before left out; the library's own when not given): the play's
+    id must be above it, and the play remembers it for merge(). Raises ValueError for what cannot be added."""
     name = GF.clean_name(name)
     d = lib.detail(base)
     if d["side"] != "offense":
@@ -348,7 +384,8 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     if plyl in lib.plays:
         raise ValueError(f"The game already has a play {plyl}.")
     convert = lib.is_custom(base)
-    check_play_id(plyl)
+    stock_max = stock_max_play(lib) if stock_max is None else int(stock_max)
+    check_play_id(plyl, stock_max)
     own_set = bool(moved_players(lib, base, alignment)) or new_set or convert
     have = set(books_of(lib, base))
     books = sorted({int(b) for b in books})
@@ -402,7 +439,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
     warnings = ["The computer will not call this play (the game's play list holds only the stock plays); you can call it yourself."]
-    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "moved": convert_places(lib, lib.detail(base)["set"]["setl"]) if convert else (moved_places(lib, base, alignment) if own_set else {}),
+    return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "stock_max": stock_max, "moved": convert_places(lib, lib.detail(base)["set"]["setl"]) if convert else (moved_places(lib, base, alignment) if own_set else {}),
             "plyt": plyt, "books": books, "rows": rows, "like": like if convert else None, "warnings": warnings}
 
 
@@ -414,6 +451,7 @@ def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None
     plays, skipped = [], []
     taken_plays = list(taken_plays) + [p["plyl"] for p in added]
     extra = {k: list(v) for k, v in (taken or {}).items()}
+    stock_max = stock_max_play(lib, added)
     for base in bases:
         name = lib.plays[base]["name"]
         try:
@@ -439,9 +477,9 @@ def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None
                 used = taken_ids(list(added) + plays, custom_ids(lib))
                 for k, v in extra.items():
                     used[k] = list(used.get(k, [])) + v
-                ids = free_set_ids(lib, *set_ids_needed(lib, base, like=like), taken=used)
+                ids = free_set_ids(lib, *set_ids_needed(lib, base, like=like), taken=used, added=list(added) + plays)
             plyl = free_play_id(lib, taken_plays + [p["plyl"] for p in plays])
-            play = build(lib, base, name, ok, plyl, set_name=name, set_ids=ids, book_pbfm={b: groups.pick(b, like) for b in ok}, like=like, share=shared)
+            play = build(lib, base, name, ok, plyl, set_name=name, set_ids=ids, book_pbfm={b: groups.pick(b, like) for b in ok}, like=like, share=shared, stock_max=stock_max)
             play["from_custom"] = lib.custom[base]["plyl"]
             plays.append(play)
         except ValueError as e:
@@ -455,7 +493,7 @@ def merge(plays):
     for p in plays:
         by_id[p["plyl"]] = p
     plays = [by_id[k] for k in sorted(by_id)]
-    check_ids(plays)
+    check_ids(plays)                                        # every play against the stock maximum it was built with
     rows = {}
     for p in plays:
         for entry, tables in p["rows"].items():
