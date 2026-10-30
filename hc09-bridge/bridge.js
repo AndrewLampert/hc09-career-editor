@@ -1525,8 +1525,12 @@ function writeTocRows(fd, geo, rows) {
 }
 // The record of what Add a play did to one archive, kept in the backup folder. Its name carries a short hash of the archive's path, so that two qkl_boot.ast files (the PS3 game, a copy of it, an Xbox 360 game)
 // never share one record; an older version named it by the file only, and such a record is still found (and replaced when the archive is written again).
-// Paths are compared without regard to case only where the file system does (Windows): elsewhere two archives whose paths differ by case are two archives.
-function pathKey(p) { const r = path.resolve(p); return process.platform === 'win32' ? r.toLowerCase() : r; }
+// A path as the file system itself spells it (realpath: the real case, long names, no links), so that the same archive reached by a different spelling is one archive, and two archives whose paths differ by
+// case in a case-sensitive folder (Linux, or a Windows folder with case sensitivity switched on) are two. A path that does not exist (yet) is only made absolute.
+function pathKey(p) {
+    const r = path.resolve(p);
+    try { return fs.realpathSync.native(r); } catch (e) { return r; }
+}
 function samePath(a, b) { return pathKey(a) === pathKey(b); }
 function addPlayRecordPath(backupDir, ast) {
     const key = crypto.createHash('sha1').update(pathKey(ast)).digest('hex').slice(0, 8);
