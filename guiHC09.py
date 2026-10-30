@@ -5091,14 +5091,16 @@ def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=(
 def save_backup_path(db_path):
     """Where the copy of a save is kept before the editor writes it: <save>.bak beside the save, except for a save of the Xbox 360 game (Xenia, HC09 for PC): there ANY other file beside the saves makes
     the game report all of them as damaged, so the copy goes into a folder of its own in the same place (hc09_detect.BACKUP_DIR_NAME), which the game does not look at. A <save>.bak that an earlier
-    version of the editor left beside such a save is moved there too, so that the game reads the saves again; if that cannot be done the write is not made (RuntimeError)."""
+    version of the editor left beside such a save is moved there too, so that the game reads the saves again; if that cannot be done the write is not made (RuntimeError). A save whose kind cannot be told
+    is treated like an Xbox 360 save: a stray file beside it would be the worse mistake."""
     try:
-        xbox = hc09_detect is not None and hc09_detect.is_xbox_save(db_path)
+        xbox = hc09_detect.is_xbox_save(db_path) if hc09_detect is not None else None
     except Exception:
-        xbox = False
-    if not xbox:
+        xbox = None
+    if xbox is False:
         return db_path + ".bak"
-    folder = os.path.join(os.path.dirname(os.path.abspath(db_path)), hc09_detect.BACKUP_DIR_NAME)
+    # an Xbox 360 save, or one whose kind cannot be told (the finder module is missing or failed): the copy goes in a folder of its own, where no game can read it as a save
+    folder = os.path.join(os.path.dirname(os.path.abspath(db_path)), getattr(hc09_detect, "BACKUP_DIR_NAME", "hc09-editor-backups"))
     os.makedirs(folder, exist_ok=True)
     name = os.path.basename(db_path)
     old = db_path + ".bak"
@@ -5106,7 +5108,7 @@ def save_backup_path(db_path):
         try:
             os.replace(old, os.path.join(folder, name + ".earlier.bak"))
         except OSError as e:
-            raise RuntimeError(f"The old backup {old} beside the save could not be moved into the {hc09_detect.BACKUP_DIR_NAME} folder ({e}). Xenia reads every file beside the saves as a damaged save, so move or "
+            raise RuntimeError(f"The old backup {old} beside the save could not be moved into the {os.path.basename(folder)} folder ({e}). Xenia reads every file beside the saves as a damaged save, so move or "
                                "delete it yourself (is something using it?), then try again; nothing was written.") from e
     return os.path.join(folder, name + ".bak")
 

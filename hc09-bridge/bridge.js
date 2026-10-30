@@ -1792,7 +1792,9 @@ async function cmdAddPlay(args) {
     const spec = JSON.parse(fs.readFileSync(args.spec, 'utf8'));
     const geo = tocGeometry(ast);
     let rec = loadAddPlayRecord(backupDir, ast);
-    if (rec && addPlayRecordState(ast, rec) === 'original') rec = null;     // the game files were put back outside the editor: this is a first add again
+    const recState = addPlayRecordState(ast, rec);
+    if (recState === 'original') rec = null;                                // the game files were put back outside the editor: this is a first add again
+    else if (recState === 'changed') throw new Error(`${path.basename(ast)} was changed after the last add (outside the editor?): put the game files back from your own copy first`);
     const map = rec && rec.active ? (rec.entries || Object.fromEntries(ADD_PLAY_ROLES.map((r) => [r, r]))) : await resolveAddPlayEntries(ast);       // an add that is in place keeps the entries it used
     const idxs = ADD_PLAY_ROLES.map((r) => map[r]);
     // Where the ORIGINAL entries are: they stay where they were (the grown copies are written after them), so they can be read while the grown ones are in use, and nothing is touched until every new
