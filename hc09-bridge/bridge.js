@@ -1767,7 +1767,9 @@ async function buildAddPlayEntry(raw, place, rowsByTable) {
 async function addPlayRestore(ast, backupDir) {
     const rec = loadAddPlayRecord(backupDir, ast);
     if (!rec || !rec.active) return { restored: false, reason: 'nothing was added' };
-    if (addPlayRecordState(ast, rec) === 'original') {                       // the game files were put back outside the editor: only the record is out of date
+    const recState = addPlayRecordState(ast, rec);
+    if (recState === 'changed') throw new Error(`${path.basename(ast)} was changed after the last add (outside the editor?): the game files were not put back, because that would cut away the other change too. Put them back from your own copy instead`);
+    if (recState === 'original') {                                           // the game files were put back outside the editor: only the record is out of date
         rec.active = false;
         rec.plays = [];
         delete rec.addedRows;
