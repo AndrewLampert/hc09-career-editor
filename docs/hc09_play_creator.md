@@ -221,3 +221,7 @@ The diagram's units map onto the field picture's visible part as x 0 to 180 acro
 The bridge finds the screen by what it contains, not by its position (a layout that mentions `createaplay`, one 512x512 texture and at least six 32x32 ones), with entry 548 as the place tried first, because other copies of the game order their entries differently (the same trap as for the shipped database). Its DXT1 / DXT3 / DXT5 decoder and PNG writer have no dependencies (Tk 8.6 loads PNG itself, so Pillow is not needed) and agree with Pillow's decode of the same textures to within 1 level of 255.
 
 The player markers (the `T` for linemen, the square for the quarterback) are not among the pictures found and are drawn in code.
+
+## Other versions of the game
+
+Add a play and Convert my plays were tried only in the PS3 game (RPCS3). The highest stock play id (7459) and formation id (500) are read from the game files, not fixed, so a different version of the game gets its own limits. When the game files do not look like the stock PS3 game (3,099 plays, 240 formations, highest play 7459, highest formation 500), the confirmation starts with a warning that lists the differences. Use a copy of the game files and keep Put the game files back at hand: the added plays may crash another version.
