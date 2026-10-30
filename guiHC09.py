@@ -1955,7 +1955,7 @@ class CSVModel:
             for table, rows in pending.items():
                 self._write_csv(os.path.join(tmp_dir, table.lower() + ".csv"), rows, PLAYBOOK_TABLE_HEADERS[table])
 
-            backup_path = self.db_path + ".bak"
+            backup_path = save_backup_path(self.db_path)
             shutil.copy2(self.db_path, backup_path)
 
             # No --out: save in place. (Passing --out equal to --db would hit a
@@ -5069,7 +5069,7 @@ def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=(
                     w.writerow([r[c] for c in AP.LINK_TABLES[t]])
         if not changed:
             return 0, 0
-        bak = db_path + ".bak"
+        bak = save_backup_path(db_path)
         shutil.copy2(db_path, bak)
         try:
             names = ",".join(changed)
@@ -5086,6 +5086,31 @@ def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=(
         return added, removed
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def save_backup_path(db_path):
+    """Where the copy of a save is kept before the editor writes it: <save>.bak beside the save, except for a save of the Xbox 360 game (Xenia, HC09 for PC): there ANY other file beside the saves makes
+    the game report all of them as damaged, so the copy goes into a folder of its own in the same place (hc09_detect.BACKUP_DIR_NAME), which the game does not look at. A <save>.bak that an earlier
+    version of the editor left beside such a save is moved there too, so that the game reads the saves again; if that cannot be done the write is not made (RuntimeError). A save whose kind cannot be told
+    is treated like an Xbox 360 save: a stray file beside it would be the worse mistake."""
+    try:
+        xbox = hc09_detect.is_xbox_save(db_path) if hc09_detect is not None else None
+    except Exception:
+        xbox = None
+    if xbox is False:
+        return db_path + ".bak"
+    # an Xbox 360 save, or one whose kind cannot be told (the finder module is missing or failed): the copy goes in a folder of its own, where no game can read it as a save
+    folder = os.path.join(os.path.dirname(os.path.abspath(db_path)), getattr(hc09_detect, "BACKUP_DIR_NAME", "hc09-editor-backups"))
+    os.makedirs(folder, exist_ok=True)
+    name = os.path.basename(db_path)
+    old = db_path + ".bak"
+    if os.path.isfile(old):
+        try:
+            os.replace(old, os.path.join(folder, name + ".earlier.bak"))
+        except OSError as e:
+            raise RuntimeError(f"The old backup {old} beside the save could not be moved into the {os.path.basename(folder)} folder ({e}). Xenia reads every file beside the saves as a damaged save, so move or "
+                               "delete it yourself (is something using it?), then try again; nothing was written.") from e
+    return os.path.join(folder, name + ".bak")
 
 
 def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
@@ -7970,7 +7995,7 @@ class AddPlayDialog(tk.Toplevel):
         self.added = []
         ttk.Label(self, text=f"Add {d['play']['name']} as a new play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=820, justify="left", padding=(14, 0, 14, 6),
-                  text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts, but the computer will not call it (the game's play list holds only the stock plays), so you call it yourself. It keeps "
+                  text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts, but the computer does not call it unless you tick the experimental box below (the game's play list holds only the stock plays), so you call it yourself. It keeps "
                        "the formation of the play it was made from; if you moved a player it gets a formation of its own (a copy with the player moved; plays with the same lineup share one, and the game has room for 11 of "
                        "them). Close RPCS3 first. The first time, the "
                        "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 with several plays; "
@@ -7986,6 +8011,10 @@ class AddPlayDialog(tk.Toplevel):
         self.ent_set.grid(row=2, column=1, sticky="w", padx=6)
         self.lbl_set = ttk.Label(form, wraplength=560, justify="left", foreground="gray")
         self.lbl_set.grid(row=3, column=1, sticky="w", padx=6)
+        self.cpu_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(form, text="Let the computer call it too (experimental)", variable=self.cpu_var).grid(row=4, column=1, sticky="w", padx=6, pady=(4, 0))
+        ttk.Label(form, text="Experimental: not tried in the game yet, and it may crash it. The computer picks its plays from the CPU rows of its playbook; with the box ticked the play gets a copy of the rows of the play it was made from.", wraplength=560,
+                  justify="left", foreground="gray").grid(row=5, column=1, sticky="w", padx=6)
         ttk.Label(form, text="Put it in these playbooks:").grid(row=1, column=0, sticky="nw", pady=3)
         lf = ttk.Frame(form)
         lf.grid(row=1, column=1, sticky="w", padx=6)
@@ -8171,7 +8200,7 @@ class AddPlayDialog(tk.Toplevel):
                     n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
                     kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids(), added=self.added)
                 kw["book_pbfm"] = app.book_set_formations(self.boot, self.designer.detail["set"]["setl"])
-            play = AP.build(lib, self.base, name, books, plyl, stock_max=stock_max, **self._args(), **kw)
+            play = AP.build(lib, self.base, name, books, plyl, stock_max=stock_max, cpu=bool(self.cpu_var.get()), **self._args(), **kw)
         except ValueError as e:
             messagebox.showerror("Add a play", str(e), parent=self)
             return
