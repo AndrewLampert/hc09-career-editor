@@ -1525,9 +1525,11 @@ function writeTocRows(fd, geo, rows) {
 }
 // The record of what Add a play did to one archive, kept in the backup folder. Its name carries a short hash of the archive's path, so that two qkl_boot.ast files (the PS3 game, a copy of it, an Xbox 360 game)
 // never share one record; an older version named it by the file only, and such a record is still found (and replaced when the archive is written again).
-function samePath(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
+// Paths are compared without regard to case only where the file system does (Windows): elsewhere two archives whose paths differ by case are two archives.
+function pathKey(p) { const r = path.resolve(p); return process.platform === 'win32' ? r.toLowerCase() : r; }
+function samePath(a, b) { return pathKey(a) === pathKey(b); }
 function addPlayRecordPath(backupDir, ast) {
-    const key = crypto.createHash('sha1').update(path.resolve(ast).toLowerCase()).digest('hex').slice(0, 8);
+    const key = crypto.createHash('sha1').update(pathKey(ast)).digest('hex').slice(0, 8);
     return path.join(backupDir, `${path.basename(ast)}.${key}.addplay.json`);
 }
 function addPlayRecordFiles(backupDir, ast) {
@@ -1554,12 +1556,12 @@ function addPlayRecordState(ast, rec) {
 }
 function loadAddPlayRecord(backupDir, ast) {
     if (!backupDir) return null;
-    const mine = path.resolve(addPlayRecordPath(backupDir, ast)).toLowerCase();
+    const mine = pathKey(addPlayRecordPath(backupDir, ast));
     let own = null, copied = null;
     for (const f of addPlayRecordFiles(backupDir, ast)) {
         const rec = readRecordFile(f);
         if (!rec) continue;
-        if (path.resolve(f).toLowerCase() === mine || (rec.ast && samePath(rec.ast, ast))) own = own || rec;          // the record of this very archive always wins (two archives with an add of the same size have the same table of contents rows)
+        if (pathKey(f) === mine || (rec.ast && samePath(rec.ast, ast))) own = own || rec;          // the record of this very archive always wins (two archives with an add of the same size have the same table of contents rows)
         else if (!copied && rec.active && addPlayRecordState(ast, rec) === 'active') copied = rec;                  // else a record whose grown entries are in this archive: the game folder was copied or moved
     }
     return own || copied;
@@ -1570,7 +1572,7 @@ function saveAddPlayRecord(backupDir, ast, rec) {
     rec.ast = path.resolve(ast);
     fs.writeFileSync(mine, JSON.stringify(rec, null, 2));
     for (const f of addPlayRecordFiles(backupDir, ast)) {                     // an older record of this very archive (named by the file only) is replaced by this one
-        if (path.resolve(f).toLowerCase() === path.resolve(mine).toLowerCase()) continue;
+        if (samePath(f, mine)) continue;
         const old = readRecordFile(f);
         if (old && old.ast && samePath(old.ast, ast)) fs.unlinkSync(f);
     }

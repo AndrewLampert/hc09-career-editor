@@ -377,7 +377,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     carries a copy of the formation's rows, which merge() writes once, so the formation stays while any play of it is in the game files). A custom play of the user's profile (lib.mount_custom) can be the base too (\"convert\"): it always gets a set of its own, made like the stock set `like` (default: stock_match), and goes into any playbooks that
     have a formation for it (book_pbfm). stock_max: the highest play id of the stock game in this archive (stock_max_play, the plays added before left out; the library's own when not given): the play's
     id must be above it, and the play remembers it for merge(). cpu: also give the play CPU rows (PBAI, the table the computer picks its plays from: a copy of the rows of the play it was made from in the
-    chosen playbooks, so the computer may call it like the original). NOT tried in the game: no CPU rows were written since the registry crash was found (see free_play_id), because a play the computer picks that
+    chosen playbooks, so the computer may call it like the original). EXPERIMENTAL, not tried in the game: no CPU rows were written since the registry crash was found (see free_play_id), because a play the computer picks that
     is not in the game's play list could crash it. Only for a stock play (a play of the Play creator has no CPU rows to copy). Raises ValueError for what cannot be added."""
     name = GF.clean_name(name)
     d = lib.detail(base)
@@ -449,7 +449,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     r47.update(extra47)
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
-    warnings = (["The computer may call this play (CPU rows were added; not tried in the game yet): if the game crashes on the day before a game, take the play out and add it again without them."] if cpu else
+    warnings = (["The computer may call this play (experimental: CPU rows were added and this has not been tried in the game yet): if the game crashes on the day before a game, take the play out and add it again without them."] if cpu else
                 ["The computer will not call this play (it has no CPU rows); you can call it yourself."])
     return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "stock_max": stock_max, "moved": convert_places(lib, lib.detail(base)["set"]["setl"]) if convert else (moved_places(lib, base, alignment) if own_set else {}),
             "plyt": plyt, "books": books, "rows": rows, "like": like if convert else None, "warnings": warnings, "cpu": bool(cpu)}
