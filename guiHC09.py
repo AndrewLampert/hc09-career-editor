@@ -8056,7 +8056,7 @@ class AddPlayDialog(tk.Toplevel):
             self.added = []
             self.lbl_result.configure(text=f"Could not read what was added before: {e}")
         try:
-            AP.check_ids(self.added)
+            AP.check_ids(self.added, AP.stock_max_play(lib, self.added))
         except ValueError as e:
             self.lbl_result.configure(text=str(e))
         share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
@@ -8114,6 +8114,18 @@ class AddPlayDialog(tk.Toplevel):
     def _selected_saves(self):
         return [(label, path) for (label, path, _d), v in zip(self._saves, self.save_vars) if v.get()]
 
+    def _differs_note(self, lib):
+        """A warning for the confirmation when the game files are not the stock game the editor was tried on (hc09_addplay.game_differs): the Xbox 360 game, an update or a game that was edited
+        before. Empty for the stock PS3 game."""
+        try:
+            diff = AP.game_differs(lib, self.added)
+        except Exception:
+            return ""
+        if not diff:
+            return ""
+        return ("These game files are not the stock game the editor was tried on:\n  " + "\n  ".join(diff) + "\nThe added plays were only tried in the PS3 game (RPCS3). Another version may "
+                "crash on the day before the first game, so use a copy of the game files and keep Put the game files back at hand.\n\n")
+
     def _link(self, links=None, remove=(), keep=()):
         out = []
         for label, path in self._selected_saves():
@@ -8146,7 +8158,8 @@ class AddPlayDialog(tk.Toplevel):
             name = GF.clean_name(self.name_var.get())
             books = [self._books[i] for i in self.lst_books.curselection()]
             lib = self.designer.lib
-            AP.check_ids(self.added)
+            stock_max = AP.stock_max_play(lib, self.added)
+            AP.check_ids(self.added, stock_max)
             plyl = AP.free_play_id(lib, [p["plyl"] for p in self.added])
             kw = {}
             if AP.moved_players(lib, self.base, self._args()["alignment"]):
@@ -8156,16 +8169,17 @@ class AddPlayDialog(tk.Toplevel):
                 else:
                     kw["set_name"] = GF.clean_name(self.set_var.get())
                     n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
-                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids())
+                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids(), added=self.added)
                 kw["book_pbfm"] = app.book_set_formations(self.boot, self.designer.detail["set"]["setl"])
-            play = AP.build(lib, self.base, name, books, plyl, **self._args(), **kw)
+            play = AP.build(lib, self.base, name, books, plyl, stock_max=stock_max, **self._args(), **kw)
         except ValueError as e:
             messagebox.showerror("Add a play", str(e), parent=self)
             return
         if any(p["name"].lower() == name.lower() for p in self.added):
             messagebox.showerror("Add a play", f"A play called {name} was already added. Take it out first or give this one another name.", parent=self)
             return
-        if not messagebox.askyesno("Add a play", f"Add {name} to the game files as play {plyl}, in {len(books)} playbook{'s' if len(books) != 1 else ''}?\n\nThis writes qkl_boot.ast (four of its "
+        note = self._differs_note(lib)
+        if not messagebox.askyesno("Add a play", note + f"Add {name} to the game files as play {plyl}, in {len(books)} playbook{'s' if len(books) != 1 else ''}?\n\nThis writes qkl_boot.ast (four of its "
                                    "entries are written again at the end of the file, about 15 MB). The original table of contents is saved first and Put the game files back restores the file "
                                    "byte for byte.", parent=self):
             return
@@ -8338,7 +8352,7 @@ class ConvertPlaysDialog(AddPlayDialog):
             self.added = []
             self.lbl_result.configure(text=f"Could not read what was added before: {e}")
         try:
-            AP.check_ids(self.added)
+            AP.check_ids(self.added, AP.stock_max_play(lib, self.added))
         except ValueError as e:
             self.lbl_result.configure(text=str(e))
         self._fill_added()
@@ -8378,7 +8392,7 @@ class ConvertPlaysDialog(AddPlayDialog):
             messagebox.showerror("Convert my plays", "Pick at least one play and one playbook.", parent=self)
             return
         try:
-            AP.check_ids(self.added)
+            AP.check_ids(self.added, AP.stock_max_play(self.designer.lib, self.added))
             groups = self._formation_groups()
             plays, skipped = AP.convert_mine(self.designer.lib, bases, books, groups, added=self.added, taken=self._taken_set_ids())
         except ValueError as e:
@@ -8391,7 +8405,7 @@ class ConvertPlaysDialog(AddPlayDialog):
             messagebox.showerror("Convert my plays", "None of the selected plays can be converted. The reasons are listed in the window.", parent=self)
             return
         n_sets = len({p["new_set"] for p in plays if p["new_set"] not in {q["new_set"] for q in self.added}})
-        if not messagebox.askyesno("Convert my plays", f"Convert {len(plays)} play{'s' if len(plays) != 1 else ''} ({n_sets} new formation{'s' if n_sets != 1 else ''}) into {len(books)} playbook{'s' if len(books) != 1 else ''}?\n\n"
+        if not messagebox.askyesno("Convert my plays", self._differs_note(lib) + f"Convert {len(plays)} play{'s' if len(plays) != 1 else ''} ({n_sets} new formation{'s' if n_sets != 1 else ''}) into {len(books)} playbook{'s' if len(books) != 1 else ''}?\n\n"
                                    + (f"{len(skipped)} cannot be converted (listed afterwards).\n\n" if skipped else "") +
                                    "This writes qkl_boot.ast (four of its entries are written again at the end of the file, about 15 MB). The original table of contents is saved first and Put the game "
                                    "files back restores the file byte for byte.", parent=self):
