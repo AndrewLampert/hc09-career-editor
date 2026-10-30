@@ -112,7 +112,11 @@ data in a `TDB`-format binary database. This project has two pieces:
   edited tables back into the save on Save.
 
 Every Save first copies the existing save file to `<file>.bak` before writing, so
-you always have the previous version to fall back to.
+you always have the previous version to fall back to. For a save of the Xbox 360 game
+(Xenia, HC09 for PC) the copy goes into a folder called `hc09-editor-backups` next to the
+save instead: Xenia treats every other file beside the saves as a damaged save. A
+`<file>.bak` that an older version left there is moved into that folder the next time the
+editor writes that save.
 
 ## Requirements
 

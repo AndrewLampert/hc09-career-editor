@@ -322,13 +322,25 @@ def classify_save(path):
     return ("career" if n >= CAREER_MIN_TABLES else "profile" if PROFILE_MIN_TABLES <= n <= PROFILE_MAX_TABLES else "other"), n
 
 
+def is_xbox_save(path):
+    """True for a save of the Xbox 360 game: one below a Xenia content folder or a PC version's saves folder, or one in the MC02 container those use (a PS3 save is a bare database). The game (Xenia,
+    HC09 for PC) reads EVERY file next to the saves of a folder as a save and reports all of them as damaged when one is a copy, so nothing but the save may sit beside it."""
+    if xenia_dir_of(path) or pcport_root_of(path):
+        return True
+    start = mc02_db_start(path)
+    return start is not None and start > 0
+
+
 def _save_files(title_folder):
-    """Candidate save files below a title folder: files of a useful size (the type and package folders are not assumed)."""
+    """Candidate save files below a title folder: files of a useful size (the type and package folders are not assumed); the editor's own backup folder and *.bak files are not saves."""
     base_depth = title_folder.rstrip("\\/").count(os.sep)
     for cur, dirs, files in os.walk(title_folder):
+        dirs[:] = [d for d in dirs if d.lower() != BACKUP_DIR_NAME]
         if cur.count(os.sep) - base_depth >= XENIA_MAX_DEPTH:
             dirs[:] = []
         for name in files:
+            if name.lower().endswith(".bak"):
+                continue
             path = os.path.join(cur, name)
             try:
                 if os.path.getsize(path) >= MIN_SAVE_SIZE:
@@ -410,7 +422,8 @@ PCPORT_DOCS_DIR = "NFL Head Coach 09"           # <Documents>\NFL Head Coach 09
 PCPORT_SAVES_DIR = "Saves"
 PCPORT_VERSIONS = ("1.0", "1.2")                # the game versions the ibukun5588 port keeps apart
 PCPORT_MAX_DEPTH = 4                            # how many levels below a saves folder a package folder may sit
-PCPORT_SKIP_DIRS = {"backups"}                  # folders whose saves are old copies, not saves to open
+BACKUP_DIR_NAME = "hc09-editor-backups"         # where the editor keeps the copy it makes of an Xbox 360 save before writing it (see is_xbox_save)
+PCPORT_SKIP_DIRS = {"backups", BACKUP_DIR_NAME}  # folders whose saves are old copies, not saves to open
 TOOLS81_CONTENT = os.path.join("build", "userdata", "content")
 PCPORT_INSTALL_DIRS = (r"C:\Games\HC09Recomp", r"C:\HC09Recomp", r"D:\Games\HC09Recomp")      # the tools81 README suggests C:\Games\HC09Recomp
 PCPORT_PROGRAMS = ("hc09", "hc09-launcher")      # process names (without .exe) of the PC versions: they rewrite the saves they have open

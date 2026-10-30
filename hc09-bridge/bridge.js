@@ -1523,15 +1523,57 @@ function readTocRows(astPath, geo, indexes) {
 function writeTocRows(fd, geo, rows) {
     for (const [idx, hex] of Object.entries(rows)) fs.writeSync(fd, Buffer.from(hex, 'hex'), 0, geo.rowLen, geo.rowOffset(Number(idx)));
 }
-function addPlayRecordPath(backupDir, ast) { return path.join(backupDir, `${path.basename(ast)}.addplay.json`); }
+// The record of what Add a play did to one archive, kept in the backup folder. Its name carries a short hash of the archive's path, so that two qkl_boot.ast files (the PS3 game, a copy of it, an Xbox 360 game)
+// never share one record; an older version named it by the file only, and such a record is still found (and replaced when the archive is written again).
+function samePath(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
+function addPlayRecordPath(backupDir, ast) {
+    const key = crypto.createHash('sha1').update(path.resolve(ast).toLowerCase()).digest('hex').slice(0, 8);
+    return path.join(backupDir, `${path.basename(ast)}.${key}.addplay.json`);
+}
+function addPlayRecordFiles(backupDir, ast) {
+    if (!fs.existsSync(backupDir)) return [];
+    const base = path.basename(ast).toLowerCase();
+    return fs.readdirSync(backupDir).filter((f) => {
+        const n = f.toLowerCase();
+        return n === `${base}.addplay.json` || (n.startsWith(`${base}.`) && /^\.[0-9a-f]{8}\.addplay\.json$/.test(n.slice(base.length)));
+    }).map((f) => path.join(backupDir, f));
+}
+function readRecordFile(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return null; } }
+
+// How the archive stands against a record: 'none' (nothing was added), 'active' (the grown entries the record describes are in the archive), 'original' (the archive is back as it was before the first add: the
+// user put the game files back outside the editor, from a copy of their own) or 'changed' (neither: an entry was changed after the last add).
+function addPlayRecordState(ast, rec) {
+    if (!rec || !rec.active) return 'none';
+    const idxs = Object.keys(rec.rows || {}).map(Number);
+    let now;
+    try { now = readTocRows(ast, tocGeometry(ast), idxs); } catch (e) { return 'changed'; }
+    const added = rec.addedRows || {};
+    if (idxs.every((i) => added[i] === undefined || now[i] === added[i])) return 'active';          // an add that was interrupted wrote no addedRows: the restore must still run
+    if (idxs.every((i) => now[i] === rec.rows[i])) return 'original';
+    return 'changed';
+}
 function loadAddPlayRecord(backupDir, ast) {
     if (!backupDir) return null;
-    const p = addPlayRecordPath(backupDir, ast);
-    return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+    const mine = path.resolve(addPlayRecordPath(backupDir, ast)).toLowerCase();
+    let own = null, copied = null;
+    for (const f of addPlayRecordFiles(backupDir, ast)) {
+        const rec = readRecordFile(f);
+        if (!rec) continue;
+        if (path.resolve(f).toLowerCase() === mine || (rec.ast && samePath(rec.ast, ast))) own = own || rec;          // the record of this very archive always wins (two archives with an add of the same size have the same table of contents rows)
+        else if (!copied && rec.active && addPlayRecordState(ast, rec) === 'active') copied = rec;                  // else a record whose grown entries are in this archive: the game folder was copied or moved
+    }
+    return own || copied;
 }
 function saveAddPlayRecord(backupDir, ast, rec) {
     fs.mkdirSync(backupDir, { recursive: true });
-    fs.writeFileSync(addPlayRecordPath(backupDir, ast), JSON.stringify(rec, null, 2));
+    const mine = addPlayRecordPath(backupDir, ast);
+    rec.ast = path.resolve(ast);
+    fs.writeFileSync(mine, JSON.stringify(rec, null, 2));
+    for (const f of addPlayRecordFiles(backupDir, ast)) {                     // an older record of this very archive (named by the file only) is replaced by this one
+        if (path.resolve(f).toLowerCase() === path.resolve(mine).toLowerCase()) continue;
+        const old = readRecordFile(f);
+        if (old && old.ast && samePath(old.ast, ast)) fs.unlinkSync(f);
+    }
 }
 
 // The tables of an entry must sit where the definitions say: the library's writer works out the offsets after a table changed its length, so every entry is checked.
@@ -1678,6 +1720,13 @@ async function buildAddPlayEntry(raw, place, rowsByTable) {
 async function addPlayRestore(ast, backupDir) {
     const rec = loadAddPlayRecord(backupDir, ast);
     if (!rec || !rec.active) return { restored: false, reason: 'nothing was added' };
+    if (addPlayRecordState(ast, rec) === 'original') {                       // the game files were put back outside the editor: only the record is out of date
+        rec.active = false;
+        rec.plays = [];
+        delete rec.addedRows;
+        saveAddPlayRecord(backupDir, ast, rec);
+        return { restored: false, reason: 'the game files were already back as they were before the first add' };
+    }
     const geo = tocGeometry(ast);
     const size = fs.statSync(ast).size;
     if (size < rec.originalLength) throw new Error(`${path.basename(ast)} is shorter (${size}) than it was before the first add (${rec.originalLength}): not restoring`);
@@ -1711,6 +1760,7 @@ async function cmdAddPlay(args) {
     const spec = JSON.parse(fs.readFileSync(args.spec, 'utf8'));
     const geo = tocGeometry(ast);
     let rec = loadAddPlayRecord(backupDir, ast);
+    if (rec && addPlayRecordState(ast, rec) === 'original') rec = null;     // the game files were put back outside the editor: this is a first add again
     const map = rec && rec.active ? (rec.entries || Object.fromEntries(ADD_PLAY_ROLES.map((r) => [r, r]))) : await resolveAddPlayEntries(ast);       // an add that is in place keeps the entries it used
     const idxs = ADD_PLAY_ROLES.map((r) => map[r]);
     // Where the ORIGINAL entries are: they stay where they were (the grown copies are written after them), so they can be read while the grown ones are in use, and nothing is touched until every new
@@ -1788,7 +1838,8 @@ async function cmdAddPlay(args) {
 
 async function cmdAddPlayState(args) {
     const rec = loadAddPlayRecord(args['backup-dir'], args.ast);
-    console.log(JSON.stringify({ active: Boolean(rec && rec.active), plays: rec && rec.active ? rec.plays : [], originalLength: rec ? rec.originalLength : null, length: fs.statSync(args.ast).size }));
+    const state = addPlayRecordState(args.ast, rec);                         // a record is only believed while the archive still holds what it describes
+    console.log(JSON.stringify({ active: state === 'active', stale: state === 'original', changed: state === 'changed', plays: state === 'active' ? rec.plays : [], originalLength: rec ? rec.originalLength : null, length: fs.statSync(args.ast).size }));
 }
 
 async function cmdAddPlayRestore(args) {

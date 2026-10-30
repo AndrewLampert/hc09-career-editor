@@ -369,14 +369,16 @@ def new_set_rows(lib, base, new, alignment, ids, set_name, like=None):
     return {"40": r40, "42": {}}, new_setl
 
 
-def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False, share=None, like=None, stock_max=None):
+def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, alignment=None, set_name=None, set_ids=None, book_pbfm=None, new_set=False, share=None, like=None, stock_max=None, cpu=False):
     """What the bridge needs for a new play id `plyl`, made from the stock play `base` as the Play creator shows it (overrides, plan, reads, alignment as in hc09_gamefiles.changes_for), put into
     the playbooks `books`: {"plyl", "name", "base", "setl", "new_set", "plyt", "books", "rows": {"40": {table: [row]}, "42": ..., "46": ..., "47": ...}}. When players are moved (or new_set is
     asked for) the play gets a set of its own: set_name (its name), set_ids (free_set_ids) and book_pbfm ({playbook: the formation id the playbook gives the stock set}, the PBFM of its PGSL row)
     are needed. share: an added play (find_shared) whose formation has the same players in the same places; the play goes into that formation instead of a new one (no ids or name needed: the play
     carries a copy of the formation's rows, which merge() writes once, so the formation stays while any play of it is in the game files). A custom play of the user's profile (lib.mount_custom) can be the base too (\"convert\"): it always gets a set of its own, made like the stock set `like` (default: stock_match), and goes into any playbooks that
     have a formation for it (book_pbfm). stock_max: the highest play id of the stock game in this archive (stock_max_play, the plays added before left out; the library's own when not given): the play's
-    id must be above it, and the play remembers it for merge(). Raises ValueError for what cannot be added."""
+    id must be above it, and the play remembers it for merge(). cpu: also give the play CPU rows (PBAI, the table the computer picks its plays from: a copy of the rows of the play it was made from in the
+    chosen playbooks, so the computer may call it like the original). NOT tried in the game: no CPU rows were written since the registry crash was found (see free_play_id), because a play the computer picks that
+    is not in the game's play list could crash it. Only for a stock play (a play of the Play creator has no CPU rows to copy). Raises ValueError for what cannot be added."""
     name = GF.clean_name(name)
     d = lib.detail(base)
     if d["side"] != "offense":
@@ -429,7 +431,16 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     for table in ("PLPD", "PLRD", "PLCM"):
         if new.get(table):
             r40[table] = [{**{k: v for k, v in row.items() if k != "PLYL"}, "PLYL": plyl} for row in new[table]]
-    # No CPU rows (PBAI): the game's play list (the first 3,099 rows of the compact copy) cannot hold an added play, and a CPU pick of a play that is not in it would crash the game.
+    # No CPU rows (PBAI) unless asked for (cpu): the game's play list (the first 3,099 rows of the compact copy) cannot hold an added play, and a CPU pick of a play that is not in it might crash the game.
+    # The computer picks only from the plays of its playbook (in the game's data every (playbook, play) pair of PBAI is also a link of PGPL), so these rows are what it takes to let it call the play.
+    if cpu:
+        if convert:
+            raise ValueError("The computer cannot be given a play made in the Play creator: it has no CPU rows to copy.")
+        pbai = [{"BOKL": int(r["BOKL"]), "PBPL": plyl, "SETL": setl, "AIGR": int(r["AIGR"]), "PLYT": plyt, "PLF_": pbpl["PLF_"], "vpos": pbpl["vpos"], "prct": int(r["prct"])}
+                for r in lib.tables["PBAI"] if int(r["PBPL"]) == base and int(r["BOKL"]) in books]
+        if not pbai:
+            raise ValueError("The play has no CPU rows (PBAI) in those playbooks, so the computer cannot be given it there.")
+        r40["PBAI"] = pbai
     row42 = compact_row(setl, plyl, plyt, (r40.get("PLPD") or [None])[0], (r40.get("PLRD") or [None])[0])
     r42 = {"PBPL": [row42], "PLYS": [{"PLYL": plyl, "PLRR": r["PLRR"], "poso": r["poso"]} for r in plys]}
     r47 = {"PGPL": [{"BOKL": b, "SETL": setl, "PLYL": plyl, "PLTP": plyt} for b in books]}
@@ -438,9 +449,10 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     r47.update(extra47)
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
-    warnings = ["The computer will not call this play (the game's play list holds only the stock plays); you can call it yourself."]
+    warnings = (["The computer may call this play (CPU rows were added; not tried in the game yet): if the game crashes on the day before a game, take the play out and add it again without them."] if cpu else
+                ["The computer will not call this play (it has no CPU rows); you can call it yourself."])
     return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "stock_max": stock_max, "moved": convert_places(lib, lib.detail(base)["set"]["setl"]) if convert else (moved_places(lib, base, alignment) if own_set else {}),
-            "plyt": plyt, "books": books, "rows": rows, "like": like if convert else None, "warnings": warnings}
+            "plyt": plyt, "books": books, "rows": rows, "like": like if convert else None, "warnings": warnings, "cpu": bool(cpu)}
 
 
 def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None):
