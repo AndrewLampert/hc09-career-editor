@@ -1566,6 +1566,18 @@ function originalFingerprint(ast, rows) {
     return hash;
 }
 
+// The last bytes of the original archive (where it ended before the first add: the grown entries come after them, so they are still there): restoring cuts the archive to the record's length, so an archive that
+// ended somewhere else (two archives that share the four entries but differ in what follows them) must not take the record.
+function originalTail(ast, length) {
+    const n = Math.min(64, length);
+    const fd = fs.openSync(ast, 'r');
+    try {
+        const buf = Buffer.alloc(n);
+        if (fs.readSync(fd, buf, 0, n, length - n) !== n) throw new Error('the archive is shorter than its original length');
+        return crypto.createHash('sha1').update(buf).digest('hex');
+    } finally { fs.closeSync(fd); }
+}
+
 // How the archive stands against a record: 'none' (nothing was added), 'active' (the grown entries the record describes are in the archive), 'original' (the archive is back as it was before the first add: the
 // user put the game files back outside the editor, from a copy of their own) or 'changed' (neither: an entry was changed after the last add).
 function addPlayRecordState(ast, rec) {
@@ -1577,6 +1589,9 @@ function addPlayRecordState(ast, rec) {
     if (idxs.every((i) => added[i] === undefined || now[i] === added[i])) {                       // an add that was interrupted wrote no addedRows: the restore must still run
         if (rec.fingerprint) {
             try { if (originalFingerprint(ast, rec.rows) !== rec.fingerprint) return 'changed'; } catch (e) { return 'changed'; }          // the rows match but the originals are not the ones the record was made from
+        }
+        if (rec.tail) {
+            try { if (originalTail(ast, rec.originalLength) !== rec.tail) return 'changed'; } catch (e) { return 'changed'; }                // or the archive did not end where the record says
         }
         return 'active';
     }
@@ -1591,7 +1606,7 @@ function loadAddPlayRecord(backupDir, ast) {
         const rec = readRecordFile(f);
         if (!rec) continue;
         if (pathKey(f) === mine || (rec.ast && samePath(rec.ast, ast))) own = own || rec;
-        else if (!copied && rec.active && rec.fingerprint && addPlayRecordState(ast, rec) === 'active') copied = rec;          // a record whose add this archive holds (same rows AND the same originals): the game folder was copied or moved
+        else if (!copied && rec.active && rec.fingerprint && rec.tail && addPlayRecordState(ast, rec) === 'active') copied = rec;          // a record whose add this archive holds (same rows AND the same originals): the game folder was copied or moved
     }
     if (own && addPlayRecordState(ast, own) === 'active') return own;      // the record of this very archive wins while the archive still holds its add (two archives with an add of the same size have the same table of contents rows)
     return copied || own;                                                  // else the add this archive demonstrably holds (the file was replaced by a copy of a grown archive), else this archive's own, out of date, record
@@ -1830,7 +1845,7 @@ async function cmdAddPlay(args) {
     if (Object.keys(built).length === 0) { console.log(JSON.stringify({ added: 0, entries: {} })); return; }
     if (rec && rec.active) await addPlayRestore(ast, backupDir);             // the state before the first add; the record of the originals stays
     // the record of the original state comes first, so that a put-back is possible whatever happens next
-    rec = { ast: path.resolve(ast), originalLength, rows: originalRows, entries: map, fingerprint: originalFingerprint(ast, originalRows), active: false, plays: [], savedAt: new Date().toISOString() };
+    rec = { ast: path.resolve(ast), originalLength, rows: originalRows, entries: map, fingerprint: originalFingerprint(ast, originalRows), tail: originalTail(ast, originalLength), active: false, plays: [], savedAt: new Date().toISOString() };
     saveAddPlayRecord(backupDir, ast, rec);
     try {
         const fd = fs.openSync(ast, 'r+');
