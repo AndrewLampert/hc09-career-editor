@@ -1565,10 +1565,11 @@ function loadAddPlayRecord(backupDir, ast) {
     for (const f of addPlayRecordFiles(backupDir, ast)) {
         const rec = readRecordFile(f);
         if (!rec) continue;
-        if (pathKey(f) === mine || (rec.ast && samePath(rec.ast, ast))) own = own || rec;          // the record of this very archive always wins (two archives with an add of the same size have the same table of contents rows)
-        else if (!copied && rec.active && addPlayRecordState(ast, rec) === 'active') copied = rec;                  // else a record whose grown entries are in this archive: the game folder was copied or moved
+        if (pathKey(f) === mine || (rec.ast && samePath(rec.ast, ast))) own = own || rec;
+        else if (!copied && rec.active && addPlayRecordState(ast, rec) === 'active') copied = rec;                  // a record whose grown entries are in this archive: the game folder was copied or moved
     }
-    return own || copied;
+    if (own && addPlayRecordState(ast, own) === 'active') return own;      // the record of this very archive wins while the archive still holds its add (two archives with an add of the same size have the same table of contents rows)
+    return copied || own;                                                  // else the add this archive demonstrably holds (the file was replaced by a copy of a grown archive), else this archive's own, out of date, record
 }
 function saveAddPlayRecord(backupDir, ast, rec) {
     fs.mkdirSync(backupDir, { recursive: true });
