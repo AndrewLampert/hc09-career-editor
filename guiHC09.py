@@ -8132,7 +8132,7 @@ class AddPlayDialog(tk.Toplevel):
         ttk.Label(self, text=f"Add {d['play']['name']} as a new play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=820, justify="left", padding=(14, 0, 14, 6),
                   text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts, but the computer does not call it unless you tick the experimental box below (the game's play list holds only the stock plays), so you call it yourself. It keeps "
-                       "the formation of the play it was made from; if you moved a player it gets a formation of its own (a copy with the player moved; plays with the same lineup share one, and the game has room for 11 of "
+                       "the formation of the play it was made from; if you moved a player it gets a formation of its own (a copy with the player moved; plays with the same lineup share one, and the game has room for about 230 of "
                        "them). Close RPCS3 first. The first time, the "
                        "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 with several plays; "
                        "defense plays are not tried.").pack(anchor="w")
@@ -8418,7 +8418,7 @@ class AddPlayDialog(tk.Toplevel):
 class ConvertPlaysDialog(AddPlayDialog):
     """Convert my plays: the custom plays of the profile ("Plays I made") added to the game's own play database as NORMAL plays, in the playbooks you pick: they can be flipped and hot-routed and the
     quarterback adjusts; the computer does not call them and they cannot be edited in the game (the game's play list holds only the stock plays). Each play's formation is a copy of the stock
-    formation with the same players, with the places of the custom set; plays with the same lineup share one formation (the game has room for 11). The list of added plays, Take out, Put the game
+    formation with the same players, with the places of the custom set; plays with the same lineup share one formation (the game has room for about 230). The list of added plays, Take out, Put the game
     files back and the links in the saves are those of the Add a play window."""
 
     def __init__(self, app, designer):
@@ -8438,7 +8438,7 @@ class ConvertPlaysDialog(AddPlayDialog):
         ttk.Label(self, wraplength=860, justify="left", padding=(14, 0, 14, 6),
                   text="Your custom plays go into the game's own files as normal plays of the playbooks you pick: they can be flipped and hot-routed and the quarterback adjusts, but the computer will not call them "
                        "(the game's play list holds only the stock plays) and they cannot be edited in the game. Each play keeps its routes and gets a formation that is a copy of the game's formation with the same "
-                       "players, with your places; plays with the same lineup share one formation (the game has room for 11, so a play whose lineup is the twelfth is skipped). Offense plays only; a play "
+                       "players, with your places; plays with the same lineup share one formation (the game has room for about 230, so a play is rarely skipped for want of one). Offense plays only; a play "
                        "whose formation no game formation matches is skipped, and so is a play that is already converted (to convert an edited play again, take the old copy out first with the button below). Close RPCS3 first. The first time, the archive's original table of contents is saved in Documents\\hc09-game-file-backup, and "
                        "Put the game files back puts qkl_boot.ast back byte for byte. Your custom plays stay in your profile.").pack(anchor="w")
         form = ttk.Frame(self)

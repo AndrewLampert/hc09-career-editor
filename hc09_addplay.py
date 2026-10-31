@@ -106,12 +106,13 @@ def _block_above(used, count):
 
 
 def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None, added=()):
-    """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}. EVERY id is above all ids in use,
-    so that the new rows come AFTER every stock row in the tables (which are sorted by set): found in the game (2026-10-28) that rows put BEFORE stock rows crash it (one set inserted before the
-    last stock set survived, two did not; two appended after the last one play). The set id field is 9 bits wide and the game's highest set is 500, so there is room for 11 sets of our own (501 to
-    511). The slot, group and package ids are consecutive ascending blocks in the order of the rows, as the game's own sets number them (the id of a slot is the first one plus its number: 239 of 240
-    sets). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added sets, ids a save holds); added: the added plays (their sets are not the stock
-    game's: the highest stock set of this archive decides where the room for our own starts)."""
+    """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}. The set id is the next one above
+    every id in use (501 first: the way tried most in the game), the set id field is 9 bits wide, so 501 to 511 are 11 sets; when those are all in use the HIGHEST id the game leaves FREE below its
+    highest set (500) is taken: the game's own numbering has about 260 gaps (sets that were removed), and a formation at one of them works (RPCS3, 2026-10-31: a formation at id 84 reached game day,
+    the moved receiver stood at the sideline and the play ran; the earlier 'new rows must come after every stock row' came from tests that also had the play-id bug of free_play_id). An id a save holds
+    (the profile's custom formations use gaps too) is never taken; the highest gap goes first because the game hands the ids of the custom plays made in it out from the LOWEST free ones, so ours stay clear of those. The slot, group and package ids are consecutive ascending blocks above all ids in use, in the order of the rows, as the game's own
+    sets number them (the id of a slot is the first one plus its number: 239 of 240 sets). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added
+    sets, ids a save holds); added: the added plays (their sets are not the stock game's: the highest stock set of this archive decides where the ids above it start)."""
     taken = taken or {}
     quick = getattr(lib, "quick_subs", None) or {}
     off = P.CUSTOM_OFFSETS
@@ -125,7 +126,9 @@ def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None, added=()):
         top = stock_max_set(lib, added)
         free = [i for i in range(top + 1, MAX_SETL + 1) if i not in used["SETL"]]
         if not free:
-            raise ValueError(f"The game has room for {max(MAX_SETL - top, 0)} formations of its own (set ids {top + 1} to {MAX_SETL}) and they are all taken. Take a play with its own formation out first.")
+            free = [i for i in range(top, 0, -1) if i not in used["SETL"]]          # the ids above the stock maximum are in use: the gaps of the game's own numbering, the highest first
+        if not free:
+            raise ValueError("The game has no free formation id left (the ids above its own sets and the gaps below them are all in use). Take a play with its own formation out first.")
         setl = free[0]
     return {"SETL": setl, "SETP": _block_above(used["SETP"], slots), "SGF_": _block_above(used["SGF_"], groups), "SPF_": _block_above(used["SPF_"], packages) if packages else []}
 
@@ -170,7 +173,7 @@ def convert_places(lib, custom_setl):
 
 def find_shared_convert(lib, base, like, added):
     """The converted play (among `added`) whose formation is a copy of the same stock set `like` with the players in the same places as the custom play `base`'s set, or None: custom plays
-    with the same lineup go into one formation (the game has room for 11 formations of its own, and a play of the user's often shares its lineup with others: 18 plays had 9 lineups)."""
+    with the same lineup go into one formation (the game has room for about 230 formations of its own: 11 above its own ids, then the ids it leaves free below them; and a play of the user's often shares its lineup with others: 18 plays had 9 lineups)."""
     mine = convert_places(lib, lib.detail(base)["set"]["setl"])
     for p in added:
         have = p.get("moved")
@@ -458,7 +461,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
 def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None):
     """Convert the user's custom plays (lib.mount_custom) into plays of the game's own database: each gets a new play id and a formation (a copy of the stock set it is closest to, with the
     custom set's places), in the playbooks `books`, each formation in the playbook's formation group that suits it (FormationGroups.pick). Plays with the same lineup share one formation (the game has
-    room for 11). added: the plays added to the game files before (their ids and formations stay, and a new play can go into one of their formations); taken: set, slot, group and package ids that
+    room for about 230). added: the plays added to the game files before (their ids and formations stay, and a new play can go into one of their formations); taken: set, slot, group and package ids that
     saves still name (the window's _taken_set_ids). Returns (plays, skipped): the built plays, and [(base, why)] for the ones that cannot be converted."""
     plays, skipped = [], []
     taken_plays = list(taken_plays) + [p["plyl"] for p in added]
