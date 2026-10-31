@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -5159,6 +5159,47 @@ def add_cpu_rows_in_save(model, db_path, profile_path=None, stock_pbai=(), backu
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def rename_plays_in_save(model, db_path, renames, expect=None, backup=True):
+    """Rename custom plays in a save (profile or career): the name is the NAME column of its PBPL row (hc09_plays.rename_rows). The save is copied first (save_backup_path) and put back if the write
+    fails. Returns (plays renamed, [ids of rows left alone because their set is not the expected one])."""
+    tmp = tempfile.mkdtemp(prefix="hc09_ren_")
+    try:
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PBPL"])
+        src = os.path.join(tmp, "pbpl.csv")
+        if not os.path.isfile(src):
+            return 0, []
+        with open(src, newline="", encoding="utf-8-sig") as f:
+            headers = next(csv.reader(f))
+        rows, renamed, skipped = rename_rows(read_csv_dicts(src), renames, expect)
+        if not renamed:
+            return 0, skipped
+        out = os.path.join(tmp, "in")
+        os.makedirs(out)
+        with open(os.path.join(out, "pbpl.csv"), "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, lineterminator="\r\n")
+            w.writerow(headers)
+            for r in rows:
+                w.writerow([r[h] for h in headers])
+        bak = save_backup_path(db_path) if backup else None
+        if bak:
+            shutil.copy2(db_path, bak)
+        try:
+            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", "PBPL"])
+            bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
+            if bad:
+                raise RuntimeError("The bridge did not write the names: " + str(bad)[:300])
+            check = model.run_bridge(["verify-db", "--db", db_path])
+            if not check.get("ok"):
+                raise RuntimeError("The save does not check out after the names were written: " + str(check)[:300])
+        except Exception:
+            if bak:
+                shutil.copy2(bak, db_path)
+            raise
+        return renamed, skipped
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
     """Run bridge entry-patch on prepared targets (PersonnelData.edits_for / reset_edits_for); raises on any failure, in which
     case nothing was written (every entry is checked before the first write)."""
@@ -6410,6 +6451,8 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_convert.pack(side="right", padx=(0, 8))
         self.btn_cpu = ttk.Button(bottom, text="Fix my plays for practice...", command=self._fix_cpu_rows)
         self.btn_cpu.pack(side="right", padx=(0, 8))
+        self.btn_rename = ttk.Button(bottom, text="Rename my plays...", command=self._open_rename)
+        self.btn_rename.pack(side="right", padx=(0, 8))
         self.lbl_make = ttk.Label(bottom, wraplength=500, justify="left", foreground="gray")
         self.lbl_make.pack(side="left")
         ttk.Button(bottom, text="All assignments (advanced)...", command=lambda: AssignmentPickerDialog(self.app, self, None, None)).pack(side="right", padx=(0, 8))
@@ -6680,6 +6723,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_add.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None and AP is not None else "disabled")
         self.btn_convert.configure(state="normal" if getattr(self.lib, "custom", None) and GF is not None and AP is not None else "disabled")
         self.btn_cpu.configure(state="normal" if getattr(self.lib, "custom", None) and self.my_profile else "disabled")
+        self.btn_rename.configure(state="normal" if getattr(self.lib, "custom", None) and self.my_profile else "disabled")
         self.lbl_make.configure(text=note)
 
     def _job_text(self, sl):
@@ -6813,6 +6857,12 @@ class PlayDesignerDialog(tk.Toplevel):
             messagebox.showinfo("Convert my plays", "Choose 'Plays I made (my profile)' in the playbook list first: the editor reads your custom plays from your profile.", parent=self)
             return
         ConvertPlaysDialog(self.app, self)
+
+    def _open_rename(self):
+        if not getattr(self.lib, "custom", None) or not self.my_profile:
+            messagebox.showinfo("Rename my plays", "Choose 'Plays I made (my profile)' in the playbook list first: the editor reads your custom plays from your profile.", parent=self)
+            return
+        RenamePlaysDialog(self.app, self)
 
     def _fix_cpu_rows(self):
         """Give the plays you made that have no CPU rows the rows the game gives a play made in the game, in your profile and the open career: the game then practices them (play knowledge) and the computer
@@ -8541,6 +8591,136 @@ class ConvertPlaysDialog(AddPlayDialog):
                                 "were written here) to find them." + (f"\n\n{len(skipped)} play{'s' if len(skipped) != 1 else ''} could not be converted: see the list in the window." if skipped else ""), parent=self)
 
         app.run_in_thread_with_busy("Converting the plays...", work, done, error_title="Convert my plays")
+
+
+class RenamePlaysDialog(tk.Toplevel):
+    """Rename my plays: the plays you made, in the game or in this editor, get any name of 1 to 24 letters, digits and ordinary signs (the game's own keyboard has no digits for play names, the save
+    does not mind). The name is changed in your profile and in the open career (their PBPL rows); a copy of each save is kept first."""
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Rename my plays")
+        self.transient(designer)
+        self.geometry("620x600")
+        self.app, self.designer = app, designer
+        ttk.Label(self, text="Rename my plays", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=580, justify="left", padding=(14, 0, 14, 6),
+                  text="Pick one of the plays you made (in the game or in this editor) and type its new name: 1 to 24 letters, digits and ordinary signs. Numbers are fine here although the game's own "
+                       "keyboard has none for play names. The name is changed in your profile and in the open career, where the play has a copy; a copy of each save is kept first. Close RPCS3 first.").pack(anchor="w")
+        lf = ttk.Frame(self)
+        lf.pack(fill="both", expand=True, padx=14, pady=4)
+        self.lst = tk.Listbox(lf, height=14, exportselection=False)
+        self.lst.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self.lst.yview)
+        sb.pack(side="left", fill="y")
+        self.lst.configure(yscrollcommand=sb.set)
+        self.lst.bind("<<ListboxSelect>>", self._picked)
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=14, pady=(6, 2))
+        ttk.Label(form, text="New name (1 to 24 characters):").grid(row=0, column=0, sticky="w")
+        self.name_var = tk.StringVar()
+        self.ent = ttk.Entry(form, width=32, textvariable=self.name_var)
+        self.ent.grid(row=0, column=1, sticky="w", padx=6)
+        self.ent.bind("<Return>", lambda e: self._apply())
+        self.saves_frame = ttk.LabelFrame(self, text="Change the name in these saves")
+        self.saves_frame.pack(fill="x", padx=14, pady=(8, 4))
+        self.save_vars, self._saves = [], []
+        profile = designer.my_profile
+        db = getattr(app.model, "db_path", None)
+        self._saves.append((f"your profile: {os.path.basename(os.path.dirname(profile))}", profile))
+        if db and os.path.isfile(db) and os.path.abspath(db) != os.path.abspath(profile) and "-PROFILE-" not in db.upper():
+            self._saves.append((f"the open career: {os.path.basename(os.path.dirname(db))}", db))
+        for label, _path in self._saves:
+            v = tk.BooleanVar(value=True)
+            self.save_vars.append(v)
+            ttk.Checkbutton(self.saves_frame, text=label, variable=v).pack(anchor="w", padx=8)
+        self.lbl_result = ttk.Label(self, wraplength=580, justify="left", foreground="gray", padding=(14, 6, 14, 4))
+        self.lbl_result.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        ttk.Button(btn, text="Rename", style="Accent.TButton", command=self._apply).pack(side="right", padx=(0, 8))
+        self._ids = []
+        self._fill()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _fill(self, keep=None):
+        lib = self.designer.lib
+        self.lst.delete(0, "end")
+        self._ids = sorted(lib.custom, key=lambda k: (lib.custom[k]["name"].lower(), k))
+        for k in self._ids:
+            self.lst.insert("end", f"{lib.custom[k]['name']}   (play {lib.custom[k]['plyl']})")
+        if keep in self._ids:
+            self.lst.selection_set(self._ids.index(keep))
+            self.lst.see(self._ids.index(keep))
+
+    def _picked(self, _e=None):
+        sel = self.lst.curselection()
+        if sel:
+            self.name_var.set(self.designer.lib.custom[self._ids[sel[0]]]["name"])
+            self.ent.focus_set()
+            self.ent.select_range(0, "end")
+
+    def _apply(self):
+        app, lib = self.app, self.designer.lib
+        sel = self.lst.curselection()
+        if not sel:
+            messagebox.showinfo("Rename my plays", "Pick a play in the list first.", parent=self)
+            return
+        mounted = self._ids[sel[0]]
+        info = lib.custom[mounted]
+        try:
+            name = clean_play_name(self.name_var.get())
+        except ValueError as e:
+            messagebox.showerror("Rename my plays", str(e), parent=self)
+            return
+        if name == info["name"]:
+            messagebox.showinfo("Rename my plays", "That is the name it has already.", parent=self)
+            return
+        chosen = [(label, path) for (label, path), v in zip(self._saves, self.save_vars) if v.get()]
+        if not chosen:
+            messagebox.showinfo("Rename my plays", "Tick at least one save.", parent=self)
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Rename my plays", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        db = getattr(app.model, "db_path", None)
+        if db and getattr(app, "dirty", False) and any(path == db for _l, path in chosen):
+            messagebox.showerror("Rename my plays", "The open save has changes that are not saved yet. Save it first (or untick it here), then try again.", parent=self)
+            return
+        def work():                                                  # the bridge passes over each save run off the window's thread
+            out = []
+            for label, path in chosen:
+                try:
+                    n, skipped = rename_plays_in_save(app.model, path, {info["plyl"]: name}, {info["plyl"]: info["setl"]})
+                    out.append((label, path, n, skipped, None))
+                except Exception as e:
+                    out.append((label, path, 0, [], str(e)))
+            return out
+
+        def done(results):
+            lines, profile_done = [], False
+            for label, path, n, skipped, err in results:
+                if err:
+                    lines.append(f"{label}: NOT changed ({err})")
+                    continue
+                lines.append(f"{label}: " + (f"renamed to {name}" if n else "no copy of this play there" if not skipped else "a different play has this number there: left alone"))
+                profile_done = profile_done or (n and path == self.designer.my_profile)
+            if db and any(path == db for _l, path in chosen):
+                try:
+                    app.model.load_all_from_db(db)
+                    app._on_load_db_path_success(db)
+                except Exception:
+                    pass
+            if profile_done:
+                self.designer.reload_mine(keep=mounted)
+                self._fill(keep=mounted)
+            self.lbl_result.configure(text="\n".join(lines))
+
+        app.run_in_thread_with_busy("Renaming the play...", work, done, error_title="Rename my plays")
 
 
 class TeamPhilosophyDialog(tk.Toplevel):
