@@ -8710,11 +8710,19 @@ class RenamePlaysDialog(tk.Toplevel):
                     except Exception as e:
                         out["results"].append((label, path, 0, [], str(e)))
                 changed = {path for _l, path, n, _s, err in out["results"] if n and not err}
+                problems = []
                 if db and db in changed:
-                    app.model.load_all_from_db(db)                   # the open career was changed on disk: read it again (the screen is refreshed in done)
-                    out["career_loaded"] = True
-                if profile in changed:
-                    out["ids"] = app.load_my_plays(lib_now, profile)  # the plays of the profile mounted again
+                    try:
+                        app.model.load_all_from_db(db)               # the open career was changed on disk: read it again (the screen is refreshed in done)
+                        out["career_loaded"] = True
+                    except Exception as e:
+                        problems.append(f"the career: {e}")
+                if profile in changed:                               # independent of the career: one failed read does not skip the other
+                    try:
+                        out["ids"] = app.load_my_plays(lib_now, profile)  # the plays of the profile mounted again
+                    except Exception as e:
+                        problems.append(f"the plays of the profile: {e}")
+                out["read_error"] = "; ".join(problems) or None
             except Exception as e:
                 out["read_error"] = str(e)
             return out
