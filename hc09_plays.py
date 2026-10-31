@@ -753,6 +753,31 @@ DEFINITION_TABLES = ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PL
 # CPU rows (PBAI: playbook, play, AI group, weight): the table the computer picks its plays from and that the practice lists are built from. The game gives a play made in the game three rows
 # (seen in a profile of plays made in the game: BOKL = a stock playbook, SETL / PLYT / PLF_ / vpos 0, three AI groups by play type, weight 5 or 10). A play made in this editor had none, and the game
 # never practiced it: tried in RPCS3 (2026-10-30), the same editor-made plays gained play knowledge in practice (24 to 26 % mastered after one segment, as a play made in the game) once they had these rows.
+def clean_play_name(name):
+    """A play's name as the game can hold it: 1 to 24 printable ASCII characters (letters, digits and ordinary signs: numbers are fine; the game's own on-screen keyboard has none for play names, the
+    save does not mind). Raises ValueError otherwise."""
+    name = (name or "").strip()
+    if not 1 <= len(name) <= 24 or any(ord(c) < 32 or ord(c) > 126 for c in name):
+        raise ValueError("A play name is 1 to 24 letters, digits and ordinary signs.")
+    return name
+
+
+def rename_rows(rows, renames, expect=None):
+    """The PBPL rows (dicts) of a save with some plays renamed: (rows, renamed, skipped). renames: {play id: new name}; expect: {play id: the set id the play must have}: a row with that id but another
+    set is another play (a career's copy of a play that is not the profile's) and is left alone: skipped lists its id. Every other column is kept as it was."""
+    out, renamed, skipped = [], 0, []
+    for r in rows:
+        plyl = int(r["PLYL"])
+        if plyl in renames:
+            if expect and plyl in expect and int(r["SETL"]) != int(expect[plyl]):
+                skipped.append(plyl)
+            elif r["name"] != renames[plyl]:
+                r = {**r, "name": renames[plyl]}
+                renamed += 1
+        out.append(r)
+    return out, renamed, skipped
+
+
 CPU_GROUPS = {4: (40, 20, 1), 102: (36, 8, 20), 13: (6, 38, 17)}      # the groups the game gave plays of these types (PLYT)
 CPU_WEIGHT = 5
 
