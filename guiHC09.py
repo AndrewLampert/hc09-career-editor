@@ -8691,24 +8691,36 @@ class RenamePlaysDialog(tk.Toplevel):
         if db and getattr(app, "dirty", False) and any(path == db for _l, path in chosen):
             messagebox.showerror("Rename my plays", "The open save has changes that are not saved yet. Save it first (or untick it here), then try again.", parent=self)
             return
-        lines, profile_done = [], False
-        for label, path in chosen:
-            try:
-                n, skipped = rename_plays_in_save(app.model, path, {info["plyl"]: name}, {info["plyl"]: info["setl"]})
+        def work():                                                  # the bridge passes over each save run off the window's thread
+            out = []
+            for label, path in chosen:
+                try:
+                    n, skipped = rename_plays_in_save(app.model, path, {info["plyl"]: name}, {info["plyl"]: info["setl"]})
+                    out.append((label, path, n, skipped, None))
+                except Exception as e:
+                    out.append((label, path, 0, [], str(e)))
+            return out
+
+        def done(results):
+            lines, profile_done = [], False
+            for label, path, n, skipped, err in results:
+                if err:
+                    lines.append(f"{label}: NOT changed ({err})")
+                    continue
                 lines.append(f"{label}: " + (f"renamed to {name}" if n else "no copy of this play there" if not skipped else "a different play has this number there: left alone"))
                 profile_done = profile_done or (n and path == self.designer.my_profile)
-            except Exception as e:
-                lines.append(f"{label}: NOT changed ({e})")
-        if db and any(path == db for _l, path in chosen):
-            try:
-                app.model.load_all_from_db(db)
-                app._on_load_db_path_success(db)
-            except Exception:
-                pass
-        if profile_done:
-            self.designer.reload_mine(keep=mounted)
-            self._fill(keep=mounted)
-        self.lbl_result.configure(text="\n".join(lines))
+            if db and any(path == db for _l, path in chosen):
+                try:
+                    app.model.load_all_from_db(db)
+                    app._on_load_db_path_success(db)
+                except Exception:
+                    pass
+            if profile_done:
+                self.designer.reload_mine(keep=mounted)
+                self._fill(keep=mounted)
+            self.lbl_result.configure(text="\n".join(lines))
+
+        app.run_in_thread_with_busy("Renaming the play...", work, done, error_title="Rename my plays")
 
 
 class TeamPhilosophyDialog(tk.Toplevel):
