@@ -6497,6 +6497,10 @@ class PlayDesignerDialog(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Plays I made", f"Could not read the plays of the profile: {e}", parent=self)
             return False
+        return self.show_mine(ids, profile, keep)
+
+    def show_mine(self, ids, profile, keep=None):
+        """The screen side of reload_mine: the plays of the profile are mounted (ids, see App.load_my_plays, which a background task may run); show them."""
         self.my_profile = profile
         if not ids:
             messagebox.showinfo("Plays I made", "Your profile has no custom plays yet. Make one first (pick a play, Make custom play...).", parent=self)
@@ -8691,34 +8695,51 @@ class RenamePlaysDialog(tk.Toplevel):
         if db and getattr(app, "dirty", False) and any(path == db for _l, path in chosen):
             messagebox.showerror("Rename my plays", "The open save has changes that are not saved yet. Save it first (or untick it here), then try again.", parent=self)
             return
-        def work():                                                  # the bridge passes over each save run off the window's thread
-            out = []
+        profile = self.designer.my_profile
+        lib_now = self.designer.lib
+
+        def work():                                                  # every bridge pass (the writes and the reads that follow) runs off the window's thread
+            out = {"results": [], "career_loaded": False, "ids": None, "read_error": None}
             for label, path in chosen:
                 try:
                     n, skipped = rename_plays_in_save(app.model, path, {info["plyl"]: name}, {info["plyl"]: info["setl"]})
-                    out.append((label, path, n, skipped, None))
+                    out["results"].append((label, path, n, skipped, None))
                 except Exception as e:
-                    out.append((label, path, 0, [], str(e)))
+                    out["results"].append((label, path, 0, [], str(e)))
+            changed = {path for _l, path, n, _s, err in out["results"] if n and not err}
+            try:
+                if db and db in changed:
+                    app.model.load_all_from_db(db)                   # the open career was changed on disk: read it again (the screen is refreshed in done)
+                    out["career_loaded"] = True
+                if profile in changed:
+                    out["ids"] = app.load_my_plays(lib_now, profile)  # the plays of the profile mounted again
+            except Exception as e:
+                out["read_error"] = str(e)
             return out
 
-        def done(results):
-            lines, profile_done = [], False
-            for label, path, n, skipped, err in results:
+        def done(out):
+            lines = []
+            for label, path, n, skipped, err in out["results"]:
                 if err:
                     lines.append(f"{label}: NOT changed ({err})")
-                    continue
-                lines.append(f"{label}: " + (f"renamed to {name}" if n else "no copy of this play there" if not skipped else "a different play has this number there: left alone"))
-                profile_done = profile_done or (n and path == self.designer.my_profile)
-            if db and any(path == db for _l, path in chosen):
-                try:
-                    app.model.load_all_from_db(db)
+                else:
+                    lines.append(f"{label}: " + (f"renamed to {name}" if n else "no copy of this play there" if not skipped else "a different play has this number there: left alone"))
+            if out["read_error"]:
+                lines.append(f"Reading the saves again failed: {out['read_error']}")
+            try:
+                if out["career_loaded"]:
                     app._on_load_db_path_success(db)
-                except Exception:
-                    pass
-            if profile_done:
-                self.designer.reload_mine(keep=mounted)
-                self._fill(keep=mounted)
-            self.lbl_result.configure(text="\n".join(lines))
+                if out["ids"] is not None:
+                    self.designer.show_mine(out["ids"], profile, keep=mounted)
+            except tk.TclError:
+                pass                                                 # the Play creator was closed meanwhile: nothing to show there
+            try:
+                if self.winfo_exists():                              # the rename window may have been closed while the work ran
+                    if out["ids"] is not None:
+                        self._fill(keep=mounted)
+                    self.lbl_result.configure(text="\n".join(lines))
+            except tk.TclError:
+                pass
 
         app.run_in_thread_with_busy("Renaming the play...", work, done, error_title="Rename my plays")
 
