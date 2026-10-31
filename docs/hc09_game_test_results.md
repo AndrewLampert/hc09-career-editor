@@ -63,7 +63,7 @@ Each run used a copy of the game with the editor's **Add a play...** applied, th
 | two or three new formations with ids 501 to 503 (after every stock row), a different player moved in each | 7455 to 7458 | plays; each play lines up with its own moved player |
 | two plays in ONE new formation (501) plus a second new formation (502), **ids above 7459**, no CPU rows | **7460 to 7462** | **plays** |
 
-What the runs fix: a new set's rows go into the main database only, **after** the stock rows (set ids 501 to 511: the id field is 9 bits wide, so 11 formations of your own); its slot rows must not go into the compact copy; an added play has an id above 7459 and no CPU rows. The earlier "two plays in one formation crash" runs were the ids, not the formation: plays that share a formation work. One run with an unmoved copy at 501 and a moved one at 502 showed the moved receiver at his stock place; it did not come back in later runs and is unexplained.
+What the runs fix: a new set's rows go into the main database only, **after** the stock rows (set ids 501 to 511, then the free ids below 500: a formation at id 84 worked in RPCS3 on 2026-10-31, so about 230 formations of your own); its slot rows must not go into the compact copy; an added play has an id above 7459 and no CPU rows. The earlier "two plays in one formation crash" runs were the ids, not the formation: plays that share a formation work. One run with an unmoved copy at 501 and a moved one at 502 showed the moved receiver at his stock place; it did not come back in later runs and is unexplained.
 
 ## D: converting "Plays I made" into game plays (RPCS3, 2026-10-29)
 
@@ -77,3 +77,5 @@ New Cowboys career with the playbook "Payton Spread Attack" (278), simmed past F
 | v11e | all 18 convertible plays, in 9 formations (plays with the same lineup share one) | **reached the game; all the plays worked** (the plays that share a formation lined up, ran their own routes and flipped) |
 
 What the runs fix: build a converted play's formation from the stock look-alike formation with only the custom places on it, take the play family from stock plays of the same kind, and compute the flipped places from the flip partner. Added plays cannot be edited in the game's own play editor.
+
+**Formation at a free id below 500 (v12a, 2026-10-31).** One play (PA Middle with the second receiver moved to the sideline, 22 yards) in a new formation at id 84, a gap in the game's own set numbering, its slot, group and package ids appended above all ids in use: the game reached game day after Fri 8/8 12:00 PM, the receiver stood at the sideline and the play ran. So the earlier rule that new formation rows must come after every stock row (ids above 500) was an artefact of the play-id bug fixed in #73, and the formation limit is about 230, not 11. Not tried: many such formations in one game, a flip of the play.
