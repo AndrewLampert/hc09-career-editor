@@ -107,10 +107,10 @@ def _block_above(used, count):
 
 def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None, added=()):
     """The ids of a new set in the game's own tables: {"SETL": n, "SETP": [one per slot], "SGF_": [one per alignment group], "SPF_": [one per quick-sub package]}. The set id is the next one above
-    every id in use (501 first: the way tried most in the game), the set id field is 9 bits wide, so 501 to 511 are 11 sets; when those are all in use the lowest id the game leaves FREE below its
+    every id in use (501 first: the way tried most in the game), the set id field is 9 bits wide, so 501 to 511 are 11 sets; when those are all in use the HIGHEST id the game leaves FREE below its
     highest set (500) is taken: the game's own numbering has about 260 gaps (sets that were removed), and a formation at one of them works (RPCS3, 2026-10-31: a formation at id 84 reached game day,
     the moved receiver stood at the sideline and the play ran; the earlier 'new rows must come after every stock row' came from tests that also had the play-id bug of free_play_id). An id a save holds
-    (the profile's custom formations use gaps too) is never taken. The slot, group and package ids are consecutive ascending blocks above all ids in use, in the order of the rows, as the game's own
+    (the profile's custom formations use gaps too) is never taken; the highest gap goes first because the game hands the ids of the custom plays made in it out from the LOWEST free ones, so ours stay clear of those. The slot, group and package ids are consecutive ascending blocks above all ids in use, in the order of the rows, as the game's own
     sets number them (the id of a slot is the first one plus its number: 239 of 240 sets). `taken` = {"SETL": ids, "SETP": ..., "SGF_": ..., "SPF_": ...} that must not be used either (earlier added
     sets, ids a save holds); added: the added plays (their sets are not the stock game's: the highest stock set of this archive decides where the ids above it start)."""
     taken = taken or {}
@@ -126,7 +126,7 @@ def free_set_ids(lib, slots=11, groups=1, packages=0, taken=None, added=()):
         top = stock_max_set(lib, added)
         free = [i for i in range(top + 1, MAX_SETL + 1) if i not in used["SETL"]]
         if not free:
-            free = [i for i in range(1, top + 1) if i not in used["SETL"]]          # the ids above the stock maximum are in use: the gaps of the game's own numbering
+            free = [i for i in range(top, 0, -1) if i not in used["SETL"]]          # the ids above the stock maximum are in use: the gaps of the game's own numbering, the highest first
         if not free:
             raise ValueError("The game has no free formation id left (the ids above its own sets and the gaps below them are all in use). Take a play with its own formation out first.")
         setl = free[0]
