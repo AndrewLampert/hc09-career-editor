@@ -12974,10 +12974,10 @@ class App(tk.Tk):
             raise RuntimeError(str(e))
         if changed:
             self._replace_and_import(out_career, changed, car_now)
-        stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
-        for p_ in (out_profile, out_career):                      # CPU rows for a play that has none (made before the editor wrote them)
-            add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
         summary["left_out"] = self._sync_career_definitions(out_profile, out_career, bokls, [k for k in lib.sets if k < CUSTOM_OFFSETS["SETL"]])
+        stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
+        for p_ in (out_profile, out_career):                      # CPU rows for a play that has none (made before the editor wrote them), after the career's copy of the play is in place
+            add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
         for path in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", path])
             if not ok.get("ok"):
@@ -13046,10 +13046,10 @@ class App(tk.Tk):
         car = self._export_tables(out_career, ["PGPL", "PGSS", "PGSL", "PGFM"])
         links_c = career_link_rows({"PGFM": car["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
         self._append_and_import(out_career, links_c, car)
-        stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
-        for p_ in (out_profile, out_career):                      # CPU rows for the new play (and any other custom play without): the game practices it like a play made in the game
-            add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
         summary["left_out"] = self._sync_career_definitions(out_profile, out_career, {bokl}, [k for k in lib.sets if k < CUSTOM_OFFSETS["SETL"]])      # the career's own copy of the play (and of the profile's other plays in this playbook)
+        stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
+        for p_ in (out_profile, out_career):                      # CPU rows for the new play (and any other custom play without), AFTER its definition is in the career: the game practices it like a play made in the game
+            add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
         for p in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", p])
             if not ok.get("ok"):
