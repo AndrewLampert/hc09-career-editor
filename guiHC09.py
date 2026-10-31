@@ -8670,6 +8670,8 @@ class RenamePlaysDialog(tk.Toplevel):
 
     def _apply(self):
         app, lib = self.app, self.designer.lib
+        if getattr(self, "_busy", False):
+            return
         sel = self.lst.curselection()
         if not sel:
             messagebox.showinfo("Rename my plays", "Pick a play in the list first.", parent=self)
@@ -8698,16 +8700,16 @@ class RenamePlaysDialog(tk.Toplevel):
         profile = self.designer.my_profile
         lib_now = self.designer.lib
 
-        def work():                                                  # every bridge pass (the writes and the reads that follow) runs off the window's thread
-            out = {"results": [], "career_loaded": False, "ids": None, "read_error": None}
-            for label, path in chosen:
-                try:
-                    n, skipped = rename_plays_in_save(app.model, path, {info["plyl"]: name}, {info["plyl"]: info["setl"]})
-                    out["results"].append((label, path, n, skipped, None))
-                except Exception as e:
-                    out["results"].append((label, path, 0, [], str(e)))
-            changed = {path for _l, path, n, _s, err in out["results"] if n and not err}
+        def work():                                                  # every bridge pass (the writes and the reads that follow) runs off the window's thread; this window is modal meanwhile (nothing else
+            out = {"results": [], "career_loaded": False, "ids": None, "read_error": None}      # can be used while the model and the library are read again)
             try:
+                for label, path in chosen:
+                    try:
+                        n, skipped = rename_plays_in_save(app.model, path, {info["plyl"]: name}, {info["plyl"]: info["setl"]})
+                        out["results"].append((label, path, n, skipped, None))
+                    except Exception as e:
+                        out["results"].append((label, path, 0, [], str(e)))
+                changed = {path for _l, path, n, _s, err in out["results"] if n and not err}
                 if db and db in changed:
                     app.model.load_all_from_db(db)                   # the open career was changed on disk: read it again (the screen is refreshed in done)
                     out["career_loaded"] = True
@@ -8718,6 +8720,11 @@ class RenamePlaysDialog(tk.Toplevel):
             return out
 
         def done(out):
+            self._busy = False
+            try:
+                self.grab_release()
+            except tk.TclError:
+                pass
             lines = []
             for label, path, n, skipped, err in out["results"]:
                 if err:
@@ -8741,6 +8748,11 @@ class RenamePlaysDialog(tk.Toplevel):
             except tk.TclError:
                 pass
 
+        self._busy = True
+        try:
+            self.grab_set()                                          # modal while the work runs: the Play creator and the editor cannot be used (a Save then would meet a model being read again)
+        except tk.TclError:
+            pass
         app.run_in_thread_with_busy("Renaming the play...", work, done, error_title="Rename my plays")
 
 
