@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -5113,6 +5113,52 @@ def save_backup_path(db_path):
     return os.path.join(folder, name + ".bak")
 
 
+def add_cpu_rows_in_save(model, db_path, profile_path=None, stock_pbai=(), backup=True):
+    """Give the custom plays of a save (profile or career) that have no CPU rows (PBAI) the rows the game gives a play made in the game (hc09_plays.missing_cpu_rows): without them the game never
+    practiced the play (no play knowledge gained). profile_path: the profile whose PLAB names the stock playbook each custom playbook is based on (a career holds one row of it). The save is copied
+    first (save_backup_path) and put back if the write fails. Returns (rows added, [(play, name, why) not done])."""
+    tmp = tempfile.mkdtemp(prefix="hc09_cpu_")
+    try:
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PBPL,PBAI,PGPL,PLAB"])
+        rd = lambda t: read_csv_dicts(os.path.join(tmp, t + ".csv")) if os.path.isfile(os.path.join(tmp, t + ".csv")) else []
+        plab = rd("plab")
+        if profile_path and os.path.isfile(profile_path) and os.path.abspath(profile_path) != os.path.abspath(db_path):
+            ptmp = os.path.join(tmp, "profile")
+            model.run_bridge(["export", "--db", profile_path, "--out", ptmp, "--tables", "PLAB"])
+            if os.path.isfile(os.path.join(ptmp, "plab.csv")):
+                plab = read_csv_dicts(os.path.join(ptmp, "plab.csv")) + plab
+        rows, skipped = missing_cpu_rows(rd("pbpl"), rd("pbai"), rd("pgpl"), plab, stock_pbai)
+        if not rows:
+            return 0, skipped
+        out = os.path.join(tmp, "in")
+        os.makedirs(out)
+        with open(os.path.join(tmp, "pbai.csv"), newline="", encoding="utf-8-sig") as f:
+            headers = next(csv.reader(f))
+        with open(os.path.join(out, "pbai.csv"), "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, lineterminator="\r\n")
+            w.writerow(headers)
+            for r in rd("pbai") + rows:
+                w.writerow([r[h] for h in headers])
+        bak = save_backup_path(db_path) if backup else None
+        if bak:
+            shutil.copy2(db_path, bak)
+        try:
+            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", "PBAI", "--allow-append", "PBAI"])
+            bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
+            if bad:
+                raise RuntimeError("The bridge did not write the CPU rows: " + str(bad)[:300])
+            check = model.run_bridge(["verify-db", "--db", db_path])
+            if not check.get("ok"):
+                raise RuntimeError("The save does not check out after the CPU rows were written: " + str(check)[:300])
+        except Exception:
+            if bak:
+                shutil.copy2(bak, db_path)
+            raise
+        return len(rows), skipped
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
     """Run bridge entry-patch on prepared targets (PersonnelData.edits_for / reset_edits_for); raises on any failure, in which
     case nothing was written (every entry is checked before the first write)."""
@@ -6362,6 +6408,8 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_add.pack(side="right", padx=(0, 8))
         self.btn_convert = ttk.Button(bottom, text="Convert my plays...", command=self._open_convert)
         self.btn_convert.pack(side="right", padx=(0, 8))
+        self.btn_cpu = ttk.Button(bottom, text="Fix my plays for practice...", command=self._fix_cpu_rows)
+        self.btn_cpu.pack(side="right", padx=(0, 8))
         self.lbl_make = ttk.Label(bottom, wraplength=500, justify="left", foreground="gray")
         self.lbl_make.pack(side="left")
         ttk.Button(bottom, text="All assignments (advanced)...", command=lambda: AssignmentPickerDialog(self.app, self, None, None)).pack(side="right", padx=(0, 8))
@@ -6631,6 +6679,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_files.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
         self.btn_add.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None and AP is not None else "disabled")
         self.btn_convert.configure(state="normal" if getattr(self.lib, "custom", None) and GF is not None and AP is not None else "disabled")
+        self.btn_cpu.configure(state="normal" if getattr(self.lib, "custom", None) and self.my_profile else "disabled")
         self.lbl_make.configure(text=note)
 
     def _job_text(self, sl):
@@ -6764,6 +6813,43 @@ class PlayDesignerDialog(tk.Toplevel):
             messagebox.showinfo("Convert my plays", "Choose 'Plays I made (my profile)' in the playbook list first: the editor reads your custom plays from your profile.", parent=self)
             return
         ConvertPlaysDialog(self.app, self)
+
+    def _fix_cpu_rows(self):
+        """Give the plays you made that have no CPU rows the rows the game gives a play made in the game, in your profile and the open career: the game then practices them (play knowledge) and the computer
+        may call them. Done in the saves themselves; a copy of each is kept first."""
+        app = self.app
+        profile = self.my_profile
+        if not getattr(self.lib, "custom", None) or not profile or not os.path.isfile(profile):
+            messagebox.showinfo("Fix my plays for practice", "Choose 'Plays I made (my profile)' in the playbook list first: the editor reads your custom plays from your profile.", parent=self)
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Fix my plays for practice", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        saves = [profile]
+        db = getattr(app.model, "db_path", None)
+        if db and os.path.isfile(db) and os.path.abspath(db) != os.path.abspath(profile) and "-PROFILE-" not in db.upper():
+            if getattr(app, "dirty", False):
+                messagebox.showerror("Fix my plays for practice", "The open save has changes that are not saved yet. Save it first, then try again.", parent=self)
+                return
+            saves.append(db)
+        if not messagebox.askyesno("Fix my plays for practice", "The game only practices a play (play knowledge) that has CPU rows, which the game writes for a play made in the game and this editor did not "
+                                   "for the plays it made. This gives those plays the rows in:\n\n" + "\n".join(os.path.dirname(s) for s in saves) + "\n\nA copy of each save is kept first. Close RPCS3 while "
+                                   "you do it. Go on?", parent=self):
+            return
+        lines, stock_ai = [], getattr(self.lib, "tables", {}).get("PBAI", [])
+        for s in saves:
+            try:
+                n, skipped = add_cpu_rows_in_save(app.model, s, profile, stock_ai)
+                lines.append(f"{os.path.basename(os.path.dirname(s))}: " + (f"{n} CPU rows added" if n else "nothing to add (every play has CPU rows)") + (f"; not done: {len(skipped)} play(s) in no playbook the computer can use" if skipped else ""))
+            except Exception as e:
+                lines.append(f"{os.path.basename(os.path.dirname(s))}: NOT changed ({e})")
+        if db and len(saves) > 1:
+            try:
+                app.model.load_all_from_db(db)
+                app._on_load_db_path_success(db)
+            except Exception:
+                pass
+        messagebox.showinfo("Fix my plays for practice", "\n".join(lines) + "\n\nStart a new career (or load this one) and practice one of your plays: its play knowledge now goes up.", parent=self)
 
     def _make_custom(self):
         if self.detail is None:
@@ -12888,6 +12974,9 @@ class App(tk.Tk):
             raise RuntimeError(str(e))
         if changed:
             self._replace_and_import(out_career, changed, car_now)
+        stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
+        for p_ in (out_profile, out_career):                      # CPU rows for a play that has none (made before the editor wrote them)
+            add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
         summary["left_out"] = self._sync_career_definitions(out_profile, out_career, bokls, [k for k in lib.sets if k < CUSTOM_OFFSETS["SETL"]])
         for path in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", path])
@@ -12957,6 +13046,9 @@ class App(tk.Tk):
         car = self._export_tables(out_career, ["PGPL", "PGSS", "PGSL", "PGFM"])
         links_c = career_link_rows({"PGFM": car["PGFM"][1]}, bokl, summary["setl"], summary["plyl"], summary["plyt"])
         self._append_and_import(out_career, links_c, car)
+        stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
+        for p_ in (out_profile, out_career):                      # CPU rows for the new play (and any other custom play without): the game practices it like a play made in the game
+            add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
         summary["left_out"] = self._sync_career_definitions(out_profile, out_career, {bokl}, [k for k in lib.sets if k < CUSTOM_OFFSETS["SETL"]])      # the career's own copy of the play (and of the profile's other plays in this playbook)
         for p in (out_profile, out_career):
             ok = self.model.run_bridge(["verify-db", "--db", p])
