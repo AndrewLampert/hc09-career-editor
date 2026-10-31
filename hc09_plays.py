@@ -750,6 +750,53 @@ def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None
 # way: the same ids, the same rows), and a career without them shows the playbook's custom plays with default data (every player a quarterback on one spot, one name and one picture).
 DEFINITION_TABLES = ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM")
 
+# CPU rows (PBAI: playbook, play, AI group, weight): the table the computer picks its plays from and that the practice lists are built from. The game gives a play made in the game three rows
+# (seen in a profile of plays made in the game: BOKL = a stock playbook, SETL / PLYT / PLF_ / vpos 0, three AI groups by play type, weight 5 or 10). A play made in this editor had none, and the game
+# never practiced it: tried in RPCS3 (2026-10-30), the same editor-made plays gained play knowledge in practice (24 to 26 % mastered after one segment, as a play made in the game) once they had these rows.
+CPU_GROUPS = {4: (40, 20, 1), 102: (36, 8, 20), 13: (6, 38, 17)}      # the groups the game gave plays of these types (PLYT)
+CPU_WEIGHT = 5
+
+
+def cpu_groups(plyt, stock_pbai=()):
+    """Three AI groups for a play of type plyt: those the game gave plays of that type; for another type the three most common groups of the stock plays of that type, else 20, 7 and 6."""
+    if int(plyt) in CPU_GROUPS:
+        return CPU_GROUPS[int(plyt)]
+    count = {}
+    for r in stock_pbai:
+        if int(r.get("PLYT", -1)) == int(plyt):
+            g = int(r["AIGR"])
+            count[g] = count.get(g, 0) + 1
+    top = sorted(count, key=lambda g: (-count[g], g))[:3]
+    return tuple(top) if len(top) == 3 else (20, 7, 6)
+
+
+def missing_cpu_rows(pbpl, pbai, pgpl, plab, stock_pbai=()):
+    """CPU rows for the custom plays of a save that have none: (rows, skipped). pbpl, pbai, pgpl, plab: the rows (dicts) of the save's PBPL, PBAI, PGPL and (the profile's) PLAB. Each play gets three rows
+    per stock playbook its custom playbooks are based on (PLAB.PBPR; a stock playbook it is linked in itself counts as its own); a play that is in no such playbook is skipped: [(plyl, name, why)]."""
+    have = {int(r["PBPL"]) for r in pbai}
+    parent = {}
+    for r in plab:
+        try:
+            parent[int(r["PBGI"])] = int(r["PBPR"])
+        except (KeyError, ValueError, TypeError):
+            pass
+    books = {}
+    for r in pgpl:
+        books.setdefault(int(r["PLYL"]), set()).add(int(r["BOKL"]))
+    rows, skipped = [], []
+    for p in pbpl:
+        plyl = int(p["PLYL"])
+        if plyl in have:
+            continue
+        found = sorted({parent.get(b, b if b > 10 else None) for b in books.get(plyl, ())} - {None})
+        if not found:
+            skipped.append((plyl, p.get("name", ""), "it is in no playbook the computer can use"))
+            continue
+        for bokl in found:
+            for g in cpu_groups(p["PLYT"], stock_pbai):
+                rows.append({"BOKL": bokl, "PBPL": plyl, "SETL": 0, "AIGR": g, "PLYT": 0, "PLF_": 0, "vpos": 0, "prct": CPU_WEIGHT})
+    return rows, skipped
+
 
 def play_definition(tables, setl, plyl):
     """The rows that define one custom play in a save's tables ({TABLE: [row dicts]}): its PBPL row, the SETL, SETP and SGFF rows of its set, the SETG rows of those SETP rows, and its
