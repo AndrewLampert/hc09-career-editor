@@ -384,12 +384,16 @@ def new_set_rows(lib, base, new, alignment, ids, set_name, like=None):
     r40["SETP"] = setp_rows
     r40["SGFF"] = [clean({**g, "SETL": new_setl, "SGF_": group_map[int(g["SGF_"])]}) for g in groups]
     setg_rows = []
+    norm_old, norm_new = {}, {}
     for g in lib.tables["SETG"]:
         if int(g["SETP"]) in setp_map and int(g["SGF_"]) in group_map:
             row = {**g, "SETP": setp_map[int(g["SETP"])], "SGF_": group_map[int(g["SGF_"])]}
             if dflt is not None and int(g["SGF_"]) == dflt:
                 row.update(setg_diff.get(poso_of[int(g["SETP"])], {}))
+                norm_old[row["SETP"]], norm_new[row["SETP"]] = g, row
             setg_rows.append(row)
+    if setg_diff and dflt is not None:             # a "stay" row of a pre-snap motion group (it repeats the moved player's old place) follows him
+        P.carry_to_motion_rows(setg_rows, norm_old, norm_new, group_map[dflt])
     r40["SETG"] = setg_rows
     if packages:
         r40["SPKF"] = [clean({**r, "SETL": new_setl, "SPF_": pack_map[int(r["SPF_"])]}) for r in packages]

@@ -93,6 +93,37 @@ def bits_of_float(x):
     return struct.unpack(">I", struct.pack(">f", float(x)))[0]
 
 
+SPOT_PAIRS = (("x___", "y___"), ("fx__", "fy__"))         # where a slot stands, and where it stands when the play is flipped
+
+
+def motion_row_changes(old, new, row):
+    """The columns of a pre-snap motion row (a SETG row of a group other than the normal one) to change when the slot's spot in the normal group changes from `old` to `new` (SETG rows with x___, y___,
+    fx__, fy__): {column: new value}. The game moves a player in motion to his spot in the motion group (the groups M1ri .. M5le hold absolute places), and 28 % of those rows only repeat the place
+    the slot has in the normal group (a "stay" row, 581 of 2,096 in the game's data). A player moved in the normal group would walk back to his old place when a teammate goes in motion, so such a row
+    follows him; a row that holds some other place (the man in motion) is left alone. The normal place and the flipped place are told apart: each follows only if the row held the old one."""
+    out = {}
+    for pair in SPOT_PAIRS:
+        was = [int(old[c]) & 0xFFFFFFFF for c in pair]
+        if was != [int(new[c]) & 0xFFFFFFFF for c in pair] and [int(row[c]) & 0xFFFFFFFF for c in pair] == was:
+            out.update({c: new[c] for c in pair})
+    return out
+
+
+def carry_to_motion_rows(rows, old_norm, new_norm, norm_group):
+    """Apply motion_row_changes to the SETG `rows` (dicts, changed in place): old_norm and new_norm are {SETP: the slot's row of the normal group before / after the change}, norm_group the id of the
+    normal group in `rows`. Returns the number of rows changed."""
+    n = 0
+    for r in rows:
+        setp = int(r["SETP"])
+        if int(r["SGF_"]) == int(norm_group) or setp not in old_norm or setp not in new_norm:
+            continue
+        ch = motion_row_changes(old_norm[setp], new_norm[setp], r)
+        if ch:
+            r.update(ch)
+            n += 1
+    return n
+
+
 def decode_art(row):
     """The points of an art row: [{"tag", "sp", "ls", "at", "ct", "lt", "au", "av", "ax", "ay"}] for the records that are used (sp not 0), in
     drawing order, with the offsets as signed numbers."""
@@ -623,6 +654,7 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
         rows["SGFF"].append({"SETL": new_setl, "SGF_": ids["SGF_"][i], "name": g["name"], "dflt": g["dflt"]})
     default_group = next((int(g["SGF_"]) for g in groups if g["dflt"] == "1"), None)
     poso_of_setp = {sl["setp"]: sl["poso"] for sl in bset["slots"]}
+    norm_old, norm_new = {}, {}
     for g in lib.tables["SETG"]:
         if int(g["SETP"]) in setp_ids and int(g["SGF_"]) in group_map:
             row = {"SETP": setp_ids[int(g["SETP"])], "SGF_": group_map[int(g["SGF_"])], "SF__": g["SF__"], "x___": g["x___"], "y___": g["y___"], "fx__": g["fx__"],
@@ -634,7 +666,10 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
                 partner = stock_al.get(poso, {}).get("partner")
                 if partner in moved:               # flipped, this slot lines up where the partner is, mirrored
                     row["fx__"], row["fy__"] = bits_of_float(-moved[partner][0]), bits_of_float(moved[partner][1])
+                norm_old[row["SETP"]], norm_new[row["SETP"]] = g, row
             rows["SETG"].append(row)
+    if moved and default_group is not None:        # the pre-snap motion groups that repeat a moved player's old place (a "stay" row) follow him, so he does not walk back when a teammate goes in motion
+        carry_to_motion_rows(rows["SETG"], norm_old, norm_new, group_map[default_group])
     for sl in d["slots"]:
         psal, artl, plrr = overrides.get(sl["poso"], (sl["psal"], sl["artl"], sl["plrr"]))
         if psal not in lib.steps[d["table"]]:

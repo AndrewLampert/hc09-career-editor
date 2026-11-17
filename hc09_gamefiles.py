@@ -236,7 +236,14 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
                 if "x___" in row:                                    # the compact copy holds the yards in the slot's own row
                     add("SETP", {"SETL": setl, "poso": poso}, {k: v for k, v in yards.items() if k in ("x___", "y___")}, row)
                 elif "SETP" in row and dflt is not None and (int(row["SETP"]), dflt) in setg_rows:
-                    add("SETG", {"SETP": int(row["SETP"]), "SGF_": dflt}, yards, setg_rows[(int(row["SETP"]), dflt)])
+                    norm = setg_rows[(int(row["SETP"]), dflt)]
+                    add("SETG", {"SETP": int(row["SETP"]), "SGF_": dflt}, yards, norm)
+                    now = {k: yards.get(k, norm[k]) for k in ("x___", "y___", "fx__", "fy__")}
+                    for (sp, grp), mrow in sorted(setg_rows.items()):         # a pre-snap motion row that repeats the player's old place follows him (hc09_plays.motion_row_changes)
+                        if sp == int(row["SETP"]) and grp != dflt:
+                            follow = P.motion_row_changes(norm, now, mrow)
+                            if follow:
+                                add("SETG", {"SETP": sp, "SGF_": grp}, follow, mrow)
         if changes["play"] and mine is not None:
             for r in (_read(cache_dir, c["base"], "PBAI") or []):
                 if int(r["PBPL"]) == plyl:
