@@ -8135,7 +8135,7 @@ class AddPlayDialog(tk.Toplevel):
         self.added = []
         ttk.Label(self, text=f"Add {d['play']['name']} as a new play of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=820, justify="left", padding=(14, 0, 14, 6),
-                  text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts, but the computer does not call it unless you tick the experimental box below (the game's play list holds only the stock plays), so you call it yourself. It keeps "
+                  text="The new play goes into the game's own files, so the game treats it as a normal play: it can be flipped and hot-routed and the quarterback adjusts. It keeps "
                        "the formation of the play it was made from; if you moved a player it gets a formation of its own (a copy with the player moved; plays with the same lineup share one, and the game has room for about 230 of "
                        "them). Close RPCS3 first. The first time, the "
                        "archive's original table of contents is saved in Documents\\hc09-game-file-backup, and Put the game files back puts qkl_boot.ast back byte for byte. Proven in RPCS3 with several plays; "
@@ -8421,7 +8421,7 @@ class AddPlayDialog(tk.Toplevel):
             self.added = plays
             self._fill_added()
             lines = self._link(links=AP.links_of([play])) if self._selected_saves() else []
-            note = "" if everyone else " ".join(play.get("warnings") or [])
+            note = " ".join(play.get("warnings") or []) if play.get("cpu") and not everyone else ""          # only the caution of the experimental CPU box (it may crash the game) is shown here
             names = app.playbook_name_map(self.boot)
             out = [f"{names.get(b, 'playbook')} ({b}): {why}" for b, why in left_out]
             out_text = ("\n\nLeft out:\n" + "\n".join(out[:8]) + (f"\nand {len(out) - 8} more" if len(out) > 8 else "")) if out else ""
@@ -8502,8 +8502,8 @@ class ConvertPlaysDialog(AddPlayDialog):
         self._books = []
         ttk.Label(self, text="Convert my plays into plays of the game", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=860, justify="left", padding=(14, 0, 14, 6),
-                  text="Your custom plays go into the game's own files as normal plays of the playbooks you pick: they can be flipped and hot-routed and the quarterback adjusts, but the computer will not call them "
-                       "(the game's play list holds only the stock plays) and they cannot be edited in the game. Each play keeps its routes and gets a formation that is a copy of the game's formation with the same "
+                  text="Your custom plays go into the game's own files as normal plays of the playbooks you pick: they can be flipped and hot-routed and the quarterback adjusts, but they cannot "
+                       "be edited in the game. Each play keeps its routes and gets a formation that is a copy of the game's formation with the same "
                        "players, with your places; plays with the same lineup share one formation (the game has room for about 230, so a play is rarely skipped for want of one). Offense plays only; a play "
                        "whose formation no game formation matches is skipped, and so is a play that is already converted (to convert an edited play again, take the old copy out first with the button below). Close RPCS3 first. The first time, the archive's original table of contents is saved in Documents\\hc09-game-file-backup, and "
                        "Put the game files back puts qkl_boot.ast back byte for byte. Your custom plays stay in your profile.").pack(anchor="w")
@@ -8640,7 +8640,7 @@ class ConvertPlaysDialog(AddPlayDialog):
             self._fill_added()
             lines = self._link(links=AP.links_of(plays)) if self._selected_saves() else []
             self.lbl_result.configure(text=f"Done: {len(plays)} play{'s' if len(plays) != 1 else ''} converted. " + "; ".join(lines) + (" " if lines else "") +
-                                      "Start the game, make a NEW career and look in the playbook. The computer will not call these plays; do not edit them in the game.")
+                                      "Start the game, make a NEW career and look in the playbook. Do not edit them in the game.")
             self._set_skipped([f"{p['name']}: play {p['plyl']}, formation {p['new_set']}" for p in plays] + (["", "Not converted:"] + notes if notes else []))
             messagebox.showinfo("Convert my plays", f"{len(plays)} play{'s' if len(plays) != 1 else ''} are in the game files.\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links "
                                 "were written here) to find them." + (f"\n\n{len(skipped)} play{'s' if len(skipped) != 1 else ''} could not be converted: see the list in the window." if skipped else ""), parent=self)
