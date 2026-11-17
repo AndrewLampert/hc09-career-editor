@@ -150,8 +150,8 @@ def everyone_books(lib, candidates, groups, like, added=(), cap=PLAYBOOK_PLAY_CA
             for b in bs:
                 count[int(b)] += 1
     for p in added:
-        if not p.get("cpu"):                                    # an added play with CPU rows is in the count above already (its PBAI rows)
-            for b in p.get("books", ()):
+        for b in p.get("books", ()):
+            if int(b) not in lib.books_of_play.get(p["plyl"], ()):          # a play with CPU rows is in the count above when the library was read after it was added; one added since is not
                 count[int(b)] += 1
     ok, left_out = [], []
     for b in sorted({int(x) for x in candidates}):
