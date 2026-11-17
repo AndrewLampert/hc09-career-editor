@@ -480,7 +480,7 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     rows = {"40": r40, "42": r42, "46": {"PPPN": [{"BOKL": b, "PLYL": plyl, "PPPM": name} for b in books]}, "47": r47}
     rows = {e: {t: [_num(r) for r in rs] for t, rs in tables.items()} for e, tables in rows.items()}
     warnings = (["The computer may call this play (experimental: CPU rows were added and this has not been tried in the game yet): if the game crashes on the day before a game, take the play out and add it again without them."] if cpu else
-                ["The computer will not call this play (it has no CPU rows), and the game does not practice it: its play knowledge does not go up in practice (tried in the game, with and without CPU rows). You can call it yourself."])
+                ["The computer will not call this play (it has no CPU rows); you can call it yourself."])
     return {"plyl": plyl, "name": name, "base": base, "setl": setl, "new_set": setl if own_set else None, "stock_setl": stock_setl, "stock_max": stock_max, "moved": convert_places(lib, lib.detail(base)["set"]["setl"]) if convert else (moved_places(lib, base, alignment) if own_set else {}),
             "plyt": plyt, "books": books, "rows": rows, "like": like if convert else None, "warnings": warnings, "cpu": bool(cpu)}
 
