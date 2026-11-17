@@ -8151,10 +8151,14 @@ class AddPlayDialog(tk.Toplevel):
         self.ent_set.grid(row=2, column=1, sticky="w", padx=6)
         self.lbl_set = ttk.Label(form, wraplength=560, justify="left", foreground="gray")
         self.lbl_set.grid(row=3, column=1, sticky="w", padx=6)
+        self.all_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(form, text="Put it in every offense playbook, and in your saves (the play gets a formation of its own)", variable=self.all_var, command=self._on_all).grid(row=4, column=1, sticky="w", padx=6, pady=(4, 0))
+        self._groups = None
+        self._info_text = ""
         self.cpu_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(form, text="Let the computer call it too (experimental)", variable=self.cpu_var).grid(row=4, column=1, sticky="w", padx=6, pady=(4, 0))
+        ttk.Checkbutton(form, text="Let the computer call it too (experimental)", variable=self.cpu_var).grid(row=5, column=1, sticky="w", padx=6, pady=(4, 0))
         ttk.Label(form, text="Experimental: not tried in the game yet, and it may crash it. The computer picks its plays from the CPU rows of its playbook; with the box ticked the play gets a copy of the rows of the play it was made from.", wraplength=560,
-                  justify="left", foreground="gray").grid(row=5, column=1, sticky="w", padx=6)
+                  justify="left", foreground="gray").grid(row=6, column=1, sticky="w", padx=6)
         ttk.Label(form, text="Put it in these playbooks:").grid(row=1, column=0, sticky="nw", pady=3)
         lf = ttk.Frame(form)
         lf.grid(row=1, column=1, sticky="w", padx=6)
@@ -8208,14 +8212,6 @@ class AddPlayDialog(tk.Toplevel):
         except Exception:
             names = {}
         self._books = AP.books_of(lib, self.base)
-        moved = AP.moved_players(lib, self.base, self._args()["alignment"])
-        if moved:
-            self.lbl_set.configure(text=f"{len(moved)} player{'s are' if len(moved) != 1 else ' is'} moved, so the play gets a formation of its own: a copy of \"{self.designer.detail['set']['name']}\" with them "
-                                        "somewhere else. The other plays of the stock formation stay as they are.")
-            self.ent_set.configure(state="normal")
-        else:
-            self.lbl_set.configure(text="No player is moved: the play uses the stock formation.")
-            self.ent_set.configure(state="disabled")
         for b in self._books:
             self.lst_books.insert("end", f"{names.get(b, 'playbook')} ({b})")
         self.lst_books.selection_set(0, "end")
@@ -8228,14 +8224,60 @@ class AddPlayDialog(tk.Toplevel):
             AP.check_ids(self.added, AP.stock_max_play(lib, self.added))
         except ValueError as e:
             self.lbl_result.configure(text=str(e))
+        self._show_set()
+        self._fill_added()
+        self._info_text = f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation)."
+        self.lbl_info.configure(text=self._info_text)
+        self._fill_saves()
+
+    def _show_set(self):
+        """What the formation name box and its note say: a formation of its own for a moved player, or for every playbook; a formation added before when it has the same players; else the stock one."""
+        lib = self.designer.lib
+        if self.all_var.get():
+            self.lbl_set.configure(text=f"The play gets a formation of its own, a copy of \"{self.designer.detail['set']['name']}\" (with any player you moved somewhere else), in each of the playbooks. "
+                                        "The stock formation stays as it is. Name the copy.")
+            self.ent_set.configure(state="normal")
+            return
+        moved = AP.moved_players(lib, self.base, self._args()["alignment"])
         share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
         if share is not None:
             self.lbl_set.configure(text=f"The formation \"{share['rows']['40']['SETL'][0]['name']}\", added before, already has the players in these places, so this play goes into it. "
                                         "The other plays of the stock formation stay as they are.")
             self.ent_set.configure(state="disabled")
-        self._fill_added()
-        self.lbl_info.configure(text=f"The play it is made from is in {len(self._books)} playbook{'s' if len(self._books) != 1 else ''}; it can go into those (they hold its formation).")
-        self._fill_saves()
+        elif moved:
+            self.lbl_set.configure(text=f"{len(moved)} player{'s are' if len(moved) != 1 else ' is'} moved, so the play gets a formation of its own: a copy of \"{self.designer.detail['set']['name']}\" with them "
+                                        "somewhere else. The other plays of the stock formation stay as they are.")
+            self.ent_set.configure(state="normal")
+        else:
+            self.lbl_set.configure(text="No player is moved: the play uses the stock formation.")
+            self.ent_set.configure(state="disabled")
+
+    def _everyone_plan(self):
+        """The offense playbooks the play goes into for everyone: (books, {book: formation group}, [(book, why left out)]), see hc09_addplay.everyone_books."""
+        app = self.app
+        if self._groups is None:
+            self._groups = app.formation_groups(self.boot)
+        names = app.playbook_name_map(self.boot)
+        kinds = getattr(self.designer, "books", {}) or {}                       # {playbook: (name, "offense" / "defense" / "")}: an offense play goes into offense playbooks only
+        candidates = [b for b in names if kinds.get(b, (None, ""))[1] in ("offense", "")]
+        return AP.everyone_books(self.designer.lib, candidates, self._groups, self.designer.detail["set"]["setl"], self.added)
+
+    def _on_all(self):
+        """The box 'every offense playbook, and your saves': the playbook list is not used, every save is ticked, the formation gets a name."""
+        on = self.all_var.get()
+        self.lst_books.configure(state="disabled" if on else "normal")
+        self._show_set()
+        if not on:
+            self.lbl_info.configure(text=self._info_text)
+            return
+        for v in self.save_vars:
+            v.set(True)
+        try:
+            books, _pbfm, left_out = self._everyone_plan()
+            self.lbl_info.configure(text=f"It goes into {len(books)} offense playbook{'s' if len(books) != 1 else ''}" +
+                                    (f"; {len(left_out)} are left out (no formation group for it, or full): they are listed when the play is added." if left_out else "") + ".")
+        except Exception as e:
+            self.lbl_info.configure(text=f"The playbooks could not be worked out: {e}")
 
     def _fill_saves(self):
         app = self.app
@@ -8330,9 +8372,22 @@ class AddPlayDialog(tk.Toplevel):
             stock_max = AP.stock_max_play(lib, self.added)
             AP.check_ids(self.added, stock_max)
             plyl = AP.free_play_id(lib, [p["plyl"] for p in self.added])
-            kw = {}
-            if AP.moved_players(lib, self.base, self._args()["alignment"]):
-                share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added)
+            kw, left_out = {}, []
+            moved = AP.moved_players(lib, self.base, self._args()["alignment"])
+            share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
+            if self.all_var.get():
+                books, pbfm, left_out = self._everyone_plan()
+                if not books:
+                    raise ValueError("None of the offense playbooks can take the play: " + "; ".join(why for _b, why in left_out[:3]))
+                kw["book_pbfm"] = pbfm
+                if share is not None:
+                    kw["share"] = share
+                else:
+                    kw["new_set"] = True
+                    kw["set_name"] = GF.clean_name(self.set_var.get())
+                    n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
+                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids(), added=self.added)
+            elif moved:
                 if share is not None:
                     kw["share"] = share
                 else:
@@ -8348,7 +8403,11 @@ class AddPlayDialog(tk.Toplevel):
             messagebox.showerror("Add a play", f"A play called {name} was already added. Take it out first or give this one another name.", parent=self)
             return
         note = self._differs_note(lib)
-        if not messagebox.askyesno("Add a play", note + f"Add {name} to the game files as play {plyl}, in {len(books)} playbook{'s' if len(books) != 1 else ''}?\n\nThis writes qkl_boot.ast (four of its "
+        everyone = self.all_var.get()
+        where = f"in {len(books)} offense playbooks, with a formation of its own in each" if everyone else f"in {len(books)} playbook{'s' if len(books) != 1 else ''}"
+        also = ("\n\nIt is linked in " + ", ".join(label for label, _p in self._selected_saves()) + " too." if everyone and self._selected_saves() else "")
+        left = (f"\n\n{len(left_out)} playbook{'s are' if len(left_out) != 1 else ' is'} left out (listed afterwards)." if left_out else "")
+        if not messagebox.askyesno("Add a play", note + f"Add {name} to the game files as play {plyl}, {where}?" + left + also + "\n\nThis writes qkl_boot.ast (four of its "
                                    "entries are written again at the end of the file, about 15 MB). The original table of contents is saved first and Put the game files back restores the file "
                                    "byte for byte.", parent=self):
             return
@@ -8362,9 +8421,12 @@ class AddPlayDialog(tk.Toplevel):
             self.added = plays
             self._fill_added()
             lines = self._link(links=AP.links_of([play])) if self._selected_saves() else []
-            note = " ".join(play.get("warnings") or [])
-            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it." + (" " + note if note else ""))
-            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}).\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it." + ("\n\n" + note if note else ""), parent=self)
+            note = "" if everyone else " ".join(play.get("warnings") or [])
+            names = app.playbook_name_map(self.boot)
+            out = [f"{names.get(b, 'playbook')} ({b}): {why}" for b, why in left_out]
+            out_text = ("\n\nLeft out:\n" + "\n".join(out[:8]) + (f"\nand {len(out) - 8} more" if len(out) > 8 else "")) if out else ""
+            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it." + (" " + note if note else "") + out_text)
+            messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}), {where}.\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it." + ("\n\n" + note if note else "") + out_text, parent=self)
 
         app.run_in_thread_with_busy("Adding the play to the game files...", work, done, error_title="Add a play")
 
@@ -8531,18 +8593,7 @@ class ConvertPlaysDialog(AddPlayDialog):
 
     def _formation_groups(self):
         """The playbooks' formation groups (the menus of the play-call screen) from the game files: AP.FormationGroups."""
-        app = self.app
-        roles = app.model.run_bridge(["add-play-layout", "--ast", self.boot]).get("roles") or {}
-        tmp = tempfile.mkdtemp(prefix="hc09_conv_")
-        try:
-            def export(role, tables, name):
-                out = os.path.join(tmp, name)
-                app.model.run_bridge(["shipped-table-export", "--ast", self.boot, "--top-index", str(roles.get(role, role)), "--tables", tables, "--out-dir", out])
-                return {t: read_csv_dicts(os.path.join(out, t.lower() + ".csv")) for t in tables.split(",")}
-            e47, e40 = export("47", "PGSL,PGFM", "e47"), export("40", "PBFM", "e40")
-            return AP.FormationGroups(e47["PGSL"], e40["PBFM"], e47["PGFM"])
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        return self.app.formation_groups(self.boot)
 
     def _apply(self):
         app = self.app
@@ -13340,6 +13391,20 @@ class App(tk.Tk):
             if pbgi is not None:
                 names[pbgi] = (r.get("BNAM") or "").strip() or f"playbook {pbgi}"
         return names
+
+    def formation_groups(self, boot_ast):
+        """The playbooks' formation groups (the menus of the play-call screen) from the game files: AP.FormationGroups."""
+        roles = self.model.run_bridge(["add-play-layout", "--ast", boot_ast]).get("roles") or {}
+        tmp = tempfile.mkdtemp(prefix="hc09_conv_")
+        try:
+            def export(role, tables, name):
+                out = os.path.join(tmp, name)
+                self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--top-index", str(roles.get(role, role)), "--tables", tables, "--out-dir", out])
+                return {t: read_csv_dicts(os.path.join(out, t.lower() + ".csv")) for t in tables.split(",")}
+            e47, e40 = export("47", "PGSL,PGFM", "e47"), export("40", "PBFM", "e40")
+            return AP.FormationGroups(e47["PGSL"], e40["PBFM"], e47["PGFM"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def book_set_formations(self, boot_ast, setl):
         """{playbook (BOKL): the formation id (PBFM) the playbook gives the set}: the PGSL rows of the set in the user-profile template of the game (qkl_boot.ast entry 47)."""
