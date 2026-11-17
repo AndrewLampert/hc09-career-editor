@@ -138,6 +138,33 @@ def books_of(lib, base):
     return sorted(lib.books_of_play.get(base, ()))
 
 
+PLAYBOOK_PLAY_CAP = 200          # the game's limit per playbook: 200 offense plays (special teams are not counted)
+
+
+def everyone_books(lib, candidates, groups, like, added=(), cap=PLAYBOOK_PLAY_CAP):
+    """The playbooks among `candidates` (offense playbooks) that a play made from the stock set `like` can be put in for everyone, as a formation of its own: those that have an offense formation group for it
+    (FormationGroups.pick) and room for another offense play (the game's limit is `cap`; the plays added so far count, `added`). Returns (books, {book: its formation group}, [(book, why it is left out)])."""
+    count = collections.Counter()
+    for plyl, bs in lib.books_of_play.items():
+        if lib.play_side(plyl) == "offense":
+            for b in bs:
+                count[int(b)] += 1
+    for p in added:
+        if not p.get("cpu"):                                    # an added play with CPU rows is in the count above already (its PBAI rows)
+            for b in p.get("books", ()):
+                count[int(b)] += 1
+    ok, left_out = [], []
+    for b in sorted({int(x) for x in candidates}):
+        group = groups.pick(b, like)
+        if group is None:
+            left_out.append((b, "it has no offense formation group to put the formation in"))
+        elif count[b] >= cap:
+            left_out.append((b, f"it already has {count[b]} offense plays (the game's limit is {cap})"))
+        else:
+            ok.append(b)
+    return ok, {b: groups.pick(b, like) for b in ok}, left_out
+
+
 def moved_players(lib, base, alignment):
     """The slots of an alignment that are not where the stock set has them."""
     stock = lib.alignment(lib.detail(base)["set"]["setl"])
@@ -396,8 +423,8 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
     books = sorted({int(b) for b in books})
     if not books:
         raise ValueError("Choose at least one playbook.")
-    if not convert and any(b not in have for b in books):
-        raise ValueError("The play can only go into playbooks that already have the play it was made from (they hold its formation).")
+    if not convert and not own_set and any(b not in have for b in books):
+        raise ValueError("The play can only go into playbooks that already have the play it was made from (they hold its formation), unless it gets a formation of its own.")
     st = d["set"]
     if convert and like is None:
         match = stock_match(lib, st["setl"])
