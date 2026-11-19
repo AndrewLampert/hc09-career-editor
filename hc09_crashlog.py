@@ -72,11 +72,15 @@ def shorten(path, keep=2):
     return "/".join(parts[-keep:])
 
 
-_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/(?=[\w.-]+/))[^\s'\"<>|*?]*")          # C:\dir\file, C:/dir/file, \\server\share, /dir/file
+_START = r"(?:[A-Za-z]:[\\/]|\\\\|/(?=[\w.-]+/))"            # C:\  C:/  \\server  /dir/
+_WORD = r"[^\s\\/'\"<>|*?:,;]+"                                # one word of a folder name (no separator, colon, comma or semicolon: those end a path in a sentence)
+_PATH = re.compile(
+    r"(?:(?<=['\"])" + _START + r"[^'\"]*(?=['\"]))"                                            # a path in quotes (an OSError names its file that way): all of it, spaces included
+    r"|(?:" + _START + r"(?:" + _WORD + r"(?: " + _WORD + r"){0,3}[\\/]+)*[^\s'\"<>|*?:\\/]*)")     # any other: a folder may be up to four words ("D:\Shared Saves\x", "My Saves 2"), the file name ends at a space
 
 
 def shorten_paths(text, keep=2):
-    """The text with every whole path in it cut to its last `keep` parts (a path with a space in it is cut where the space is, which still drops the folders above)."""
+    """The text with every whole path in it cut to its last `keep` parts: a path in quotes whole, spaces in its folders included; an unquoted one up to the end of its file name."""
     return _PATH.sub(lambda m: shorten(m.group(0), keep) or m.group(0), str(text or ""))
 
 
