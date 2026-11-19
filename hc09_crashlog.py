@@ -2,9 +2,10 @@
 Problem reports for the HC09 editor: when the editor breaks, a text file says where, so that it can be sent back and read.
 
 Standard library only (no Tk). install() hooks the three places an error can escape from (the main thread, other threads, and the Tk window's own callbacks are hooked by the GUI) and the
-interpreter's fault handler (a crash of Python itself); write_report() builds the file. The report has no player or save contents: the error and where it happened, the versions, the kind of save that
+interpreter's fault handler (a crash of Python itself); write_report() builds the file. The report is made without the save's data: the error and where it happened, the versions, the kind of save that
 is open (its kind and number of tables, never its rows), the last actions and bridge failures, and what the editor wrote lately to the game files and saves (the write log, which is also kept between
-runs because a crash of the GAME is usually about those writes). The user's home folder and user name are blanked out. Nothing is ever sent anywhere: the file is read and sent by a person.
+runs because a crash of the GAME is usually about those writes). The user's home folder and user name are blanked out. Error messages, window titles and the person's own note can still quote a name (a
+player, a file), so the report says to read it before sending. Nothing is ever sent anywhere: the file is read and sent by a person.
 
     note("window opened: Rename in playbooks")      what the person did (a ring of the last 80)
     bridge_failed(args, message)                    a bridge command that failed, with the reason
@@ -15,7 +16,6 @@ import collections
 import datetime
 import faulthandler
 import getpass
-import hashlib
 import json
 import os
 import platform
@@ -31,38 +31,43 @@ REPORT_DIR_NAME = "crash-reports"
 WRITE_LOG_NAME = "write_log.txt"
 FAULT_NAME = "fault.txt"
 KEEP_REPORTS = 30                        # the oldest reports beyond this many are deleted
-WRITE_LOG_MAX = 256 * 1024               # the write log is cut to its last half when it grows past this
 WRITE_COMMANDS = {"import", "entry-patch", "add-play", "add-play-restore", "entry-grow", "entry-relocate"}      # bridge commands that write a file
-MAX_REPORTS_PER_MINUTE = 3
+MAX_CONFIG_BYTES = 2_000_000             # an entry-patch config larger than this is not read just to count its edits
+# the limits tests change; uninstall() puts them back
+_DEFAULTS = {"REPEAT_AFTER": 600, "MAX_REPORTS_PER_MINUTE": 3, "WRITE_LOG_MAX": 256 * 1024}
+REPEAT_AFTER = _DEFAULTS["REPEAT_AFTER"]                    # the same error is written again only after this many seconds
+MAX_REPORTS_PER_MINUTE = _DEFAULTS["MAX_REPORTS_PER_MINUTE"]
+WRITE_LOG_MAX = _DEFAULTS["WRITE_LOG_MAX"]                  # the write log is cut to its newer half when it grows past this
 
 _crumbs = collections.deque(maxlen=80)
 _bridge_fails = collections.deque(maxlen=6)
 _writes = collections.deque(maxlen=120)      # this run's writes, kept in memory as well (the file may not be there: tests, a read-only folder)
-_state = {"dir": None, "root": None, "context": None, "notify": None, "fault": None, "stamps": [], "seen": {}, "previous": None, "hooks": None}
-REPEAT_AFTER = 600                       # the same error is written again only after this many seconds
+_state = {"dir": None, "root": None, "context": None, "notify": None, "fault": None, "stamps": [], "seen": {}, "previous": None, "hooks": None,
+          "snapshot": None, "versions": None, "versions_thread": None}
 _lock = threading.Lock()
+_log_lock = threading.Lock()                 # the write log file: appending and cutting it are one step
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # what is blanked out
 def redact(text):
-    """The user's home folder and user name replaced, so that a report can be sent without saying whose computer it came from."""
+    """The user's home folder blanked out, and the user name where it stands as a folder in a path, so that a report can be sent without saying whose computer it came from. (A bare word that happens to be
+    the user name, like User or Admin, is left alone: that would rewrite ordinary words.)"""
     text = text or ""
-    names = []
     try:
-        names.append(os.path.expanduser("~"))
+        home = os.path.expanduser("~")
     except Exception:
-        pass
-    for home in names:
-        if home and home != "~":
-            for variant in {home, home.replace("\\", "/"), home.replace("/", "\\")}:
-                text = re.sub(re.escape(variant), "<home>", text, flags=re.I)
+        home = ""
+    if home and home != "~":
+        for variant in {home, home.replace("\\", "/"), home.replace("/", "\\")}:
+            text = re.sub(re.escape(variant), "<home>", text, flags=re.I)
     try:
         user = getpass.getuser()
     except Exception:
         user = ""
     if user and len(user) >= 3:
-        text = re.sub(r"(?<![A-Za-z0-9])" + re.escape(user) + r"(?![A-Za-z0-9])", "<user>", text, flags=re.I)
+        name = re.escape(user)
+        text = re.sub(r"""(?:(?<=[\\/])""" + name + r"""(?=[\\/\s'"<>:,;)]|$))|(?:(?<![A-Za-z0-9_])""" + name + r"""(?=[\\/]))""", "<user>", text, flags=re.I)         # a folder of a path: after or before a separator
     return text
 
 
@@ -70,6 +75,31 @@ def shorten(path, keep=2):
     """The last `keep` parts of a path (a save's folder and file), for a report that should not carry whole paths."""
     parts = [p for p in re.split(r"[\\/]+", str(path or "")) if p]
     return "/".join(parts[-keep:])
+
+
+# What a whole path looks like in free text. One commented alternative per case; shorten_paths() cuts each to its last two parts.
+_START = r"""(?:
+      (?<![A-Za-z0-9])[A-Za-z]:[\\/]       # a drive: C:\ or C:/ (not the 's:/' at the end of https:)
+    | \\\\                                  # a network share: \\server\share
+    | <home>[\\/]+                          # the home folder, when redact() already blanked it out
+    | (?<![\w:./\\-])/(?=[\w.-]+/)          # a posix path: /dir/x (not after a word, a colon or a slash, so not the // of a URL)
+)"""
+_WORD = r"""[^\s\\/'"<>|*?:,;]+"""             # one word of a folder name: a separator, colon, comma or semicolon ends a path in a sentence
+_QUOTED = re.compile(r"""(?x)
+    (['"])                                  # an OSError names its file in quotes: the path is everything up to the same quote again
+    ( """ + _START + r""" (?:(?!\1).)* )
+    (?=\1)
+""")
+_PLAIN = re.compile(r"""(?x) """ + _START + r"""
+    (?: """ + _WORD + r"""(?:[ ]""" + _WORD + r"""){0,3} [\\/]+ )*     # folders: up to four words each ("Shared Saves", "My Saves 2")
+    [^\s'"<>|*?:\\/]*                                                  # the file name: it ends at a space
+""")
+
+
+def shorten_paths(text, keep=2):
+    """The text with every whole path in it cut to its last `keep` parts: a quoted path whole (spaces and apostrophes included), any other up to the end of its file name."""
+    text = _QUOTED.sub(lambda m: m.group(1) + (shorten(m.group(2), keep) or m.group(2)), str(text or ""))
+    return _PLAIN.sub(lambda m: shorten(m.group(0), keep) or m.group(0), text)
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -80,12 +110,13 @@ def note(text):
         _crumbs.append((time.time(), str(text)[:300]))
 
 
-def bridge_failed(args, message):
-    """A bridge command that failed, with the reason (the bridge's own words, the first lines)."""
-    lines = [ln for ln in str(message or "").splitlines() if ln.strip()]
+def bridge_failed(args, message, summary=None):
+    """A bridge command that failed, with the reason (the bridge's own words, the first lines). summary: the line summarize_bridge() made for it, when the caller has it."""
+    lines = [shorten_paths(ln) for ln in str(message or "").splitlines() if ln.strip()]          # the bridge's own words, with whole paths cut to their last two parts
+    summary = summary or summarize_bridge(args)[1]
     with _lock:
-        _bridge_fails.append((time.time(), summarize_bridge(args)[1], "\n".join(lines[:12])))
-    note("bridge FAILED: " + summarize_bridge(args)[1])
+        _bridge_fails.append((time.time(), summary, "\n".join(lines[:12])))
+    note("bridge FAILED: " + summary)
 
 
 def summarize_bridge(args):
@@ -98,6 +129,7 @@ def summarize_bridge(args):
     mode = args[1] if len(args) > 1 and not args[1].startswith("--") else ""
     if mode:
         parts.append(mode)
+    writes = cmd in WRITE_COMMANDS and not (cmd == "entry-patch" and mode == "dry")         # entry-patch dry only checks
     opts = {}
     for i, a in enumerate(args):
         if a.startswith("--") and i + 1 < len(args) and not args[i + 1].startswith("--"):
@@ -108,39 +140,47 @@ def summarize_bridge(args):
     for key in ("db", "ast", "in", "out", "out-dir"):
         if key in opts:
             parts.append(f"{key}={shorten(opts[key])}")
-    if cmd == "entry-patch" and "config" in opts:
+    if writes and cmd == "entry-patch" and "config" in opts:             # the edits per entry, for a write only (a config can hold thousands of edits)
         try:
-            with open(opts["config"], encoding="utf-8") as f:
-                cfg = json.load(f)
-            for t in cfg.get("targets", [])[:6]:
-                edits = t.get("edits", [])
-                tables = sorted({e.get("table", "?") for e in edits})
-                parts.append(f"[{os.path.basename(str(t.get('ast', '')))} #{t.get('index')}: {len(edits)} edit(s)" + (f" in {','.join(tables)}" if tables else "") + "]")
+            size = os.path.getsize(opts["config"])
+            if size > MAX_CONFIG_BYTES:
+                parts.append(f"[config {size:,} bytes, not read]")
+            else:
+                with open(opts["config"], encoding="utf-8") as f:
+                    cfg = json.load(f)
+                for t in cfg.get("targets", [])[:6]:
+                    edits = t.get("edits", [])
+                    tables = sorted({e.get("table", "?") for e in edits})
+                    parts.append(f"[{os.path.basename(str(t.get('ast', '')))} #{t.get('index')}: {len(edits)} edit(s)" + (f" in {','.join(tables)}" if tables else "") + "]")
         except Exception:
             parts.append("[config not readable]")
-    return cmd in WRITE_COMMANDS and not (cmd == "entry-patch" and mode == "dry"), " ".join(parts)         # entry-patch dry only checks
+    return writes, " ".join(parts)
 
 
 def log_write(text):
     """Something the editor wrote to the game files or to a save (and how it went): kept in memory and, once install() has run, in the write log file next to the reports."""
     text = " ".join(str(text).split())                       # one line per record, whatever the text holds (an error message with line breaks)
-    line = redact(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {text[:400]}")          # the file is private to this computer, but it is also read into reports: the home folder and user name are blanked out here too
+    text = shorten_paths(text)                               # first, while the drive and folders are still there to be recognized: every whole path (an error message names its files) is cut to its last two parts
+    line = redact(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {text[:400]}")          # the file is private to this computer, but it is also read into reports: then the home folder and user name are blanked out wherever they are left
     with _lock:
         _writes.append(line)
         folder = _state["dir"]
     if not folder:
         return
-    try:
-        path = os.path.join(folder, WRITE_LOG_NAME)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-        if os.path.getsize(path) > WRITE_LOG_MAX:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                data = f.read()
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(data[len(data) // 2:].split("\n", 1)[-1])
-    except OSError:
-        pass
+    path = os.path.join(folder, WRITE_LOG_NAME)
+    with _log_lock:                                           # appending and cutting the file are one step: two threads cannot lose each other's lines
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            if os.path.getsize(path) > WRITE_LOG_MAX:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    data = f.read()
+                half = data[len(data) // 2:].split("\n", 1)[-1]
+                with open(path + ".tmp", "w", encoding="utf-8") as f:
+                    f.write(half)
+                os.replace(path + ".tmp", path)               # the new file replaces the old in one step
+        except OSError:
+            pass
 
 
 def recent_writes(limit=60):
@@ -178,22 +218,32 @@ def _writable_dir(candidates):
 
 def install(root, context=None, notify=None, folder=None):
     """Hook the main thread, the other threads and the interpreter's fault handler, and choose the folder (crash-reports next to the editor, else a folder in Temp). context: a function that returns a
-    dict about what is open (the GUI gives it); notify: a function called with (report path, short text) after a report was written (the GUI shows its box). A crash of Python itself in the LAST run
-    (what the fault handler wrote) becomes a report now. Returns the folder, or None when no folder can be written (the reports are then only shown, not kept)."""
+    dict about what is open (the GUI gives it); notify: a function called with (report path or None when none could be saved, short text) after an error was handled (the GUI shows its box). A crash of
+    Python itself in the LAST run (what the fault handler wrote) becomes a report now. Returns the folder, or None when no folder can be written (the reports are then only shown, not kept).
+    Called a second time it only takes the new context and notify."""
+    if _state["hooks"] is not None:
+        attach(context, notify)
+        return _state["dir"]
     _state["root"], _state["context"], _state["notify"] = root, context, notify
     _state["hooks"] = (sys.excepthook, threading.excepthook)
     _state["dir"] = _writable_dir([folder] if folder else [os.path.join(root, REPORT_DIR_NAME), os.path.join(tempfile.gettempdir(), "hc09-editor-reports")])
-    previous = _read_previous_fault()
     sys.excepthook = _excepthook
     threading.excepthook = _threading_hook
+    previous = _read_previous_fault()
+    if previous:
+        path = write_report(where="The editor closed without warning the last time it ran (a crash of Python or of a library it uses)", fault_text=previous)
+        if path:
+            _state["previous"] = path
+            _clear_fault()                                        # only now: if the report could not be written the trace stays for the next start
     if _state["dir"]:
         try:
             _state["fault"] = open(os.path.join(_state["dir"], FAULT_NAME), "a", buffering=1)      # sys.stderr is None under pythonw: the fault handler needs a file of its own
             faulthandler.enable(file=_state["fault"], all_threads=True)
         except (OSError, RuntimeError, ValueError):
             _state["fault"] = None
-    if previous:
-        _state["previous"] = write_report(where="The editor closed without warning the last time it ran (a crash of Python or of a library it uses)", fault_text=previous)
+    t = threading.Thread(target=_load_versions, args=(root,), name="crashlog-versions", daemon=True)      # node and the file hashes: read once, in the background, not in the middle of an error
+    _state["versions_thread"] = t
+    t.start()
     note("editor started")
     return _state["dir"]
 
@@ -207,7 +257,10 @@ def attach(context=None, notify=None):
 
 
 def uninstall():
-    """Put the interpreter's hooks back and close the fault file (for tests; the editor never calls it)."""
+    """Put the interpreter's hooks and the limits back and close the fault file (for tests; the editor never calls it)."""
+    reading = _state["versions_thread"]
+    if reading is not None:
+        reading.join(timeout=6)                               # its answer belongs to this run, not the next
     hooks = _state["hooks"]
     if hooks:
         sys.excepthook, threading.excepthook = hooks
@@ -220,7 +273,9 @@ def uninstall():
             _state["fault"].close()
         except OSError:
             pass
-    _state.update({"dir": None, "root": None, "context": None, "notify": None, "fault": None, "stamps": [], "seen": {}, "previous": None, "hooks": None})
+    _state.update({"dir": None, "root": None, "context": None, "notify": None, "fault": None, "stamps": [], "seen": {}, "previous": None, "hooks": None,
+                   "snapshot": None, "versions": None, "versions_thread": None})
+    globals().update(_DEFAULTS)
     with _lock:
         _crumbs.clear()
         _bridge_fails.clear()
@@ -231,27 +286,43 @@ def _read_previous_fault():
     folder = _state["dir"]
     if not folder:
         return ""
-    path = os.path.join(folder, FAULT_NAME)
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read().strip()
-        if text:
-            open(path, "w").close()
-        return text
+        with open(os.path.join(folder, FAULT_NAME), "r", encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
     except OSError:
         return ""
 
 
+def _clear_fault():
+    try:
+        open(os.path.join(_state["dir"], FAULT_NAME), "w").close()
+    except OSError:
+        pass
+
+
+def _chain(index, *args):
+    """Call the hook that was there before ours (the default one prints the traceback) when there is somewhere to print it: a console run shows its errors as it always did."""
+    prev = (_state["hooks"] or (None, None))[index]
+    if prev is not None and prev not in (_excepthook, _threading_hook) and sys.stderr is not None:
+        try:
+            prev(*args)
+        except Exception:
+            pass
+
+
 def _excepthook(etype, value, tb):
     handle_exception((etype, value, tb), "the main thread")
+    _chain(0, etype, value, tb)
 
 
 def _threading_hook(args):
     handle_exception((args.exc_type, args.exc_value, args.exc_traceback), f"the background thread {getattr(args.thread, 'name', '?')}")
+    _chain(1, args)
 
 
 def handle_exception(exc_info, where):
-    """An error nobody caught: write the report (not more than three a minute, and a repeat of the same error is not written again) and tell the GUI. Never raises."""
+    """An error nobody caught: write the report (not more than three a minute, and a repeat of the same error is not written again) and tell the GUI (with the path, or None when no report could be
+    saved). Never raises."""
     try:
         if exc_info[0] is KeyboardInterrupt:
             return None
@@ -309,6 +380,32 @@ def _versions(root):
     return out
 
 
+def _load_versions(root):
+    _state["versions"] = _versions(root)
+
+
+def _versions_cached():
+    """The versions, read once per run (install() starts reading them in the background): a report does not start node or hash the files again."""
+    t = _state["versions_thread"]
+    if t is not None:
+        t.join(timeout=6)
+    if _state["versions"] is None:
+        _state["versions"] = _versions(_state["root"] or os.getcwd())
+    return _state["versions"]
+
+
+def refresh_context():
+    """Take what is open now. The window's widgets may only be read on the thread that owns them, so the GUI calls this on its own thread every few seconds and a report made on that thread takes a fresh
+    one; a report made on another thread (an error in a background job) uses the last one taken."""
+    fn = _state["context"]
+    if not fn:
+        return
+    try:
+        _state["snapshot"] = (time.time(), dict(fn() or {}))
+    except Exception as e:
+        _state["snapshot"] = (time.time(), {"context": f"could not be read ({type(e).__name__})"})
+
+
 def build_report(exc_info=None, where="", note_text="", fault_text=""):
     """The text of a report (see the module's description for what it holds and what it never holds)."""
     lines = ["HC09 editor problem report", "=" * 26,
@@ -316,17 +413,22 @@ def build_report(exc_info=None, where="", note_text="", fault_text=""):
              f"What: {where or 'a report saved by the person using the editor'}"]
     if note_text:
         lines += ["", "What the person says went wrong:", str(note_text).strip()]
-    lines += ["", "This file has no player or save contents; your user name and home folder are blanked out. Open it and read it if you like, then send it on.", ""]
+    lines += ["", "This file is made without the save's data (no players, no rows), and your user name and home folder are blanked out. Error messages, window titles and a note can still quote a name "
+              "(a player, a file): read it before you send it on.", ""]
     if exc_info and exc_info[0] is not None:
         lines += ["--- The error", "".join(traceback.format_exception(*exc_info)).rstrip(), ""]
     if fault_text:
         lines += ["--- What the fault handler wrote (a crash below Python)", fault_text.strip(), ""]
-    lines += ["--- The editor and this computer"] + _versions(_state["root"] or os.getcwd()) + [""]
-    ctx = {}
-    try:
-        ctx = (_state["context"]() if _state["context"] else {}) or {}
-    except Exception as e:
-        ctx = {"context": f"could not be read ({type(e).__name__})"}
+    lines += ["--- The editor and this computer"] + _versions_cached() + [""]
+    on_main = threading.current_thread() is threading.main_thread()
+    if on_main:
+        refresh_context()
+    snap = _state["snapshot"]
+    ctx = dict(snap[1]) if snap else {}
+    if snap and not on_main:
+        ctx["taken"] = f"{int(time.time() - snap[0])} s ago on the window's own thread (this report is from another thread)"
+    elif not snap and not on_main and _state["context"]:
+        ctx["context"] = "not taken yet (this report is from a background thread)"
     lines += ["--- What was open"] + ([f"{k}: {v}" for k, v in ctx.items()] or ["(nothing known)"]) + [""]
     with _lock:
         fails = list(_bridge_fails)
@@ -350,14 +452,18 @@ def write_report(exc_info=None, where="", note_text="", fault_text=""):
     if not folder:
         return None
     base = f"report_{datetime.datetime.now():%Y%m%d_%H%M%S}"
-    path = os.path.join(folder, base + ".txt")
     n = 1
-    while os.path.exists(path):
-        n += 1
-        path = os.path.join(folder, f"{base}_{n}.txt")
+    while True:
+        path = os.path.join(folder, base + (".txt" if n == 1 else f"_{n}.txt"))
+        try:
+            with open(path, "x", encoding="utf-8") as f:           # exclusive: a report made in the same second by another thread is never overwritten
+                f.write(text)
+            break
+        except FileExistsError:
+            n += 1
+        except OSError:
+            return None
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
         old = sorted(p for p in os.listdir(folder) if p.startswith("report_") and p.endswith(".txt"))
         for p in old[:-KEEP_REPORTS]:
             try:
@@ -365,5 +471,5 @@ def write_report(exc_info=None, where="", note_text="", fault_text=""):
             except OSError:
                 pass
     except OSError:
-        return None
+        pass
     return path

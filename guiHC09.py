@@ -1922,13 +1922,13 @@ class CSVModel:
             )
         except FileNotFoundError:
             if CRASH is not None:
-                CRASH.bridge_failed(args, "node was not found")
+                CRASH.bridge_failed(args, "node was not found", summary)
             raise RuntimeError(
                 "Could not find 'node'. Install Node.js and make sure it's on your PATH."
             )
         except subprocess.CalledProcessError as e:
             if CRASH is not None:
-                CRASH.bridge_failed(args, e.stderr or e.stdout)
+                CRASH.bridge_failed(args, e.stderr or e.stdout, summary)
                 if writes:
                     CRASH.log_write("FAILED  " + summary)
             raise RuntimeError(f"bridge.js failed:\n{e.stderr or e.stdout}")
@@ -1937,7 +1937,7 @@ class CSVModel:
             parsed = json.loads(result.stdout)
         except (json.JSONDecodeError, ValueError):
             if CRASH is not None:
-                CRASH.bridge_failed(args, "unexpected output: " + (result.stdout or "")[:300])
+                CRASH.bridge_failed(args, "unexpected output: " + (result.stdout or "")[:300], summary)
             raise RuntimeError(f"bridge.js returned unexpected output:\n{result.stdout}")
         if CRASH is not None and writes:
             CRASH.log_write("written  " + summary)
@@ -16056,8 +16056,8 @@ class CrashReportDialog(tk.Toplevel):
         self.path = path
         ttk.Label(self, text=title, font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=600, justify="left", padding=(14, 0, 14, 6),
-                  text=(f"{short}\n\n" if short else "") + "A report of what happened was saved. It has no player or save contents, and your user name is blanked out; open it to read it if you like. "
-                  "Send that file to whoever looks after the editor.").pack(anchor="w")
+                  text=(f"{short}\n\n" if short else "") + "A report of what happened was saved. It leaves out the save's data and blanks out your user name, but an error message can still quote a name (a player, a file): "
+                  "read it before you send it to whoever looks after the editor.").pack(anchor="w")
         self.path_var = tk.StringVar(value=path)
         ttk.Entry(self, textvariable=self.path_var, state="readonly").pack(fill="x", padx=14)
         btn = ttk.Frame(self)
@@ -16088,12 +16088,33 @@ def attach_crash_reporting(app):
         return
 
     def notify(path, short):
+        def show():
+            if path:
+                CrashReportDialog(app, path, short)
+            else:                                  # no folder could be written: say so instead of showing a box about a file that is not there
+                messagebox.showerror("The editor hit a problem", f"{short}\n\nA report could not be saved: there is no folder the editor can write to.", parent=app)
         try:
-            app.after(0, lambda: CrashReportDialog(app, path, short))
+            app.after(0, show)
         except Exception:
             pass
     CRASH.attach(context=app._crash_context, notify=notify)
-    app.report_callback_exception = lambda exc, val, tb: CRASH.handle_exception((exc, val, tb), "a button or window of the editor")
+    tk_default = tk.Tk.report_callback_exception
+
+    def callback_error(exc, val, tb):
+        CRASH.handle_exception((exc, val, tb), "a button or window of the editor")
+        if sys.stderr is not None:                 # a console run prints its errors as Tk always did
+            tk_default(app, exc, val, tb)
+    app.report_callback_exception = callback_error
+
+    def keep_context():                            # the window's widgets are read here, on the window's own thread, for a report made by a background thread
+        try:
+            CRASH.refresh_context()
+        finally:
+            try:
+                app.after(5000, keep_context)
+            except Exception:
+                pass
+    app.after(1000, keep_context)
     shown_error = messagebox.showerror
 
     def showerror(title=None, message=None, **options):

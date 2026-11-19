@@ -112,13 +112,21 @@ def _short(path):
     return "/".join(parts[-2:])
 
 
+def _why(e):
+    """What failed, for the write log: the kind of error and the system's own reason (Permission denied), never an error text that names a file. The shelf's own messages are plain words."""
+    if isinstance(e, ShelfError):
+        cause = e.__context__
+        return f"{type(e).__name__}: {str(e).split(':')[0] if cause is not None else e}" + (f" ({cause.strerror})" if getattr(cause, "strerror", None) else "")
+    return type(e).__name__ + (f" ({e.strerror})" if getattr(e, "strerror", None) else "")
+
+
 def move_folder(src, dst, copy=False):
     """move_folder_unlogged, with the result in the write log (a problem report says which save was moved or copied where, and if it failed)."""
     what = "copied" if copy else "moved"
     try:
         move_folder_unlogged(src, dst, copy)
     except Exception as e:
-        _log(f"FAILED  save folder {what}: {_short(src)} -> {_short(dst)}: {e}")
+        _log(f"FAILED  save folder {what}: {_short(src)} -> {_short(dst)}: {_why(e)}")
         raise
     _log(f"{what}  save folder {_short(src)} -> {_short(dst)}")
 
