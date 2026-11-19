@@ -335,6 +335,10 @@ class PlayLibrary:
                 continue
         self.book_play_names = dict(out)
 
+    def custom_rows(self):
+        """The rows of the user's custom plays as the profile holds them ({table: [rows]}), before the mount moved their ids up; {} when none are mounted."""
+        return self._custom_rows
+
     def name_in_book(self, plyl, bokl):
         """The name a playbook shows for a play: its own name for it when it has one, else the master name."""
         own = self.book_play_names.get(bokl, {}).get(plyl)

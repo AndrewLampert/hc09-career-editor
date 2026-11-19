@@ -21,7 +21,8 @@ ENTRIES = (40, 42, 46, 47)
 PASS_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "rcv"))
 TEXT_COLS = {"name", "PPPM"}
 LINK_TABLES = {"PGPL": ("BOKL", "SETL", "PLYL", "PLTP"), "PGSL": ("BOKL", "SETL", "PBFM"), "PGSS": ("BOKL", "SETL")}      # the playbook link tables of a save and their columns
-LINK_KEYS = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSL": ("BOKL", "SETL"), "PGSS": ("BOKL", "SETL")}
+LINK_KEYS = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSL": ("BOKL", "SETL"), "PGSS": ("BOKL", "SETL")}          # what the rows are sorted by
+LINK_IDENTITY = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSL": ("BOKL", "SETL", "PBFM"), "PGSS": ("BOKL", "SETL")}      # what makes two rows the same link: a set can sit under several formations of a book
 SET_TABLES = ("SETL", "SETP", "SETG", "SGFF", "SPKF", "SPKG")          # the tables of entry 40 that hold a set: every play in an added formation carries these rows, merge() writes them once
 SHARED_ROWS = {"40": SET_TABLES, "47": ("PGSL", "PGSS")}
 
@@ -167,8 +168,7 @@ def everyone_books(lib, candidates, groups, like, added=(), cap=PLAYBOOK_PLAY_CA
 
 def moved_players(lib, base, alignment):
     """The slots of an alignment that are not where the stock set has them."""
-    stock = lib.alignment(lib.detail(base)["set"]["setl"])
-    return sorted(poso for poso, (x, y) in (alignment or {}).items() if poso in stock and (abs(float(x) - stock[poso]["x"]) > 0.001 or abs(float(y) - stock[poso]["y"]) > 0.001))
+    return sorted(GF.moved_slots(lib.alignment(lib.detail(base)["set"]["setl"]), alignment))
 
 
 def moved_places(lib, base, alignment):
@@ -261,7 +261,9 @@ class FormationGroups:
         self.book_groups = collections.defaultdict(list)
         for r in pgfm_rows:
             self.book_groups[int(r["BOKL"])].append(int(r["PBFM"]))
-        self.of_set = {(int(r["BOKL"]), int(r["SETL"])): int(r["PBFM"]) for r in pgsl_rows}
+        self.of_set = {}
+        for r in pgsl_rows:                                      # a set can sit under several formations of a book: the first one the game lists is the book's group for it
+            self.of_set.setdefault((int(r["BOKL"]), int(r["SETL"])), int(r["PBFM"]))
         self.family = collections.defaultdict(collections.Counter)             # set -> the group names the playbooks give it, most used first
         self.sets_in = collections.Counter()
         for r in pgsl_rows:
@@ -305,11 +307,15 @@ def convert_changes(lib, custom_setl, like):
     a play converted with the placeholders lined up wrong or ran another play in the game (RPCS3, 2026-10-29)."""
     c_setp = {int(r["poso"]): r for r in lib.tables["SETP"] if int(r["SETL"]) == int(custom_setl)}
     c_ids = {int(r["SETP"]): p for p, r in c_setp.items()}
-    c_dflt = next(int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == int(custom_setl) and g["dflt"] == "1")
+    c_dflt = next((int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == int(custom_setl) and g["dflt"] == "1"), None)
+    if c_dflt is None:
+        raise ValueError("The play's formation has no default alignment group.")
     c_setg = {c_ids[int(r["SETP"])]: r for r in lib.tables["SETG"] if int(r["SETP"]) in c_ids and int(r["SGF_"]) == c_dflt}
     l_setp = {int(r["poso"]): r for r in lib.tables["SETP"] if int(r["SETL"]) == int(like)}
     l_ids = {int(r["SETP"]): p for p, r in l_setp.items()}
-    l_dflt = next(int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == int(like) and g["dflt"] == "1")
+    l_dflt = next((int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == int(like) and g["dflt"] == "1"), None)
+    if l_dflt is None:
+        raise ValueError("The game's own formation this play is made like has no default alignment group.")
     l_setg = {l_ids[int(r["SETP"])]: r for r in lib.tables["SETG"] if int(r["SETP"]) in l_ids and int(r["SGF_"]) == l_dflt}
     setp_diff, setg_diff = {}, {}
     for poso, row in l_setp.items():
@@ -362,7 +368,9 @@ def new_set_rows(lib, base, new, alignment, ids, set_name, like=None):
         setl = int(like)
     else:
         setp_diff, setg_diff, dflt = GF.alignment_changes(lib, d, new, alignment)
-    stock_setl = next(r for r in lib.tables["SETL"] if int(r["SETL"]) == setl)
+    stock_setl = next((r for r in lib.tables["SETL"] if int(r["SETL"]) == setl), None)
+    if stock_setl is None:
+        raise ValueError(f"The game's formation {setl} is not in the play database.")
     stock_setp = sorted((r for r in lib.tables["SETP"] if int(r["SETL"]) == setl), key=lambda r: int(r["poso"]))
     groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == setl]
     quick = getattr(lib, "quick_subs", None) or {}
@@ -458,7 +466,12 @@ def build(lib, base, name, books, plyl, overrides=None, plan=None, reads=None, a
         if extra40.get("SPKF"):
             extra47["PGSS"] = [{"BOKL": b, "SETL": setl} for b in books]            # a set with no quick-sub packages has no PGSS row (32 of the game's 240 sets are like that)
     base_play = lib.plays[base]
-    sitt = int(next(r["SITT"] for r in lib.tables["SETL"] if int(r["SETL"]) == int(like))) if convert else int(base_play["sitt"])
+    sitt = int(base_play["sitt"])
+    if convert:
+        like_row = next((r for r in lib.tables["SETL"] if int(r["SETL"]) == int(like)), None)
+        if like_row is None:
+            raise ValueError(f"The game's formation {like} is not in the play database.")
+        sitt = int(like_row["SITT"])
     pbpl = {"SETL": setl, "PLYL": plyl, "SITT": sitt, "PLYT": plyt, "PLF_": stock_plf(lib, plyt, like) if convert else int(nb["PLF_"]), "name": name, "risk": int(nb["risk"]), "motn": int(nb["motn"]), "vpos": int(nb["vpos"])}
     plys = [{"PSAL": int(r["PSAL"]), "ARTL": int(r["ARTL"]), "PLYL": plyl, "PLRR": int(r["PLRR"]), "poso": int(r["poso"])} for r in new["PLYS"]]
     r40 = {"PBPL": [pbpl], "PLYS": plys}
@@ -498,6 +511,8 @@ def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None
     taken_plays = list(taken_plays) + [p["plyl"] for p in added]
     extra = {k: list(v) for k, v in (taken or {}).items()}
     stock_max = stock_max_play(lib, added)
+    psal_ids = {int(x["PSAL"]) for x in lib.tables["PSLO"]}          # once, not for every slot of every play
+    artl_ids = {int(x["ARTL"]) for x in lib.tables["ARTO"]}
     for base in bases:
         name = lib.plays[base]["name"]
         try:
@@ -514,7 +529,7 @@ def convert_mine(lib, bases, books, groups, taken_plays=(), added=(), taken=None
             ok = [b for b in books if groups.pick(b, like) is not None]
             if not ok:
                 raise ValueError("None of the playbooks has an offense formation group to put it in.")
-            missing = [r for r in lib.slot_rows[base].values() if r["psal"] not in {int(x["PSAL"]) for x in lib.tables["PSLO"]} or r["artl"] not in {int(x["ARTL"]) for x in lib.tables["ARTO"]}]
+            missing = [r for r in lib.slot_rows[base].values() if r["psal"] not in psal_ids or r["artl"] not in artl_ids]
             if missing:
                 raise ValueError("It uses a route or diagram art the game's own database does not have.")
             shared = find_shared_convert(lib, base, like, list(added) + plays)
@@ -556,7 +571,8 @@ def custom_ids(lib):
     """The ids the user's custom plays use in the profile (before the mount moved them up): they must not become ids of the game's own database, because the game reads ITS OWN set of the
     same number instead of the custom one (found in the game: a custom set 74 was played as the punt return team)."""
     off = P.CUSTOM_OFFSETS
-    rows = getattr(lib, "_custom_rows", {}) or {}
+    getter = getattr(lib, "custom_rows", None)
+    rows = (getter() if getter else {}) or {}
     return {"SETL": [int(r["SETL"]) - off["SETL"] for r in rows.get("SETL", [])], "SETP": [int(r["SETP"]) - off["SETP"] for r in rows.get("SETP", [])],
             "SGF_": [int(r["SGF_"]) - off["SGF_"] for r in rows.get("SGFF", [])], "SPF_": []}
 
@@ -582,24 +598,25 @@ def links_of(plays):
     return out
 
 
-def insert_rows(rows, new, keys):
-    """A link table's rows (dicts of strings) with the new rows added: one that is there is not added twice. The game's own rows come first in sorted order and the player's own after them; a new row
-    goes into the sorted block. Returns (rows, number added)."""
+def insert_rows(rows, new, keys, identity=None):
+    """A link table's rows (dicts of strings) with the new rows added: one that is there is not added twice (identity: the columns that make two rows the same link, default `keys`). The game's own rows
+    come first in sorted order and the player's own after them; a new row goes into the sorted block. Returns (rows, number added)."""
     key = lambda r: tuple(int(r[k]) for k in keys)
-    have = {key(r) for r in rows}
+    ident = lambda r: tuple(int(r[k]) for k in (identity or keys))
+    have = {ident(r) for r in rows}
     block = 0
     while block + 1 < len(rows) and key(rows[block]) <= key(rows[block + 1]):
         block += 1
     block += 1 if rows else 0
     out, added = [dict(r) for r in rows], 0
     for n in sorted(new, key=key):
-        if key(n) in have:
+        if ident(n) in have:
             continue
         i = block
         while i > 0 and key(out[i - 1]) > key(n):
             i -= 1
         out.insert(i, {k: str(v) for k, v in n.items()})
-        have.add(key(n))
+        have.add(ident(n))
         block += 1
         added += 1
     return out, added

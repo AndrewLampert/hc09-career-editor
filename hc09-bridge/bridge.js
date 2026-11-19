@@ -448,7 +448,24 @@ async function cmdImport(args) {
         results.push({ table: tableName, status: 'ok', rows: updatedRows, fieldsChanged: updatedFields, appendedRows, warnings });
     }
 
-    await helper.save(outPath);
+    if (outPath) {
+        await helper.save(outPath);
+    } else {
+        // In place, in two steps: the whole new save is made and checked in a temporary file first, then it replaces the save in one copy, so a failure (a full disk, a library error, a kill) before that
+        // leaves the save exactly as it was. (Saving to a path other than the open file is safe: only saving to the very same path races its own read.)
+        const tmpOut = path.join(os.tmpdir(), `hc09_import_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
+        try {
+            await helper.save(tmpOut);
+            if (fs.statSync(tmpOut).size !== fs.statSync(dbPath).size) throw new Error('the new save has another size than the save, so the save was not changed');
+            const issues = verifyDbStructure(await openDb(tmpOut));
+            if (issues.length) {
+                const had = new Set(verifyDbStructure(await openDb(dbPath)));              // a save that was already not clean is not refused for what it had before
+                const fresh = issues.filter((x) => !had.has(x));
+                if (fresh.length) throw new Error('the new save does not check out, so the save was not changed: ' + fresh.slice(0, 4).join('; '));
+            }
+            fs.copyFileSync(tmpOut, dbPath);
+        } finally { try { fs.unlinkSync(tmpOut); } catch (e) { /* best effort */ } }
+    }
     console.log(JSON.stringify({ savedTo: outPath || dbPath, results }, null, 2));
 }
 
@@ -515,12 +532,17 @@ function readToc(source) {
         // (possibly huge) file. Resolving here without tearing anything down
         // would leave that read running in the background for no reason -
         // destroy both ends once we have what we came for.
+        let seen = false;
         parser.on('toc', (tocs) => {
+            seen = true;
             resolve(tocs);
             parser.destroy();
             if (fileStream) fileStream.destroy();
         });
         parser.on('error', reject);
+        const ended = () => { if (!seen) reject(new Error('the archive ended before its table of contents was complete (a damaged or cut-short file?)')); };
+        parser.on('end', ended);
+        parser.on('close', ended);
         if (Buffer.isBuffer(source)) {
             const s = new Readable();
             s._read = () => {};
@@ -529,6 +551,7 @@ function readToc(source) {
             s.pipe(parser);
         } else {
             fileStream = fs.createReadStream(source);
+            fileStream.on('error', reject);
             fileStream.pipe(parser);
         }
     });
@@ -634,12 +657,14 @@ async function findShippedTableEntry(astPath, tableNames, requireFields, require
         let settled = false;
         let pending = Promise.resolve();
         let processedCount = 0;
+        let fileStream = null;
 
         const finish = (err, result) => {
             if (settled) return;
             settled = true;
             if (err) reject(err); else resolve(result);
             parser.destroy();
+            if (fileStream) fileStream.destroy();                 // the rest of a 344 MB archive is not read for nothing
         };
 
         // Each candidate entry gets written to its own temp file only long
@@ -691,7 +716,9 @@ async function findShippedTableEntry(astPath, tableNames, requireFields, require
             });
         });
 
-        fs.createReadStream(astPath).pipe(parser);
+        fileStream = fs.createReadStream(astPath);
+        fileStream.on('error', (e) => finish(e));
+        fileStream.pipe(parser);
     });
 }
 
@@ -905,6 +932,17 @@ function checkBackupBelongs(target, backupDir) {
     }
 }
 
+// The row an entry-patch edit addresses: the one row that matches; or, when the editor saw several alike (the playbooks' names table has a few (BOKL, PLYL) pairs twice), the nth of exactly `count`
+// matches in table order. Returns {row, index}. `records` is read once by the caller (the library's records getter copies the whole table).
+function pickRow(records, e) {
+    const found = [];
+    records.forEach((r, i) => { if (Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v))) found.push(i); });
+    const want = e.count === undefined ? 1 : e.count;
+    const nth = e.nth === undefined ? 0 : e.nth;
+    if (found.length !== want || nth >= found.length) throw new Error(`${e.table} ${JSON.stringify(e.match)}: ${found.length} rows match (expected ${want}); nothing written`);
+    return { row: records[found[nth]], index: found[nth] };
+}
+
 async function patchEntry(target, mode, backupDir) {
     const added = loadAddPlayRecord(backupDir, target.ast);
     if (added && added.active && target.start >= added.originalLength) {
@@ -928,9 +966,7 @@ async function patchEntry(target, mode, backupDir) {
         for (const e of target.edits) {
             const table = helper.file[e.table];
             if (table.records.length === 0) await table.readRecords();
-            const hits = table.records.filter((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
-            if (hits.length !== 1) throw new Error(`${e.table} ${JSON.stringify(e.match)}: ${hits.length} rows match (expected 1); nothing written`);
-            const rec = hits[0];
+            const rec = pickRow(table.records, e).row;
             for (const [k, v] of Object.entries(e.expect || {})) {
                 if (!sameValue(rec.fields[k].value, v)) throw new Error(`${e.table} ${JSON.stringify(e.match)} ${k} is ${rec.fields[k].value}, expected ${v}; nothing written`);
             }
@@ -970,7 +1006,7 @@ async function patchEntry(target, mode, backupDir) {
                 if (beforeRecs.length !== afterRecs.length) throw new Error(`${name} has a different number of rows after the change; nothing written`);
                 const edited = new Map();
                 for (const e of target.edits.filter((x) => x.table === name)) {
-                    const hit = beforeRecs.findIndex((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
+                    const hit = pickRow(beforeRecs, e).index;
                     edited.set(hit, new Set(Object.keys(e.set)));
                 }
                 for (let i = 0; i < beforeRecs.length; i++) {
@@ -985,7 +1021,7 @@ async function patchEntry(target, mode, backupDir) {
             for (const e of target.edits) {
                 const table = check.helper.file[e.table];
                 await table.readRecords();
-                const rec = table.records.find((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
+                const rec = pickRow(table.records, e).row;
                 for (const [k, v] of Object.entries(e.set)) {
                     if (!sameValue(rec.fields[k].value, v)) throw new Error(`${e.table}.${k} did not read back as ${v}; nothing written`);
                 }
@@ -1001,9 +1037,10 @@ async function patchEntry(target, mode, backupDir) {
         if (mode === 'apply' && changed > 0) {
             fs.mkdirSync(backupDir, { recursive: true });
             const base = path.join(backupDir, `${path.basename(target.ast)}.entry${target.index}`);
-            if (!fs.existsSync(base + '.orig')) {
+            if (!fs.existsSync(base + '.json')) {          // the .json is written LAST: a backup without it (the process died between the two) is made again, and the entry is still the original then (the patch comes after)
                 fs.writeFileSync(base + '.orig', raw);
-                fs.writeFileSync(base + '.json', JSON.stringify({ ast: path.resolve(target.ast), index: target.index, start: target.start, size: target.size, sha256: sha256(raw) }, null, 2));
+                fs.writeFileSync(base + '.json.tmp', JSON.stringify({ ast: path.resolve(target.ast), index: target.index, start: target.start, size: target.size, sha256: sha256(raw) }, null, 2));
+                fs.renameSync(base + '.json.tmp', base + '.json');
             }
             writeIntoArchiveAt(target.ast, ranges.map((r) => ({ position: target.start + r.offset, buf: patched.slice(r.offset, r.offset + r.length) })));
             if (Buffer.compare(readEntryAt(target.ast, target.start, target.size), patched) !== 0) {
@@ -1107,6 +1144,7 @@ async function cmdEntryRelocate(args) {
         const size = fs.fstatSync(fd).size;
         const newStart = Math.ceil(size / unit) * unit;
         if (newStart / unit >= Math.pow(256, sizes[2])) throw new Error('the new position does not fit the start position field of the table of contents');
+        if (data.length >= Math.pow(256, sizes[3])) throw new Error('the entry is too big for the size field of the table of contents');           // checked before anything is written: a size that does not fit would leave the row half updated
         fs.writeSync(fd, Buffer.alloc(newStart - size), 0, newStart - size, size);
         fs.writeSync(fd, data, 0, data.length, newStart);
         const put = (fieldIndex, value) => {
@@ -1680,6 +1718,7 @@ async function buildAddPlayEntry(raw, place, rowsByTable) {
             const h = t.header;
             if (h.indexCount) throw new Error(`${tname} has an index that would have to be kept in step: not supported`);
             const oldCount = h.currentRecords;
+            if (oldCount === 0) throw new Error(`table ${tname} has no rows to place the new ones among (an archive this version of Add a play does not know)`);
             const free = h.maxRecords - oldCount;
             const oldRecs = t.records.slice(0, oldCount);
             const names = Object.keys(oldRecs[0].fields);
@@ -1850,7 +1889,7 @@ async function cmdAddPlay(args) {
     if (Object.keys(built).length === 0) { console.log(JSON.stringify({ added: 0, entries: {} })); return; }
     if (rec && rec.active) await addPlayRestore(ast, backupDir);             // the state before the first add; the record of the originals stays
     // the record of the original state comes first, so that a put-back is possible whatever happens next
-    rec = { ast: path.resolve(ast), originalLength, rows: originalRows, entries: map, fingerprint: originalFingerprint(ast, originalRows), tail: originalTail(ast, originalLength), active: false, plays: [], savedAt: new Date().toISOString() };
+    rec = { ast: path.resolve(ast), originalLength, rows: originalRows, entries: map, fingerprint: originalFingerprint(ast, originalRows), tail: originalTail(ast, originalLength), active: true, addedRows: {}, plays: [], savedAt: new Date().toISOString() };       // active before the first write: a process that dies in the middle leaves a record that says the restore must run
     saveAddPlayRecord(backupDir, ast, rec);
     try {
         const fd = fs.openSync(ast, 'r+');

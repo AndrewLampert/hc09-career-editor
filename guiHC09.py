@@ -1908,6 +1908,7 @@ class CSVModel:
         # enabled for just these tables) by save_to_db, then dropped.
         self.pb_pending = {}
         self.load_serial = 0
+        self.save_warnings = []      # values the last save did not write (the bridge skips a value that is not a number or is out of range for its field), for the Saved message
 
     # ---------- Bridge (node bridge.js) ----------
     def run_bridge(self, args):
@@ -2009,7 +2010,12 @@ class CSVModel:
                 self._check_playbook_save(result, grown, backup_path)
                 self.pssk_stored = len(self.pssk)
             else:
-                self.run_bridge(args)
+                try:
+                    result = self.run_bridge(args)
+                except Exception:
+                    shutil.copy2(backup_path, self.db_path)           # the bridge writes the save only after the new one checks out; this also covers a failure inside that last copy
+                    raise
+            self.save_warnings = import_warnings(result)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         if pending:
@@ -5080,6 +5086,16 @@ def load_personnel_data(model, archives, backup_dir=None, cache_dir=None):
     return data
 
 
+def import_warnings(result):
+    """The values an import did not write, from its answer: [text] (the bridge skips a value that is not a number or is out of range for its field, and a row that has no record)."""
+    out = []
+    for r in (result or {}).get("results", []):
+        for w in r.get("warnings") or []:
+            if "skipped" in w or "no matching record" in w:
+                out.append(f"{r.get('table')}: {w}")
+    return out
+
+
 def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=()):
     """The playbook links of a save (PGPL, and PGSL / PGSS for a play with a formation of its own): the links of plays added to the game files put in (a profile is what a NEW career copies its links
     from), and the links of plays that are no longer in the game files taken out. links: {"PGPL": [...], "PGSL": [...], "PGSS": [...]} (hc09_addplay.links_of); remove_plays: the added plays
@@ -5105,7 +5121,7 @@ def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=(
                 else:
                     rows, n_rm = AP.remove_set_pairs(rows, AP.unused_set_pairs(remove_plays, keep_plays))
             if links.get(t):
-                rows, n_add = AP.insert_rows(rows, links[t], AP.LINK_KEYS[t])
+                rows, n_add = AP.insert_rows(rows, links[t], AP.LINK_KEYS[t], AP.LINK_IDENTITY[t])
             if not n_add and not n_rm:
                 continue
             added, removed = added + n_add, removed + n_rm
@@ -12786,11 +12802,14 @@ class App(tk.Tk):
             text=f"Saved: {recent_file_display(self.model.db_path)}  | TeamCol={self.model.team_col or 'N/A'}  | Players={len(self.model.players)}"
         )
 
-        messagebox.showinfo(
-            "Saved",
-            f"Changes written directly to:\n{self.model.db_path}\n\n"
-            f"Backup of the previous version saved to:\n{backup_path}"
-        )
+        skipped = list(getattr(self.model, "save_warnings", []) or [])
+        text = (f"Changes written directly to:\n{self.model.db_path}\n\n"
+                f"Backup of the previous version saved to:\n{backup_path}")
+        if skipped:
+            messagebox.showwarning("Saved, but some values were not written", text + f"\n\n{len(skipped)} value{'s' if len(skipped) != 1 else ''} could not be written (not a number, or out of range for the field):\n" + "\n".join(skipped[:8])
+                                   + (f"\nand {len(skipped) - 8} more" if len(skipped) > 8 else ""))
+        else:
+            messagebox.showinfo("Saved", text)
 
     # ---------- Teams / Players ----------
     def refresh_teams(self):
@@ -14143,9 +14162,21 @@ class App(tk.Tk):
             self.reload_book_play_names(archives[0])
         return targets, report
 
+    def _entry_hint(self, boot_ast, table):
+        """['--top-index', n] when the entry that holds `table` in this archive is known from an earlier read (the bridge tries it first and scans the whole archive only if it is not there), else []."""
+        n = getattr(self, "_entry_hints", {}).get((os.path.normcase(os.path.abspath(boot_ast)), table))
+        return ["--top-index", str(n)] if n is not None else []
+
+    def _entry_hint_keep(self, boot_ast, table, answer):
+        if not hasattr(self, "_entry_hints"):
+            self._entry_hints = {}
+        if isinstance(answer, dict) and answer.get("entryIndex") is not None:
+            self._entry_hints[(os.path.normcase(os.path.abspath(boot_ast)), table)] = answer["entryIndex"]
+
     def _book_name_rows(self, boot_ast, cache):
         """The entry of qkl_boot.ast that holds the playbooks' own names for plays (PPPN) and its rows: ({ast, index, start, size}, [{BOKL, PLYL, PPPM}]). Bridge only (worker thread)."""
-        ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows", "--out-dir", cache])
+        ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows", "--out-dir", cache] + self._entry_hint(boot_ast, "PPPN"))
+        self._entry_hint_keep(boot_ast, "PPPN", ex)
         loc = self.model.run_bridge(["entry-locate", "--ast", boot_ast, "--index", str(ex["entryIndex"])])
         return {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"], "file": loc.get("file", os.path.basename(loc["ast"]))}, read_csv_dicts(os.path.join(cache, "pppn.csv"))
 
@@ -14207,7 +14238,8 @@ class App(tk.Tk):
         """A fresh read (nothing cached) of the game's PLAB rows and where their entry is: ([row dicts], {ast, index, start, size})."""
         tmp = tempfile.mkdtemp(prefix="hc09_plab_")
         try:
-            ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", PN.TABLE, "--require-fields", PN.EXPORT_FIELDS, "--require-rows", "--out-dir", tmp])
+            ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", PN.TABLE, "--require-fields", PN.EXPORT_FIELDS, "--require-rows", "--out-dir", tmp] + self._entry_hint(boot_ast, PN.TABLE))
+            self._entry_hint_keep(boot_ast, PN.TABLE, ex)
             loc = self.model.run_bridge(["entry-locate", "--ast", boot_ast, "--index", str(ex["entryIndex"])])
             return read_csv_dicts(os.path.join(tmp, "plab.csv")), {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"]}
         finally:
