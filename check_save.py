@@ -260,7 +260,7 @@ def main(argv):
         checked = skipped = 0
         for path in saves[:MAX_SAVES]:
             kind, _n = D.classify_save(path)
-            if kind == "other" and len(saves) > 1:
+            if kind == "other" and (len(saves) > 1 or os.path.isdir(given)):         # in a folder, a file that is not a save is skipped (a lone one too); a file given by name is reported on
                 skipped += 1
                 continue                               # a folder: skip the files that are not saves (headers, thumbnails) without a word, unless nothing in it is a save (below)
             try:

@@ -52,7 +52,8 @@ def clean_name(name, what="name"):
 def safe_folder_name(value):
     """True when a `folder` value read from shelf.json is a plain folder name (no separator, not '.', '..' or empty, not a drive or a path): a damaged or edited file must not make the shelf look
     for a save in the folder above the wrapper or somewhere else."""
-    return isinstance(value, str) and value not in ("", ".", "..") and os.path.basename(value) == value and "/" not in value and "\\" not in value and ":" not in value
+    return (isinstance(value, str) and value not in ("", ".", "..") and value == value.rstrip(" .")          # Windows drops trailing spaces and dots, so ".. " would mean ".."
+            and os.path.basename(value) == value and "/" not in value and "\\" not in value and ":" not in value)
 
 
 def write_meta(path, meta):
