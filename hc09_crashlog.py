@@ -72,6 +72,14 @@ def shorten(path, keep=2):
     return "/".join(parts[-keep:])
 
 
+_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/(?=[\w.-]+/))[^\s'\"<>|*?]*")          # C:\dir\file, C:/dir/file, \\server\share, /dir/file
+
+
+def shorten_paths(text, keep=2):
+    """The text with every whole path in it cut to its last `keep` parts (a path with a space in it is cut where the space is, which still drops the folders above)."""
+    return _PATH.sub(lambda m: shorten(m.group(0), keep) or m.group(0), str(text or ""))
+
+
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # what is kept while the editor runs
 def note(text):
@@ -82,7 +90,7 @@ def note(text):
 
 def bridge_failed(args, message):
     """A bridge command that failed, with the reason (the bridge's own words, the first lines)."""
-    lines = [ln for ln in str(message or "").splitlines() if ln.strip()]
+    lines = [shorten_paths(ln) for ln in str(message or "").splitlines() if ln.strip()]          # the bridge's own words, with whole paths cut to their last two parts
     with _lock:
         _bridge_fails.append((time.time(), summarize_bridge(args)[1], "\n".join(lines[:12])))
     note("bridge FAILED: " + summarize_bridge(args)[1])
@@ -123,7 +131,8 @@ def summarize_bridge(args):
 
 def log_write(text):
     """Something the editor wrote to the game files or to a save (and how it went): kept in memory and, once install() has run, in the write log file next to the reports."""
-    text = " ".join(str(text).split())                       # one line per record, whatever the text holds (an error message with line breaks)
+    text = " ".join(redact(str(text)).split())               # one line per record, whatever the text holds (an error message with line breaks); the home folder and user name first, so that a path with spaces in it is cut right
+    text = shorten_paths(text)                               # any whole path left in it (an error message names the files: "[Errno 13] Permission denied: 'D:\Saves\...'") is cut to its last two parts
     line = redact(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {text[:400]}")          # the file is private to this computer, but it is also read into reports: the home folder and user name are blanked out here too
     with _lock:
         _writes.append(line)
