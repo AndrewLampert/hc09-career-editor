@@ -415,7 +415,9 @@ def candidate_xenia_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search
 # folders around it are not Xenia's content/<profile id>/<title id>/<type>/ tree:
 #   ibukun5588:  <Documents>\NFL Head Coach 09\Saves\<game version, 1.0 or 1.2>\<package>\<package>   (one folder per save, named CAREER-<name>, ROSTER-<name> or PROFILE-HeadCoach,
 #                holding one file of the same name; a <name>.name file sits beside it; replaced saves are copied to Saves\Backups first, which is not a save)
-#   tools81:     <install folder>\build\userdata\content\<type>\<package>\...   (packages are folders under the content type; the files inside are not described)
+#   tools81:     <install folder>\build\userdata\content\<type>\<package>\<package>   (type 00000001; HC27.exe, the game with today's rosters, keeps its own saves in build\userdata-hc27\content,
+#                its README gives ...\content\00000001\CAREER-<name>\CAREER-<name>); the game reads the disc image named by IsoPath in <install folder>\hc09.ini while you play, so qkl_boot.ast
+#                is not a loose file there (hc09_iso reads it out of the image)
 # A package folder is therefore recognised by what is in it: a file of the same name as the folder that is a career or profile save.
 # ---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 PCPORT_DOCS_DIR = "NFL Head Coach 09"           # <Documents>\NFL Head Coach 09
@@ -424,9 +426,11 @@ PCPORT_VERSIONS = ("1.0", "1.2")                # the game versions the ibukun55
 PCPORT_MAX_DEPTH = 4                            # how many levels below a saves folder a package folder may sit
 BACKUP_DIR_NAME = "hc09-editor-backups"         # where the editor keeps the copy it makes of an Xbox 360 save before writing it (see is_xbox_save)
 PCPORT_SKIP_DIRS = {"backups", BACKUP_DIR_NAME}  # folders whose saves are old copies, not saves to open
+TOOLS81_USERDATA = ("userdata", "userdata-hc27")                 # HC09.exe's saves and HC27.exe's
 TOOLS81_CONTENT = os.path.join("build", "userdata", "content")
+TOOLS81_INI = "hc09.ini"                                        # in the install folder: IsoPath=<the disc image>
 PCPORT_INSTALL_DIRS = (r"C:\Games\HC09Recomp", r"C:\HC09Recomp", r"D:\Games\HC09Recomp")      # the tools81 README suggests C:\Games\HC09Recomp
-PCPORT_PROGRAMS = ("hc09", "hc09-launcher")      # process names (without .exe) of the PC versions: they rewrite the saves they have open
+PCPORT_PROGRAMS = ("hc09", "hc09-launcher", "hc27")  # process names (without .exe) of the PC versions (HC27.exe is the recompiled game with today's rosters): they rewrite the saves they have open
 
 
 def documents_dirs():
@@ -462,9 +466,11 @@ def pcport_roots_in(path):
     name = os.path.basename(path).lower()
     parent = os.path.basename(os.path.dirname(path)).lower()
     cands = []
-    if name == PCPORT_SAVES_DIR.lower() or (name == "content" and parent == "userdata") or (name in PCPORT_VERSIONS and parent == PCPORT_SAVES_DIR.lower()):
+    if name == PCPORT_SAVES_DIR.lower() or (name == "content" and parent in TOOLS81_USERDATA) or (name in PCPORT_VERSIONS and parent == PCPORT_SAVES_DIR.lower()):
         cands.append(path)
-    cands += [os.path.join(path, PCPORT_SAVES_DIR), os.path.join(path, PCPORT_DOCS_DIR, PCPORT_SAVES_DIR), os.path.join(path, TOOLS81_CONTENT), os.path.join(path, "userdata", "content")]
+    cands += [os.path.join(path, PCPORT_SAVES_DIR), os.path.join(path, PCPORT_DOCS_DIR, PCPORT_SAVES_DIR)]
+    for d in TOOLS81_USERDATA:
+        cands += [os.path.join(path, "build", d, "content"), os.path.join(path, d, "content")]
     return [c for c in cands if os.path.isdir(c)]
 
 
@@ -479,14 +485,14 @@ def common_pcport_roots():
 
 
 def pcport_root_of(path):
-    """The PC-version saves folder a save lies in (found by its shape on the way up), or None: <...>\\NFL Head Coach 09\\Saves, or <...>\\userdata\\content."""
+    """The PC-version saves folder a save lies in (found by its shape on the way up), or None: <...>\\NFL Head Coach 09\\Saves, or <...>\\userdata\\content (userdata-hc27 for HC27.exe)."""
     cur = os.path.abspath(path)
     for _ in range(8):
         parent = os.path.dirname(cur)
         name, pname = os.path.basename(cur).lower(), os.path.basename(parent).lower()
         if name == PCPORT_SAVES_DIR.lower() and pname == PCPORT_DOCS_DIR.lower():
             return cur
-        if name == "content" and pname == "userdata":
+        if name == "content" and pname in TOOLS81_USERDATA:
             return cur
         if parent == cur:
             return None
@@ -515,7 +521,7 @@ def _pcport_package_files(root):
 
 def list_pcport_saves(roots):
     """Every career and profile save of the PC versions in the given saves folders, newest first: [{name, path, mtime, size, root, kind ("career" | "profile"), tables, package, version
-    ("1.0" or "1.2" for the ibukun5588 port, else "")}]. Roster saves and anything that is not a save are left out."""
+    ("1.0" or "1.2" for the ibukun5588 port, else ""), variant ("HC27" for the saves of HC27.exe, else "")}]. Roster saves and anything that is not a save are left out."""
     out, seen = [], set()
     for root in roots:
         for path in _pcport_package_files(root):
@@ -531,7 +537,7 @@ def list_pcport_saves(roots):
             st = os.stat(path)
             shown = re.sub(r"^(CAREER|PROFILE)-", "", package, flags=re.I)
             out.append({"name": shown or package, "path": path, "mtime": st.st_mtime, "size": st.st_size, "root": os.path.dirname(os.path.dirname(path)), "kind": kind, "tables": tables,
-                        "package": package, "version": group if group in PCPORT_VERSIONS else ""})
+                        "package": package, "version": group if group in PCPORT_VERSIONS else "", "variant": "HC27" if os.sep + "userdata-hc27" + os.sep in os.path.abspath(path).lower() + os.sep else ""})
     return sorted(out, key=lambda s: -s["mtime"])
 
 
@@ -542,6 +548,51 @@ def pcport_profiles_for(career_path):
         return []
     group = os.path.dirname(os.path.dirname(os.path.abspath(career_path)))
     return [s["path"] for s in list_pcport_saves([group]) if s["kind"] == "profile"]
+
+
+def recomp_install_of(path):
+    """The install folder of a recompiled PC version (tools81) a path lies in: the nearest folder above it that holds hc09.ini, or None."""
+    cur = os.path.abspath(path) if path else ""
+    for _ in range(10):
+        if not cur:
+            return None
+        if os.path.isfile(os.path.join(cur, TOOLS81_INI)):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def recomp_iso(install_dir):
+    """The disc image a tools81 install plays from: IsoPath in its hc09.ini (any section, quotes allowed), when that file exists; else ""."""
+    try:
+        with open(os.path.join(install_dir, TOOLS81_INI), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                key, sep, value = line.partition("=")
+                if sep and key.strip().lower() == "isopath":
+                    iso = os.path.normpath(value.strip().strip("'\""))
+                    return iso if os.path.isfile(iso) else ""
+    except OSError:
+        pass
+    return ""
+
+
+def find_recomp_isos(recent_paths=(), extra_dirs=()):
+    """The disc images of the tools81 installs this computer has, best first: the install a recent save belongs to, the ones the user added (the install folder or anything inside), the usual places."""
+    out = []
+
+    def add(install):
+        iso = recomp_iso(install) if install else ""
+        if iso and os.path.normcase(iso) not in [os.path.normcase(o) for o in out]:
+            out.append(iso)
+
+    for p in list(recent_paths) + list(extra_dirs):
+        add(recomp_install_of(p))
+    for d in PCPORT_INSTALL_DIRS + (os.path.join(os.path.expanduser("~"), "HC09Recomp"),):
+        add(d if os.path.isdir(d) else None)
+    return out
 
 
 def candidate_pcport_roots(recent_paths=(), extra_dirs=()):

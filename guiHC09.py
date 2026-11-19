@@ -80,6 +80,11 @@ except ImportError:
     hc09_detect = None
 
 try:
+    import hc09_iso             # reads a file out of an Xbox 360 disc image (the recompiled PC versions play from one); the editor still runs without it
+except ImportError:
+    hc09_iso = None
+
+try:
     import hc09_update          # the update check (next to this file); the editor still runs without it
 except ImportError:
     hc09_update = None
@@ -5569,6 +5574,7 @@ class PersonnelDialog(tk.Toplevel):
         self.config(cursor="watch")
         self.update_idletasks()
         try:
+            self.app._refuse_write_to_iso_copy()
             apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
         except Exception as e:
             messagebox.showerror(what, str(e))
@@ -5610,6 +5616,7 @@ class PersonnelDialog(tk.Toplevel):
         self.config(cursor="watch")
         self.update_idletasks()
         try:
+            self.app._refuse_write_to_iso_copy()
             res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
         except Exception as e:
             messagebox.showerror("Restore all", str(e))
@@ -11945,7 +11952,7 @@ class App(tk.Tk):
         have = {os.path.normcase(os.path.abspath(f["path"])) for f in found}
         for sv in hc09_detect.list_pcport_saves(self._detect_pcport_roots()):
             if sv["kind"] == "career" and os.path.normcase(os.path.abspath(sv["path"])) not in have:
-                found.append({"name": f"{sv['name']} (HC09 PC{' ' + sv['version'] if sv['version'] else ''})", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"],
+                found.append({"name": f"{sv['name']} (" + ("HC27" if sv.get("variant") == "HC27" else f"HC09 PC{' ' + sv['version'] if sv['version'] else ''}") + ")", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"],
                               "size": sv["size"], "root": sv["root"], "platform": "pcport"})
         if SHELF is not None:                       # saves on the shelf are not saves of the game, even when the shelf folder sits inside a folder that is searched
             shelf_root = self.ui_prefs.get("shelf_dir") or SHELF.default_shelf_dir()
@@ -13350,6 +13357,7 @@ class App(tk.Tk):
     def game_file_apply(self, changes, archives, mode="apply"):
         """Write the changes of hc09_gamefiles.changes_for into every copy of the play database that holds the play (bridge entry-patch: every entry is checked before the first is written,
         each is backed up the first time). Returns (targets, [(copy, values)]). Raises when the play cannot be found or a row is not what was read."""
+        self._refuse_write_to_iso_copy()
         if GF.is_empty(changes):
             raise RuntimeError("Nothing is changed in this play.")
         copies, cache = self.game_file_copies(archives)
@@ -13370,6 +13378,7 @@ class App(tk.Tk):
 
     def game_file_restore(self, archives):
         """Write every backed-up entry of the play databases back (the Set personnel tool shares the backups); returns how many were put back."""
+        self._refuse_write_to_iso_copy()
         copies, _cache = self.game_file_copies(archives)
         names = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(GF.NAMES_ENTRY)])      # the entry of the playbooks' own play names (backed up only if a rename was made)
         copies = list(copies) + [{"ast": names["ast"], "index": names["index"], "start": names["start"], "size": names["size"], "file": names["file"]}]
@@ -13420,6 +13429,7 @@ class App(tk.Tk):
     def add_play_write(self, boot_ast, plays):
         """Make the game files hold exactly these added plays (hc09_addplay.build results): the archive goes back to its state before the first add and the entries are built again from their
         untouched originals; an empty list puts it all back. Every entry is checked before anything is written. Returns the bridge's report."""
+        self._refuse_write_to_iso_copy()
         if not plays:
             return self.model.run_bridge(["add-play-restore", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
         spec = os.path.join(tempfile.gettempdir(), f"hc09_addplay_{os.getpid()}.json")
@@ -13554,17 +13564,84 @@ class App(tk.Tk):
             self.ui_prefs["boot_ast_path"] = found
             save_ui_prefs(self.ui_prefs)
             return found
+        iso = self._recomp_disc_image()
+        if iso:                                  # a recompiled PC version plays from a disc image: read the file out of it
+            boot = self._boot_from_iso(iso)
+            if boot:
+                return boot
         messagebox.showinfo(
             f"{feature} needs game data",
             f"This feature reads the game's {what} straight from your own game files.\n\n"
-            f"Next, locate {BOOT_AST_FILENAME} (inside the game's PS3_GAME/USRDIR folder). "
-            "This is only needed once.",
+            f"Next, locate {BOOT_AST_FILENAME}: inside the game's PS3_GAME/USRDIR folder (PS3), or next to default.xex (Xbox 360), "
+            "or pick the game's disc image (.iso) and the editor reads it out of the image. This is only needed once.",
         )
         path = filedialog.askopenfilename(
-            title=f"Locate {BOOT_AST_FILENAME} (inside the game's PS3_GAME/USRDIR folder)",
-            filetypes=[("AST archive", BOOT_AST_FILENAME), ("All files", "*.*")],
+            title=f"Locate {BOOT_AST_FILENAME} (PS3_GAME/USRDIR, or next to default.xex) or the game's disc image (.iso)",
+            filetypes=[("Game files", (BOOT_AST_FILENAME, "*.iso")), ("AST archive", BOOT_AST_FILENAME), ("Disc image", "*.iso"), ("All files", "*.*")],
         )
+        if path and path.lower().endswith(".iso"):
+            return self._boot_from_iso(path)
         return path or ""
+
+    ISO_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "iso")
+
+    def _recomp_disc_image(self):
+        """The disc image of a recompiled PC version (hc09.ini's IsoPath in the install folder the open or a recent save belongs to, or in the usual places), or ""."""
+        if hc09_detect is None:
+            return ""
+        paths = [self.model.db_path] if getattr(self.model, "db_path", None) else []
+        paths += list(load_recent_files())
+        isos = hc09_detect.find_recomp_isos(paths, self.ui_prefs.get("extra_rpcs3_dirs", []))
+        return isos[0] if isos else ""
+
+    def _boot_from_iso(self, iso):
+        """qkl_boot.ast out of a disc image, copied into the editor's cache (once: again when the image changed); returns the copy's path, or "" when it could not be read (the reason is shown). The copy is only
+        for reading: the recompiled game plays from the image itself, so game files written here would never reach it (_refuse_write_to_iso_copy)."""
+        if hc09_iso is None:
+            messagebox.showerror("Disc image", "The disc image reader (hc09_iso.py) is missing from the editor's folder.")
+            return ""
+        import hashlib
+        iso = os.path.abspath(iso)
+        folder = os.path.join(self.ISO_CACHE_DIR, hashlib.sha1(os.path.normcase(iso).encode("utf-8")).hexdigest()[:8])
+        dest, meta = os.path.join(folder, BOOT_AST_FILENAME), os.path.join(folder, "source.json")
+        try:
+            st = os.stat(iso)
+            want = {"iso": iso, "size": st.st_size, "mtime": int(st.st_mtime)}
+            try:
+                with open(meta, encoding="utf-8") as f:
+                    have = json.load(f)
+            except (OSError, ValueError):
+                have = None
+            if not (os.path.isfile(dest) and have == want):
+                messagebox.showinfo("Reading the disc image", f"The editor reads {BOOT_AST_FILENAME} (about 460 MB) out of the disc image\n{iso}\ninto its own folder, once. This can take a minute; the window may not answer meanwhile.")
+                self.config(cursor="watch")
+                self.update_idletasks()
+                try:
+                    hc09_iso.extract(iso, BOOT_AST_FILENAME, dest)
+                finally:
+                    self.config(cursor="")
+                with open(meta, "w", encoding="utf-8") as f:
+                    json.dump(want, f)
+        except (ValueError, OSError) as e:
+            messagebox.showerror("Disc image", f"{BOOT_AST_FILENAME} could not be read out of the disc image.\n\n{e}\n\n{hc09_iso.describe(iso)}")
+            return ""
+        self.ui_prefs["boot_ast_path"] = dest
+        save_ui_prefs(self.ui_prefs)
+        return dest
+
+    def _boot_is_from_iso(self):
+        """Is the game file the editor uses a copy it read out of a disc image?"""
+        path = self.ui_prefs.get("boot_ast_path") or ""
+        try:
+            return bool(path) and os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(self.ISO_CACHE_DIR)) + os.sep)
+        except OSError:
+            return False
+
+    def _refuse_write_to_iso_copy(self):
+        """Raises RuntimeError when the game files are a copy read out of a disc image: a change to the copy would never reach the game (the recompiled PC version plays from the image itself)."""
+        if self._boot_is_from_iso():
+            raise RuntimeError("The game files here are a copy the editor read out of a disc image, for reading only: the recompiled PC game plays from the disc image itself, so a change made here would never reach it. "
+                               "Reading works (play, formation and playbook names, the Playbooks tab, Player Type Fit); changing the game files needs the game's loose files (the Xbox 360 files next to default.xex, as Xenia plays them).")
 
     def _extract_philosophy_weights_from_game(self):
         """Pull the PEAW / PEIW / PEOW / PESW / LPHC tables and the Size lookups (LPHG, LPWG, EPHB, EPWB, PLPS) out of the user's own qkl_boot.ast into a local cache and

@@ -124,7 +124,8 @@ editor writes that save.
 - [Node.js](https://nodejs.org/) 18+, available on your `PATH` (used only to run the
   bridge script; the GUI itself doesn't need it to start).
 - *Optional, for names and portraits:* your own copy of the game's files (the
-  `PS3_GAME/USRDIR` folder). Player Type Fit and the Playbooks tab read the presets' weights and
+  `PS3_GAME/USRDIR` folder of the PS3 game; for the Xbox 360 game the same files lie next to
+  `default.xex`; for the recompiled PC game the disc image, see below). Player Type Fit and the Playbooks tab read the presets' weights and
   play, formation and playbook names from `qkl_boot.ast`; the editor asks you to locate
   it the first time and keeps a local cache. The portrait viewer reads `qkl_fe2ig.ast`
   (use **Locate Game Files...** in the Player Editor tab). The Playbooks tab also reads your
@@ -174,6 +175,12 @@ python guiHC09.py
    in the other port's install folder. **Saves...** looks there too, marks the careers *(HC09 PC 1.2)*, leaves the `Backups` folder out and pairs a career with the profile
    of the same game version; **Look in another folder...** takes the `Saves` folder (or the folder that holds it). This was written from the two projects' README pages and
    not checked against a real install, and whether the PC versions accept an edited save is untested: close the game first and back up the folder.
+   **The recompiled game (tools81, `HC09.exe` and `HC27.exe`)**: its saves are `<install folder>\build\userdata\content\00000001\CAREER-<name>\CAREER-<name>` (HC27's, the game with today's
+   rosters, in `build\userdata-hc27`); the editor finds the install in `C:\Games\HC09Recomp` or from a folder you add, marks the careers *(HC09 PC)* or *(HC27)*, pairs a career with the profile of its own game, and counts
+   `HC09.exe` and `HC27.exe` as running games. That game plays from your **disc image** (`IsoPath` in the install's `hc09.ini`), so there is no loose `qkl_boot.ast`: the editor reads it out of the image itself
+   (`hc09_iso.py`, once, into its own folder; or pick the `.iso` in the file dialog that asks for `qkl_boot.ast`), which is enough for the play, formation and playbook names, the Playbooks tab and Player Type Fit.
+   **Game files read from an image are read only**: the recompiled game plays from the image itself, so Add a play, Make a game play, Convert my plays and Set personnel refuse to write (the editor says why); they need the
+   loose files, as Xenia plays them. The image reader was written from the disc format and tried on images made for the tests, not on a real disc image.
    **Save shelf...** (a button in the Saves window) gets round the game's list of 10 saves: put a career away, bring it back later, or back it up as often as you like. A save is
    one folder (in RPCS3, `savedata/BLUS30128-CAREER-<NAME>`); **Put on shelf** moves it out of the game into a shelf folder of your own (by default `Documents\hc09-save-shelf`; change it
    to any drive), **Shelve a copy** backs it up and leaves the game's save alone, **Bring back** puts it where it came from, **Bring back a copy** restores a backup (the shelf keeps it) and
