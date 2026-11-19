@@ -13851,10 +13851,7 @@ class App(tk.Tk):
         copies, cache = self.game_file_copies(archives)
         names_entry = names_rows = None
         if changes["name"]:                       # the playbooks' own names for the play (PPPN) are in another entry of qkl_boot.ast
-            ex = self.model.run_bridge(["shipped-table-export", "--ast", archives[0], "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows", "--out-dir", cache])
-            loc = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(ex["entryIndex"])])
-            names_entry = {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"]}
-            names_rows = read_csv_dicts(os.path.join(cache, "pppn.csv"))
+            names_entry, names_rows = self._book_name_rows(archives[0], cache)
         try:
             targets, report = GF.targets_for(copies, cache, changes, names_entry, names_rows)
         except ValueError as e:
@@ -13862,14 +13859,53 @@ class App(tk.Tk):
         if not targets:
             raise RuntimeError("The game files already have these values.")
         apply_personnel_targets(self.model, targets, self._personnel_backup_dir(), mode=mode)
+        if changes["name"]:
+            self.reload_book_play_names(archives[0])
         return targets, report
+
+    def _book_name_rows(self, boot_ast, cache):
+        """The entry of qkl_boot.ast that holds the playbooks' own names for plays (PPPN) and its rows: ({ast, index, start, size}, [{BOKL, PLYL, PPPM}]). Bridge only (worker thread)."""
+        ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows", "--out-dir", cache])
+        loc = self.model.run_bridge(["entry-locate", "--ast", boot_ast, "--index", str(ex["entryIndex"])])
+        return {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"], "file": loc.get("file", os.path.basename(loc["ast"]))}, read_csv_dicts(os.path.join(cache, "pppn.csv"))
+
+    def reload_book_play_names(self, boot_ast):
+        """After the game files' playbook names changed (a rename, Put the game files back): drop the cached copy and read them again, so that the editor shows what the files hold. Returns the
+        rows ([{BOKL, PLYL, PPPM}], [] when they cannot be read). Bridge only (worker thread)."""
+        try:
+            os.remove(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE))
+        except OSError:
+            pass
+        try:
+            if self._ensure_book_play_names(boot_ast):
+                return read_csv(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE))
+        except Exception:
+            pass
+        return []
+
+    def game_file_rename(self, lib, plyl, name, books, archives):
+        """Give a play of the game a new name. books None: everywhere (the play's own name in every copy of the play database that holds it, and its name in every playbook that has it);
+        else a list of playbook numbers (BOKL): the name in those playbooks only, nothing else changes. Every entry is checked before the first write and backed up the first time (the Set
+        personnel and Make a game play backups: Put the game files back undoes it). Returns (targets, report, missing, rows): rows = the playbook names read again afterwards.
+        Raises when nothing would change or a row is not what was read. Bridge only (worker thread)."""
+        self._refuse_write_to_iso_copy(*archives)
+        if books is None:
+            targets, report = self.game_file_apply(GF.name_only_changes(lib, plyl, name), archives)
+            return targets, report, [], self.reload_book_play_names(archives[0])
+        os.makedirs(self.GAMEFILE_CACHE_DIR, exist_ok=True)
+        names_entry, names_rows = self._book_name_rows(archives[0], self.GAMEFILE_CACHE_DIR)
+        targets, report, missing = GF.book_name_targets(names_entry, names_rows, plyl, books, name)
+        if not targets:
+            raise RuntimeError("Those playbooks already call the play that." + (f" ({len(missing)} playbook(s) have no name row for the play.)" if missing else ""))
+        apply_personnel_targets(self.model, targets, self._personnel_backup_dir())
+        return targets, report, missing, self.reload_book_play_names(archives[0])
 
     def game_file_restore(self, archives):
         """Write every backed-up entry of the play databases back (the Set personnel tool shares the backups); returns how many were put back."""
         self._refuse_write_to_iso_copy(*archives)
-        copies, _cache = self.game_file_copies(archives)
-        names = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(GF.NAMES_ENTRY)])      # the entry of the playbooks' own play names (backed up only if a rename was made)
-        copies = list(copies) + [{"ast": names["ast"], "index": names["index"], "start": names["start"], "size": names["size"], "file": names["file"]}]
+        copies, cache = self.game_file_copies(archives)
+        names, _rows = self._book_name_rows(archives[0], cache)        # the entry of the playbooks' own play names (found by its table, as when it was written: an Xbox 360 archive numbers its entries one higher); backed up only if a rename was made
+        copies = list(copies) + [dict(names)]
         if PN is not None:                        # the playbooks' own names (Rename playbooks) are in another entry: backed up only if a playbook was renamed
             try:
                 _rows, plab = self.playbook_rows_for_rename(archives[0])
@@ -13883,6 +13919,7 @@ class App(tk.Tk):
         holder.copies = copies
         res = restore_personnel_files(self.model, holder, self._personnel_backup_dir())
         self._forget_playbook_names()
+        self.reload_book_play_names(archives[0])                       # the playbook names may be as they were before a rename: the editor reads them again
         return sum(1 for r in res.get("results", []) if r.get("restored"))
 
     # ---- Rename playbooks (the default playbooks' names: PLAB.BNAM in qkl_boot.ast, see hc09_playbooknames.py)

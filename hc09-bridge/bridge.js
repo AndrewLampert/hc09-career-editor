@@ -917,9 +917,10 @@ async function patchEntry(target, mode, backupDir) {
     const out = path.join(os.tmpdir(), `hc09_entry_out_${process.pid}_${Math.random().toString(36).slice(2)}.db`);
     try {
         await helper.save(out);
-        const rawHeaderStale = !dbHeaderIsConsistent(raw);           // an earlier version of the tools (a rename in entry 46, a grown entry) left a size and checksum that do not match the entry
         const unchanged = fs.readFileSync(out);
-        const same = rawHeaderStale ? Buffer.compare(fixDbHeader(Buffer.from(unchanged)), fixDbHeader(Buffer.from(raw))) === 0 : Buffer.compare(unchanged, raw) === 0;
+        // The entry's size and checksum fields are set again by fixDbHeader whenever an entry is written, and the library's own save writes them differently for an entry that was written before
+        // (seen after a rename in entry 46: six bytes in the header, nothing else), so the comparison is of everything but those two fields, byte for byte.
+        const same = Buffer.compare(fixDbHeader(Buffer.from(unchanged)), fixDbHeader(Buffer.from(raw))) === 0;
         if (!same) {
             throw new Error(`${path.basename(target.ast)} #${target.index}: saving the entry unchanged does not reproduce it byte for byte; nothing written`);
         }
