@@ -344,7 +344,7 @@ def describe(lib, changes):
         lines.append(f"The run hole becomes {changes['plrd']['hole']}.")
     if changes["plcm"]:
         lines.append("The play combination row changes.")
-    moved = sorted(changes["setp"]) or sorted(changes["setg"])
+    moved = sorted(set(changes["setp"]) | set(changes["setg"]))          # a slot that moves on the diagram and one that only changes in yards are both written (targets_for)
     if moved:
         lines.append("Where these players line up: " + ", ".join(label[p] for p in moved) + ".")
         n = len(changes["shared_with"])
