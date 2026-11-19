@@ -10,6 +10,7 @@ the play gets the same change, like the Set personnel tool.
 
 Standard library only (no Tk). changes_for() works out what changes from the Play creator's state; targets_for() turns it into bridge entry-patch targets, one per copy.
 """
+import collections
 import csv
 import os
 
@@ -55,6 +56,15 @@ def candidates(lib, base, overrides, plan=None, reads=None, alignment=None):
     return [(base, lib.plays[base]["name"], len(lib.books_of_play.get(base, ())))] + out
 
 
+MOVE_TOLERANCE = 0.001           # yards: a player closer than this to his stock place has not moved
+
+
+def moved_slots(stock_alignment, alignment):
+    """The slots of an alignment ({slot: (x, y)} in yards) that are not where the stock set has them (stock_alignment: {slot: {"x", "y"}} as lib.alignment gives it). One test for Add a play and Make a game play."""
+    return {poso for poso, (x, y) in (alignment or {}).items()
+            if poso in stock_alignment and (abs(float(x) - stock_alignment[poso]["x"]) > MOVE_TOLERANCE or abs(float(y) - stock_alignment[poso]["y"]) > MOVE_TOLERANCE)}
+
+
 def alignment_changes(lib, d, new, alignment):
     """Where moved players line up, against the stock set: ({slot: {artx, arty}} the diagram's places, {slot: {x___, y___, fx__, fy__}} the yards of the set's normal alignment group (with the flipped
     partner's), the id of that group). `new` is what build_custom_play made for the play with that alignment. Only the slots that moved are in the first two."""
@@ -62,7 +72,7 @@ def alignment_changes(lib, d, new, alignment):
     setp_changes, setg_changes = {}, {}
     slots = {s["poso"]: s for s in st["slots"]}
     stock_al = lib.alignment(st["setl"])
-    moved = {poso for poso, (x, y) in (alignment or {}).items() if poso in stock_al and (abs(float(x) - stock_al[poso]["x"]) > 0.001 or abs(float(y) - stock_al[poso]["y"]) > 0.001)}
+    moved = moved_slots(stock_al, alignment)
     for nr in new["SETP"]:
         poso = int(nr["poso"])
         if poso not in moved:
@@ -72,7 +82,7 @@ def alignment_changes(lib, d, new, alignment):
         if diff:
             setp_changes[poso] = diff
     dflt = next((int(g["SGF_"]) for g in lib.tables["SGFF"] if int(g["SETL"]) == st["setl"] and g["dflt"] == "1"), None)
-    if dflt is not None and setp_changes:
+    if dflt is not None and moved:                 # the yards follow the players that moved: a move smaller than the diagram's resolution leaves no SETP change but is still a move
         poso_of_new = {int(r["SETP"]): int(r["poso"]) for r in new["SETP"]}
         new_dflt = next((int(g["SGF_"]) for g in new["SGFF"] if g["dflt"] == "1"), None)
         setp_of = {s["setp"]: s["poso"] for s in st["slots"]}
@@ -172,6 +182,27 @@ def is_master(c, copies):
     return c["file"] == "qkl_boot.ast" and c["index"] == 40
 
 
+def _alike(rows):
+    """[(row, nth, count)] for rows of the playbooks' names (PPPN): the place of each among the rows with the same (BOKL, PLYL) and how many there are. The table has 23 pairs twice (9,166 rows, 9,133
+    distinct): an edit of one must say which, because the bridge refuses a match of several rows."""
+    key = lambda r: (int(r["BOKL"]), int(r["PLYL"]))
+    total = collections.Counter(key(r) for r in rows)
+    seen = collections.Counter()
+    out = []
+    for r in rows:
+        out.append((r, seen[key(r)], total[key(r)]))
+        seen[key(r)] += 1
+    return out
+
+
+def _pppn_edit(r, nth, count, plyl, name):
+    """The entry-patch edit that gives the playbook's row of the play (the nth of `count` alike) the name; nth and count only when there are several alike."""
+    edit = {"table": "PPPN", "match": {"BOKL": int(r["BOKL"]), "PLYL": int(plyl)}, "expect": {"PPPM": _text(r["PPPM"])}, "set": {"PPPM": name}}
+    if count > 1:
+        edit["nth"], edit["count"] = nth, count
+    return edit
+
+
 def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
     """Bridge entry-patch targets (one per copy of the play database that holds the play or its set) for the changes of changes_for(), read from the scan the bridge made of the copies
     (play-sets-scan with SCAN_TABLES, into cache_dir). Each edit carries the value the copy has now (expect) so that nothing is written over a row that is not what was read. The
@@ -220,7 +251,9 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
             for key, table in (("plpd", "PLPD"), ("plcm", "PLCM"), ("plrd", "PLRD")):
                 if changes[key]:
                     rows = [r for r in (_read(cache_dir, c["base"], table) or []) if int(r["PLYL"]) == plyl]
-                    if len(rows) == 1:
+                    if len(rows) > 1:
+                        raise ValueError(f"The play has {len(rows)} {table} rows in {c['file']} #{c['index']}; the editor changes a play that has one such row, so nothing was written (the change would have been left out of the game's play).")
+                    if rows:
                         add(table, {"PLYL": plyl}, changes[key], rows[0])
         setp_rows = {(int(r["SETL"]), int(r["poso"])): r for r in (_read(cache_dir, c["base"], "SETP") or [])}
         setg_rows = {(int(r["SETP"]), int(r["SGF_"])): r for r in (_read(cache_dir, c["base"], "SETG") or [])}
@@ -254,8 +287,7 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
     if not master_has:
         raise ValueError("The play is not in the master play database of the game files that were read.")
     if changes["name"] and names_entry and names_rows:
-        edits = [{"table": "PPPN", "match": {"BOKL": int(r["BOKL"]), "PLYL": plyl}, "expect": {"PPPM": _text(r["PPPM"])}, "set": {"PPPM": changes["name"]}}
-                 for r in names_rows if int(r["PLYL"]) == plyl and _text(r["PPPM"]) != changes["name"]]
+        edits = [_pppn_edit(r, n, c, plyl, changes["name"]) for r, n, c in _alike([r for r in names_rows if int(r["PLYL"]) == plyl]) if _text(r["PPPM"]) != changes["name"]]
         if edits:
             targets.append({"ast": names_entry["ast"], "index": names_entry["index"], "start": names_entry["start"], "size": names_entry["size"], "edits": edits})
             report.append((f"{os.path.basename(names_entry['ast'])} #{names_entry['index']} (the playbooks' names for the play)", len(edits)))
@@ -284,10 +316,9 @@ def book_name_targets(names_entry, names_rows, plyl, books, name):
     name and the other playbooks are not touched. Returns (targets, report, missing): missing lists the playbooks that have no row for the play. Raises ValueError for a bad name."""
     name = clean_name(name)
     wanted = {int(b) for b in books}
-    mine = {int(r["BOKL"]): r for r in names_rows if int(r["PLYL"]) == int(plyl)}
-    missing = sorted(wanted - set(mine))
-    edits = [{"table": "PPPN", "match": {"BOKL": b, "PLYL": int(plyl)}, "expect": {"PPPM": _text(mine[b]["PPPM"])}, "set": {"PPPM": name}}
-             for b in sorted(wanted & set(mine)) if _text(mine[b]["PPPM"]) != name]
+    mine = _alike([r for r in names_rows if int(r["PLYL"]) == int(plyl)])
+    missing = sorted(wanted - {int(r["BOKL"]) for r, _n, _c in mine})
+    edits = [_pppn_edit(r, n, c, plyl, name) for r, n, c in sorted(mine, key=lambda t: (int(t[0]["BOKL"]), t[1])) if int(r["BOKL"]) in wanted and _text(r["PPPM"]) != name]
     if not edits:
         return [], [], missing
     target = {"ast": names_entry["ast"], "index": names_entry["index"], "start": names_entry["start"], "size": names_entry["size"], "edits": edits}
@@ -313,7 +344,7 @@ def describe(lib, changes):
         lines.append(f"The run hole becomes {changes['plrd']['hole']}.")
     if changes["plcm"]:
         lines.append("The play combination row changes.")
-    moved = sorted(changes["setp"])
+    moved = sorted(changes["setp"]) or sorted(changes["setg"])
     if moved:
         lines.append("Where these players line up: " + ", ".join(label[p] for p in moved) + ".")
         n = len(changes["shared_with"])
