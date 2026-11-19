@@ -91,7 +91,7 @@ _QUOTED = re.compile(r"""(?x)
     (?=\1)
 """)
 _PLAIN = re.compile(r"""(?x) """ + _START + r"""
-    (?: """ + _WORD + r"""(?:[ ]""" + _WORD + r"""){0,3} [\\/]+ )*     # folders: up to four words each ("Shared Saves", "My Saves 2")
+    (?: """ + _WORD + r"""(?:[ ]""" + _WORD + r"""){0,9} [\\/]+ )*     # folders: up to ten words each ("Shared Saves", "My Saves 2", "this is a very long folder")
     [^\s'"<>|*?:\\/]*                                                  # the file name: it ends at a space
 """)
 
