@@ -965,17 +965,19 @@ async function patchEntry(target, mode, backupDir) {
                 const before = helper.file[name];
                 const after = check.helper.file[name];
                 await after.readRecords();
-                if (before.records.length !== after.records.length) throw new Error(`${name} has a different number of rows after the change; nothing written`);
+                // The records getter of the database library copies the whole table each time it is read: read it once (a table of 9,000 rows took minutes to check by reading it in the loops).
+                const beforeRecs = before.records, afterRecs = after.records;
+                if (beforeRecs.length !== afterRecs.length) throw new Error(`${name} has a different number of rows after the change; nothing written`);
                 const edited = new Map();
                 for (const e of target.edits.filter((x) => x.table === name)) {
-                    const hit = before.records.findIndex((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
+                    const hit = beforeRecs.findIndex((r) => Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v)));
                     edited.set(hit, new Set(Object.keys(e.set)));
                 }
-                for (let i = 0; i < before.records.length; i++) {
-                    for (const k of Object.keys(before.records[i].fields)) {
+                for (let i = 0; i < beforeRecs.length; i++) {
+                    for (const k of Object.keys(beforeRecs[i].fields)) {
                         if (edited.has(i) && edited.get(i).has(k)) continue;
-                        const a = String(before.records[i].fields[k].value).replace(/ +$/, '');
-                        const b = String(after.records[i].fields[k].value).replace(/ +$/, '');
+                        const a = String(beforeRecs[i].fields[k].value).replace(/ +$/, '');
+                        const b = String(afterRecs[i].fields[k].value).replace(/ +$/, '');
                         if (a !== b) throw new Error(`${name} row ${i} ${k} would change from "${a}" to "${b}" without being edited; nothing written`);
                     }
                 }
