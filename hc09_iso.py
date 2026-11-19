@@ -38,8 +38,8 @@ def _entries(table):
             continue
         seen.add(pos)
         left, right, sector, size, attr, name_len = struct.unpack_from("<HHIIBB", table, pos)
-        if (left == 0xFFFF and right == 0xFFFF) or name_len == 0 or pos + 14 + name_len > len(table):
-            continue                                              # the 0xFF padding at the end of a table, or an empty directory
+        if (sector == 0xFFFFFFFF and size == 0xFFFFFFFF) or name_len == 0 or pos + 14 + name_len > len(table):
+            continue                                              # the 0xFF padding at the end of a table, or an empty directory (a leaf with both links 0xFFFF is a real entry: it has a sector and a size)
         out.append({"name": table[pos + 14: pos + 14 + name_len].decode("latin-1"), "sector": sector, "size": size, "directory": bool(attr & DIRECTORY)})
         for child in (left, right):
             if child not in (0, 0xFFFF):
