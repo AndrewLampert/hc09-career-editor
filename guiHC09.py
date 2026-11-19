@@ -5574,7 +5574,7 @@ class PersonnelDialog(tk.Toplevel):
         self.config(cursor="watch")
         self.update_idletasks()
         try:
-            self.app._refuse_write_to_iso_copy()
+            self.app._refuse_write_to_iso_copy(*[t["ast"] for t in targets])
             apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
         except Exception as e:
             messagebox.showerror(what, str(e))
@@ -5616,7 +5616,7 @@ class PersonnelDialog(tk.Toplevel):
         self.config(cursor="watch")
         self.update_idletasks()
         try:
-            self.app._refuse_write_to_iso_copy()
+            self.app._refuse_write_to_iso_copy(*[c["ast"] for c in getattr(self.data, "copies", [])])
             res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
         except Exception as e:
             messagebox.showerror("Restore all", str(e))
@@ -10010,7 +10010,7 @@ class App(tk.Tk):
 
     def on_locate_game_files(self):
         path = filedialog.askopenfilename(
-            title="Locate qkl_fe2ig.ast (inside the game's PS3_GAME/USRDIR folder)",
+            title="Locate qkl_fe2ig.ast (PS3_GAME/USRDIR, or next to default.xex for the Xbox 360 game; not read out of a disc image)",
             filetypes=[("AST archive", "qkl_fe2ig.ast"), ("All files", "*.*")],
         )
         if not path:
@@ -13358,7 +13358,7 @@ class App(tk.Tk):
     def game_file_apply(self, changes, archives, mode="apply"):
         """Write the changes of hc09_gamefiles.changes_for into every copy of the play database that holds the play (bridge entry-patch: every entry is checked before the first is written,
         each is backed up the first time). Returns (targets, [(copy, values)]). Raises when the play cannot be found or a row is not what was read."""
-        self._refuse_write_to_iso_copy()
+        self._refuse_write_to_iso_copy(*archives)
         if GF.is_empty(changes):
             raise RuntimeError("Nothing is changed in this play.")
         copies, cache = self.game_file_copies(archives)
@@ -13379,7 +13379,7 @@ class App(tk.Tk):
 
     def game_file_restore(self, archives):
         """Write every backed-up entry of the play databases back (the Set personnel tool shares the backups); returns how many were put back."""
-        self._refuse_write_to_iso_copy()
+        self._refuse_write_to_iso_copy(*archives)
         copies, _cache = self.game_file_copies(archives)
         names = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(GF.NAMES_ENTRY)])      # the entry of the playbooks' own play names (backed up only if a rename was made)
         copies = list(copies) + [{"ast": names["ast"], "index": names["index"], "start": names["start"], "size": names["size"], "file": names["file"]}]
@@ -13430,7 +13430,7 @@ class App(tk.Tk):
     def add_play_write(self, boot_ast, plays):
         """Make the game files hold exactly these added plays (hc09_addplay.build results): the archive goes back to its state before the first add and the entries are built again from their
         untouched originals; an empty list puts it all back. Every entry is checked before anything is written. Returns the bridge's report."""
-        self._refuse_write_to_iso_copy()
+        self._refuse_write_to_iso_copy(boot_ast)
         if not plays:
             return self.model.run_bridge(["add-play-restore", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
         spec = os.path.join(tempfile.gettempdir(), f"hc09_addplay_{os.getpid()}.json")
@@ -13586,14 +13586,90 @@ class App(tk.Tk):
 
     ISO_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "iso")
 
-    def _recomp_disc_image(self):
-        """The disc image of a recompiled PC version (hc09.ini's IsoPath in the install folder the open or a recent save belongs to, or in the usual places), or ""."""
+    def _recomp_images(self):
+        """(the image of the install the OPEN save belongs to, or ""; every image of the recompiled PC versions found: that one first, then the installs of the recent saves, of the folders the user added and the
+        usual places). The open save's install is the one that counts; with none open the first one found is used."""
         if hc09_detect is None:
-            return ""
-        paths = [self.model.db_path] if getattr(self.model, "db_path", None) else []
-        paths += list(load_recent_files())
-        isos = hc09_detect.find_recomp_isos(paths, self.ui_prefs.get("extra_rpcs3_dirs", []))
-        return isos[0] if isos else ""
+            return "", []
+        db = getattr(getattr(self, "model", None), "db_path", None) or ""         # no model yet when this is asked at start
+        install = hc09_detect.recomp_install_of(db) if db else None
+        own = hc09_detect.recomp_iso(install) if install else ""
+        isos = hc09_detect.find_recomp_isos(([db] if db else []) + list(load_recent_files()), self.ui_prefs.get("extra_rpcs3_dirs", []))
+        return own, isos
+
+    def _recomp_disc_image(self):
+        """The disc image of a recompiled PC version: that of the install the open save belongs to, else the first found (hc09.ini's IsoPath of the install a recent save belongs to, or of the usual places), or ""."""
+        own, isos = self._recomp_images()
+        return own or (isos[0] if isos else "")
+
+    @staticmethod
+    def _iso_stamp(iso):
+        """What says whether a disc image is the one a copy was read from: its path, size and modification time. Raises OSError when the image is not there."""
+        st = os.stat(iso)
+        return {"iso": os.path.abspath(iso), "size": st.st_size, "mtime": int(st.st_mtime)}
+
+    @staticmethod
+    def _same_stamp(a, b):
+        """Two stamps of the same image: the path is compared without regard to case (Windows paths are not case sensitive), the size and time exactly."""
+        return bool(a) and bool(b) and os.path.normcase(str(a.get("iso", ""))) == os.path.normcase(str(b.get("iso", ""))) and a.get("size") == b.get("size") and a.get("mtime") == b.get("mtime")
+
+    @staticmethod
+    def _iso_copy_source(copy):
+        """The stamp of the image a copy of qkl_boot.ast was read from (kept beside the copy as source.json), or None."""
+        try:
+            with open(os.path.join(os.path.dirname(copy), "source.json"), encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return meta if isinstance(meta, dict) and meta.get("iso") else None
+
+    def _iso_copy_is_current(self, meta):
+        """Is the image a copy was read from still the same? True / False; None when the image is not there (any more): nothing to compare with."""
+        try:
+            return self._same_stamp(self._iso_stamp(meta["iso"]), meta)
+        except OSError:
+            return None
+
+    def _extract_iso_file(self, iso, dest):
+        """Copy qkl_boot.ast out of the disc image in a background thread while a small window shows how far it is. The editor's windows keep being drawn (events are handled meanwhile) but the progress window
+        is modal. Raises what the copy raises (ValueError for a bad image, OSError)."""
+        state = {"done": 0, "total": 0, "error": None, "finished": False}
+
+        def work():
+            try:
+                hc09_iso.extract(iso, BOOT_AST_FILENAME, dest, progress=lambda d, t: state.update(done=d, total=t))
+            except BaseException as e:                    # handed to the caller below
+                state["error"] = e
+            state["finished"] = True
+
+        win = tk.Toplevel(self)
+        win.title("Reading the disc image")
+        win.transient(self)
+        win.resizable(False, False)
+        ttk.Label(win, text=f"Reading {BOOT_AST_FILENAME} out of the disc image...", padding=12).pack()
+        bar = ttk.Progressbar(win, length=360, maximum=100)
+        bar.pack(padx=12, pady=(0, 6))
+        label = ttk.Label(win, text="", padding=(12, 0, 12, 12))
+        label.pack()
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+        win.grab_set()
+        threading.Thread(target=work, daemon=True).start()
+        try:
+            while not state["finished"]:
+                if state["total"]:
+                    bar["value"] = 100 * state["done"] / state["total"]
+                    label.configure(text=f"{state['done'] >> 20} of {state['total'] >> 20} MB")
+                win.update()
+                time.sleep(0.05)
+        except tk.TclError:
+            raise RuntimeError("The editor was closed while the disc image was being read.")
+        finally:
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+        if state["error"] is not None:
+            raise state["error"]
 
     def _boot_from_iso(self, iso):
         """qkl_boot.ast out of a disc image, copied into the editor's cache (once: again when the image changed); returns the copy's path, or "" when it could not be read (the reason is shown). The copy is only
@@ -13606,22 +13682,11 @@ class App(tk.Tk):
         folder = os.path.join(self.ISO_CACHE_DIR, hashlib.sha1(os.path.normcase(iso).encode("utf-8")).hexdigest()[:8])
         dest, meta = os.path.join(folder, BOOT_AST_FILENAME), os.path.join(folder, "source.json")
         try:
-            st = os.stat(iso)
-            want = {"iso": iso, "size": st.st_size, "mtime": int(st.st_mtime)}
-            try:
-                with open(meta, encoding="utf-8") as f:
-                    have = json.load(f)
-            except (OSError, ValueError):
-                have = None
-            extracted = not (os.path.isfile(dest) and have == want)
+            want = self._iso_stamp(iso)
+            extracted = not (os.path.isfile(dest) and self._same_stamp(want, self._iso_copy_source(dest)))
             if extracted:
-                messagebox.showinfo("Reading the disc image", f"The editor reads {BOOT_AST_FILENAME} (about 460 MB) out of the disc image\n{iso}\ninto its own folder, once. This can take a minute; the window may not answer meanwhile.")
-                self.config(cursor="watch")
-                self.update_idletasks()
-                try:
-                    hc09_iso.extract(iso, BOOT_AST_FILENAME, dest)
-                finally:
-                    self.config(cursor="")
+                messagebox.showinfo("Reading the disc image", f"The editor reads {BOOT_AST_FILENAME} (about 460 MB) out of the disc image\n{iso}\ninto its own folder, once. A window shows how far it is.")
+                self._extract_iso_file(iso, dest)
                 with open(meta, "w", encoding="utf-8") as f:
                     json.dump(want, f)
         except (ValueError, OSError) as e:
@@ -13632,7 +13697,22 @@ class App(tk.Tk):
             self._clear_game_data_caches()                   # the file behind them changed (another image, or the same image replaced)
         self.ui_prefs["boot_ast_path"] = dest
         save_ui_prefs(self.ui_prefs)
+        self._prune_iso_copies(folder)
         return dest
+
+    def _prune_iso_copies(self, keep):
+        """Copies of qkl_boot.ast read out of images that are gone (moved, deleted) are taken out of the cache; the copy in `keep` and those of images that are still there stay (an install's image can be used again)."""
+        try:
+            names = os.listdir(self.ISO_CACHE_DIR)
+        except OSError:
+            return
+        for name in names:
+            folder = os.path.join(self.ISO_CACHE_DIR, name)
+            if not os.path.isdir(folder) or os.path.normcase(os.path.abspath(folder)) == os.path.normcase(os.path.abspath(keep)):
+                continue
+            meta = self._iso_copy_source(os.path.join(folder, BOOT_AST_FILENAME))
+            if meta is None or not os.path.isfile(meta["iso"]):
+                shutil.rmtree(folder, ignore_errors=True)
 
     def _clear_game_data_caches(self):
         """The tables read out of qkl_boot.ast (philosophy weights, game reference, playbook names, personnel) are kept in the editor's cache without a record of which file they came from. When the game file
@@ -13641,53 +13721,54 @@ class App(tk.Tk):
             shutil.rmtree(d, ignore_errors=True)
         reload_philosophy_data()
 
+    def _iso_copy_state(self, copy):
+        """What to do about a copy of qkl_boot.ast read out of a disc image: "ok" (use it), or the image it should be read from instead / again: (image path). The image of the install the OPEN save belongs to counts;
+        with none open (or a save that is not an install's) the copy is kept while its image is one of the installs' images found, else the first install's image is used; the copy's own image is
+        read again when it changed. Returns ("ok", None) or ("read", image path)."""
+        meta = self._iso_copy_source(copy)
+        if meta is None:
+            return "ok", None                                # no record of where it came from: nothing to compare with
+        own, isos = self._recomp_images()
+        norm = lambda p: os.path.normcase(os.path.abspath(p))
+        if own and norm(own) != norm(meta["iso"]):
+            return "read", own
+        if not own and isos and norm(meta["iso"]) not in [norm(i) for i in isos]:
+            return "read", isos[0]
+        if self._iso_copy_is_current(meta) is False:
+            return "read", meta["iso"]
+        return "ok", None
+
     def _check_iso_copy_at_start(self):
-        """At start: when the game file is a copy read out of a disc image and the image has changed since (or is another one than the copy's source says), the tables that were read out of the old file are
-        dropped before anything uses them (the philosophy tables are loaded when the editor starts, and Player Type Fit would use them without asking for the file again). The copy itself is read again
-        when it is next asked for."""
+        """At start: when the game file is a copy read out of a disc image and it is out of date (the image changed, or the saves of the installs found belong to another image), the tables that were read out of it are
+        dropped before anything uses them (the philosophy tables are loaded when the editor starts, and Player Type Fit would use them without asking for the file again). The copy itself is read again when it
+        is next asked for."""
         if not self._boot_is_from_iso():
             return
-        copy = self.ui_prefs.get("boot_ast_path") or ""
-        try:
-            with open(os.path.join(os.path.dirname(copy), "source.json"), encoding="utf-8") as f:
-                meta = json.load(f)
-            st = os.stat(meta["iso"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return
-        if st.st_size != meta.get("size") or int(st.st_mtime) != meta.get("mtime"):
+        if self._iso_copy_state(self.ui_prefs.get("boot_ast_path") or "")[0] != "ok":
             self._clear_game_data_caches()
 
     def _fresh_iso_copy(self, copy):
-        """The qkl_boot.ast copy read out of a disc image, checked against its image before it is used: when the image has changed since (the recompiled game plays from the image, so the copy would be
-        out of date) it is read again; when the image is gone the copy is used as it is. Returns the path, or "" when the new copy could not be read (the reason is shown)."""
+        """The qkl_boot.ast copy read out of a disc image, checked before it is used (_iso_copy_state): read again from the right image when it is out of date; used as it is otherwise. Returns the path, or "" when
+        the new copy could not be read (the reason is shown)."""
+        what, iso = self._iso_copy_state(copy)
+        return copy if what == "ok" else self._boot_from_iso(iso)
+
+    def _is_iso_copy_path(self, path):
+        """Is this file inside the editor's cache of files read out of disc images?"""
         try:
-            with open(os.path.join(os.path.dirname(copy), "source.json"), encoding="utf-8") as f:
-                meta = json.load(f)
-            iso = meta["iso"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return copy                                      # no record of the source: nothing to compare with
-        active = self._recomp_disc_image()                   # the image the install of the open (or a recent) save plays from: when it is another one than the copy's, that is the one that counts
-        if active and os.path.normcase(os.path.abspath(active)) != os.path.normcase(os.path.abspath(iso)):
-            return self._boot_from_iso(active)
-        try:
-            st = os.stat(iso)
-        except OSError:
-            return copy                                      # the image is not there (any more): nothing to compare with
-        if st.st_size == meta.get("size") and int(st.st_mtime) == meta.get("mtime"):
-            return copy
-        return self._boot_from_iso(iso)
+            return bool(path) and os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(self.ISO_CACHE_DIR)) + os.sep)
+        except (OSError, ValueError, TypeError):
+            return False
 
     def _boot_is_from_iso(self):
         """Is the game file the editor uses a copy it read out of a disc image?"""
-        path = self.ui_prefs.get("boot_ast_path") or ""
-        try:
-            return bool(path) and os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(self.ISO_CACHE_DIR)) + os.sep)
-        except OSError:
-            return False
+        return self._is_iso_copy_path(self.ui_prefs.get("boot_ast_path") or "")
 
-    def _refuse_write_to_iso_copy(self):
-        """Raises RuntimeError when the game files are a copy read out of a disc image: a change to the copy would never reach the game (the recompiled PC version plays from the image itself)."""
-        if self._boot_is_from_iso():
+    def _refuse_write_to_iso_copy(self, *paths):
+        """Raises RuntimeError when a game file about to be written is a copy read out of a disc image: a change to the copy would never reach the game (the recompiled PC version plays from the image itself).
+        paths: the files about to be written; none given: the game file the editor uses."""
+        targets = [p for p in paths if p] or [self.ui_prefs.get("boot_ast_path") or ""]
+        if any(self._is_iso_copy_path(p) for p in targets):
             raise RuntimeError("The game files here are a copy the editor read out of a disc image, for reading only: the recompiled PC game plays from the disc image itself, so a change made here would never reach it. "
                                "Reading works (play, formation and playbook names, the Playbooks tab, Player Type Fit); changing the game files needs the game's loose files (the Xbox 360 files next to default.xex, as Xenia plays them).")
 

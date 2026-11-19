@@ -112,15 +112,22 @@ def extract(path, name, dest, progress=None):
     os.makedirs(os.path.dirname(os.path.abspath(dest)) or ".", exist_ok=True)
     part = dest + ".part"
     done = 0
-    with open(path, "rb") as src, open(part, "wb") as out:
-        src.seek(off + sector * SECTOR)
-        while done < size:
-            block = src.read(min(CHUNK, size - done))
-            if not block:
-                raise ValueError(f"The disc image ends before {name} does (it is cut short).")
-            out.write(block)
-            done += len(block)
-            if progress:
-                progress(done, size)
-    os.replace(part, dest)
+    try:
+        with open(path, "rb") as src, open(part, "wb") as out:
+            src.seek(off + sector * SECTOR)
+            while done < size:
+                block = src.read(min(CHUNK, size - done))
+                if not block:
+                    raise ValueError(f"The disc image ends before {name} does (it is cut short).")
+                out.write(block)
+                done += len(block)
+                if progress:
+                    progress(done, size)
+        os.replace(part, dest)
+    except BaseException:                                         # a failed or stopped copy leaves no half file behind (it may be hundreds of MB)
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
     return done
