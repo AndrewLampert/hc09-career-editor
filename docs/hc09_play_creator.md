@@ -251,3 +251,18 @@ Add a play and Convert my plays were tried only in the PS3 game (RPCS3). The hig
 ## Rename my plays
 
 **Rename my plays...** (Play creator, with *Plays I made* chosen) gives any play you made, in the game or in this editor, a new name of 1 to 24 printable characters. **Numbers are fine**: the game's own on-screen keyboard has none for play names, the save does not mind (a tester had asked for it). Pick the play in the list, type the name, tick the saves (your profile and the open career; both by default) and press Rename. The name is the `name` column of the play's `PBPL` row, which the game shows in the playbook and in the practice recap (a play made in the editor already showed as T1 SLANTS); the career has its own copy of each play, so both are changed. Only that one column is written (`hc09_plays.rename_rows`); a career row with the same play number but another set is another play and is left alone. A copy of each save is kept first (`<save>.bak`, or the backup folder for an Xbox 360 save), RPCS3 must be closed, and an open career with unsaved changes has to be saved first. The names of the stock plays in a playbook are not changed here (they come from the game files, and a per-playbook name table, `PPPN`, in the career is empty: not tried).
+
+## Rename in playbooks
+
+**Rename in playbooks...** (Play creator, any play of the game: offense, defense or special teams) changes the name a play has in the game's playbooks. The game's play-call screen shows each playbook's own name for a play (table `PPPN` of `qkl_boot.ast`, entry 46 in the PS3 game: every playbook has a row for each of its plays, 8,613 of 8,613 in the default books), not the play's own name in the master database (`PBPL.name`), and about half of them differ ("Deep Attack" is "Liz Lft Deep Attack" in one playbook). The window lists the playbooks that have the play and the name each shows; it renames the play **only in the playbooks you select** (only their rows are written) or **everywhere** (the play's own name in every copy of the play database that holds it, and the name in every playbook that has it).
+
+How: the bridge's `entry-patch` (the same check-before-write, backup-the-first-time and restore as Make a game play; **Put the game files back** restores the names too), `hc09_gamefiles.book_name_targets` for the playbook rows and `name_only_changes` (through `targets_for`) for everywhere.
+
+Limits:
+- The names are kept in a Huffman-compressed string pool and the entry **cannot grow in place**: a name that needs more room than the old ones leave is refused ("need N more bytes", nothing is written). A shorter name always fits; a longer one may.
+- After **Add a play** has put plays into the game files, entry 46 is Add a play's own copy and a rename is refused ("put the game files back first"). Rename first, or put the game files back, rename, then add.
+- Names are 1 to 24 letters, digits and ordinary signs.
+- **Not yet seen in the game.** Nobody has looked at the play-call screen after a change of a `PPPN` name (Make a game play's rename writes the same rows). Try one playbook, then everywhere, in an existing career and a new one.
+
+Speed: the bridge's check after a write used to read the table's records inside its loops, and the database library copies the whole table each time it is read, so renaming one play name took 90 to 170 seconds; it reads them once now (about one second).
+
