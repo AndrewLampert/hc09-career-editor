@@ -427,7 +427,6 @@ PCPORT_MAX_DEPTH = 4                            # how many levels below a saves 
 BACKUP_DIR_NAME = "hc09-editor-backups"         # where the editor keeps the copy it makes of an Xbox 360 save before writing it (see is_xbox_save)
 PCPORT_SKIP_DIRS = {"backups", BACKUP_DIR_NAME}  # folders whose saves are old copies, not saves to open
 TOOLS81_USERDATA = ("userdata", "userdata-hc27")                 # HC09.exe's saves and HC27.exe's
-TOOLS81_CONTENT = os.path.join("build", "userdata", "content")
 TOOLS81_INI = "hc09.ini"                                        # in the install folder: IsoPath=<the disc image>
 PCPORT_INSTALL_DIRS = (r"C:\Games\HC09Recomp", r"C:\HC09Recomp", r"D:\Games\HC09Recomp")      # the tools81 README suggests C:\Games\HC09Recomp
 PCPORT_PROGRAMS = ("hc09", "hc09-launcher", "hc27")  # process names (without .exe) of the PC versions (HC27.exe is the recompiled game with today's rosters): they rewrite the saves they have open
@@ -572,7 +571,8 @@ def recomp_iso(install_dir):
             for line in f:
                 key, sep, value = line.partition("=")
                 if sep and key.strip().lower() == "isopath":
-                    iso = os.path.normpath(value.strip().strip("'\""))
+                    value = value.strip().strip("'\"")
+                    iso = os.path.normpath(value if os.path.isabs(value) else os.path.join(install_dir, value))          # a relative path is relative to the install folder
                     return iso if os.path.isfile(iso) else ""
     except OSError:
         pass
