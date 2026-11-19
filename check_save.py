@@ -1,7 +1,7 @@
 """Check what a Head Coach 09 save holds, without opening the editor.
 
     python check_save.py <save file or its folder>          (or drag the save onto "Check My Save.bat")
-    python check_save.py                                    (no save given: lists the saves it can find, anywhere on this computer, and checks the one you pick)
+    python check_save.py                                    (no save given: lists the saves it can find (HC09 / HC27 PC installs anywhere on the drives; RPCS3 and Xenia in their usual places) and checks the one you pick)
 
 Why it exists: the editor can only show what the save has. When a tab is empty (Draft Picks, Playbooks) this says whether the save has the table at all (MISSING), has it with no rows (EMPTY), or has it
 filled (the row count), and writes the same report, with every table of the save, to check_save_report.txt next to this file so it can be sent on. It reads the save; it never changes it.
@@ -100,13 +100,20 @@ def saves_in(path):
     return found
 
 
+def emulator_search_roots():
+    """The folders a search for a portable RPCS3 or Xenia looks in (the same as the editor's Search this computer)."""
+    home = os.path.expanduser("~")
+    return [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")]
+
+
 def find_saves(extra=(), search=True, budget=25.0):
     """Every career or profile save this computer has, newest first: the places the editor looks (RPCS3, Xenia, the PC versions, the folders in `extra`) and, with `search`, a time-limited search for
-    the PC versions' saves folders (an install can be anywhere). Returns ([{"platform", "name", "path", "mtime", "size", "kind"}], the folders searched, True when the search ran out of time)."""
+    a portable RPCS3 or Xenia in the usual folders (emulator_search_roots) and for the PC versions' saves folders (an install can be anywhere). Returns ([{"platform", "name", "path", "mtime", "size", "kind"}], the folders searched, True when the search ran out of time)."""
     found = []
-    for sv in D.list_saves(D.savedata_roots(D.candidate_rpcs3_dirs([], extra))):
+    roots_to_search = emulator_search_roots() if search else ()           # the bounded search for an RPCS3 / Xenia folder outside the usual places (it runs only when none turned up)
+    for sv in D.list_saves(D.savedata_roots(D.candidate_rpcs3_dirs([], extra, roots_to_search))):
         found.append({"platform": "RPCS3", "name": sv["name"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "kind": "career"})
-    for sv in D.list_xenia_saves(D.candidate_xenia_dirs([], extra)):
+    for sv in D.list_xenia_saves(D.candidate_xenia_dirs([], extra, roots_to_search)):
         found.append({"platform": "Xenia", "name": sv["name"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "kind": sv["kind"]})
     roots = D.candidate_pcport_roots([], extra)
     searched, timed_out = [], False
