@@ -47,6 +47,11 @@ export/import through HC09Editor required.
   slot, in every copy that holds the set): the original of each entry is backed up first in
   `Documents\hc09-game-file-backup`, *Reset* and *Restore all* put it back, and the game must be
   closed. It applies to every save and game mode. See [docs/hc09_play_data.md](docs/hc09_play_data.md).
+  **Rename playbooks...** gives the game's own 89 default playbooks (46 offense, 43 defense: "Martz Air Attack", "West Coast", "3-4 Pressure", ...) new names of up to 21 characters. Pick a playbook, type the name,
+  press *Set name*, do as many as you like, then *Write the names to the game files*. Like Set personnel it **changes the game's own file** (`qkl_boot.ast`, table `PLAB`, in place: the file keeps its size), the
+  first time the entry is backed up in `Documents\hc09-game-file-backup`, *Put the names back* (and *Put the game files back* in the play windows) restores it, and the game must be closed. Ten playbooks are
+  listed twice (the coach's playbook and "<coach>'s Plays"); each row is renamed on its own. Two playbooks of one side cannot have the same name. The Playbooks tab shows the new names after *Load / Refresh*.
+  Written and checked on a copy of the game's file (the names read back, the file goes back byte for byte); **not yet tried in the game**: whether the game's playbook screens show the names from this table is the open question.
   **Play creator...** (a prototype; click a player on the field and pick what he does from a list in a coach's words: routes by name and depth, blocks, zones; drag him to move him) shows every play of the game (offense, defense, special teams)
   with where each player lines up and what he does, drawn from the game's own route art on the game's
   own field picture (read from your copy of the game, never shipped with the editor), with the pass
