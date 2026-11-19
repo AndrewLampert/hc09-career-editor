@@ -6455,8 +6455,11 @@ class PlayDesignerDialog(tk.Toplevel):
         left.pack(side="left", fill="y")
         cols = ("name", "form", "set", "opt")
         self.tree = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse", height=20)
+        self._sort_col, self._sort_rev = None, False        # click a heading to sort the list by it (again: the other way round); None: the library's order (by name)
+        self._heading_text = {}
         for c, (text, width, anchor) in zip(cols, [("Play", 150, "w"), ("Formation", 80, "w"), ("Set", 90, "w"), ("Opt", 32, "center")]):
-            self.tree.heading(c, text=text)
+            self._heading_text[c] = text
+            self.tree.heading(c, text=text, command=lambda c=c: self._sort_by(c))
             self.tree.column(c, width=width, anchor=anchor, stretch=False)
         ys = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=ys.set)
@@ -6471,6 +6474,13 @@ class PlayDesignerDialog(tk.Toplevel):
         self.canvas.pack()
         self.lbl_info = ttk.Label(mid, wraplength=470, justify="left", padding=(0, 6, 0, 0))
         self.lbl_info.pack(anchor="w")
+        bf = ttk.Frame(mid)                                  # the playbooks that have the play shown, by name (scrolls: a play can be in 60 of them)
+        bf.pack(fill="x", pady=(4, 0))
+        self.txt_books = tk.Text(bf, height=4, width=58, wrap="word", state="disabled")
+        bs = ttk.Scrollbar(bf, orient="vertical", command=self.txt_books.yview)
+        self.txt_books.configure(yscrollcommand=bs.set)
+        self.txt_books.pack(side="left", fill="x", expand=True)
+        bs.pack(side="left", fill="y")
 
         right = ttk.Frame(main)
         right.pack(side="left", fill="both", expand=True)
@@ -6659,6 +6669,7 @@ class PlayDesignerDialog(tk.Toplevel):
             self.slots.delete(iid)
         self.canvas.delete("all")
         self.lbl_info.configure(text="The play that was shown is no longer in the game files. Pick another play from the list.")
+        self._set_books_text()
         self._refresh_make()
         self._refresh_kind()
         self._slot_selected()
@@ -6683,6 +6694,60 @@ class PlayDesignerDialog(tk.Toplevel):
             self.tree.insert("", tk.END, iid=str(r["plyl"]), values=(shown_name, r["form"], r["set"], "yes" if r["option"] else ""))
             shown += 1
         self.lbl_count.configure(text=f"{shown} plays")
+        self._apply_sort()
+
+    def _sort_by(self, col):
+        """A heading was clicked: sort the list by that column (clicked again: the other way round). The list is only moved about, so the play shown and its changes are not touched."""
+        self._sort_rev = (not self._sort_rev) if self._sort_col == col else False
+        self._sort_col = col
+        self._apply_sort()
+
+    def _sort_key(self, col, values):
+        """What a row is sorted by: the column, then the others as tie-breaks (formation, then set, then name: the plays of a formation stay together, and those of a set within it)."""
+        name, form, set_, opt = (str(v).lower() for v in values)
+        if col == "form":
+            return (form, set_, name)
+        if col == "set":
+            return (set_, form, name)
+        if col == "opt":
+            return (0 if opt else 1, form, set_, name)
+        return (name, form, set_)
+
+    def _apply_sort(self):
+        """Put the rows of the list in the order of the heading that was clicked (none: as filled, by name), and show on the heading which way. Nothing is deleted, so the selection stays."""
+        col = self._sort_col
+        if col is not None:
+            ids = sorted(self.tree.get_children(), key=lambda iid: (self._sort_key(col, self.tree.item(iid, "values")), int(iid)), reverse=self._sort_rev)
+            for i, iid in enumerate(ids):
+                self.tree.move(iid, "", i)
+            sel = self.tree.selection()
+            if sel:
+                self.tree.see(sel[0])
+        for c, text in self._heading_text.items():
+            self.tree.heading(c, text=text + ((" ▼" if self._sort_rev else " ▲") if c == col else ""))
+
+    def _set_books_text(self):
+        """Under the play art: the playbooks that have the play shown, by name, with the name a playbook gives the play where it is not the play's own ("Packers (as Liz Lft Deep Attack)")."""
+        lib, plyl = self.lib, self.plyl
+        books = lib.books_of_play.get(plyl, ()) if plyl is not None else ()
+        if plyl is None:
+            text = ""
+        elif lib.is_custom(plyl):                            # a play of "Plays I made": its playbook links are in the profile and the career, which the library does not read (books_of_play is the game's own)
+            text = "A play you made. Its playbooks are kept in your profile and career; this box lists only the game's own."
+        elif not books:
+            text = "In no playbook."
+        else:
+            master = lib.plays[plyl]["name"].strip() if plyl in lib.plays else ""
+            items = []
+            for b in books:
+                nm = self.books.get(b, (f"playbook {b}", ""))[0]
+                own = lib.name_in_book(plyl, b).strip()
+                items.append((nm.lower(), nm + (f" (as {own})" if own != master else "")))
+            text = f"In {len(items)} playbook{'s' if len(items) != 1 else ''}: " + ", ".join(t for _k, t in sorted(items)) + "."
+        self.txt_books.configure(state="normal")
+        self.txt_books.delete("1.0", "end")
+        self.txt_books.insert("1.0", text)
+        self.txt_books.configure(state="disabled")
 
     # ---- one play
     def _select(self):
@@ -6863,6 +6928,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.lbl_info.configure(text=f"{p['name']}  -  {self.lib.form_names.get(d['set']['form'], '')} / {d['set']['name']}, play type {p['plyt']}"
                                      f"{', OPTION' if d['option'] else ''}.   " + ("; ".join(extras) + ". " if extras else "") +
                                      (self._books_text(books) if books else ""))
+        self._set_books_text()
         self._refresh_make()
         self._refresh_kind()
         self._slot_selected()
