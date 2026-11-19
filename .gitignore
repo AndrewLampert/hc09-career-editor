@@ -31,3 +31,6 @@ docs/gamedata/
 
 # PLYT etc. extracted at runtime from the user's own game files - proprietary, local-only
 .hc09_gamedata_cache/
+
+# The report check_save.py writes (it names a real save's path)
+check_save_report.txt

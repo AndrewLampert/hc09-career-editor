@@ -595,6 +595,42 @@ def find_recomp_isos(recent_paths=(), extra_dirs=()):
     return out
 
 
+PCPORT_SEARCH_SKIP = {"windows", "program files", "program files (x86)", "programdata", "appdata", "$recycle.bin", "system volume information", "node_modules", ".git", "__pycache__"}
+
+
+def pcport_search_places():
+    """Where a search for a PC version of the game looks, as [(folder, how many levels down)]: the user's folder first (an install is often in it: C:\\Users\\<name>\\HC09Recomp\\build\\userdata-hc27\\content
+    is four levels down), then the top of every drive (C:\\Games\\HC09Recomp\\build\\userdata-hc27\\content is five)."""
+    places = [(os.path.expanduser("~"), 6)]
+    if os.name == "nt":
+        places += [(d + ":\\", 5) for d in "CDEFGH" if os.path.isdir(d + ":\\")]
+    return [p for p in places if os.path.isdir(p[0])]
+
+
+def search_pcport_roots(places, budget=20.0):
+    """Saves folders of the PC versions (<install>\\build\\userdata[-hc27]\\content, or <Documents>\\NFL Head Coach 09\\Saves) found by looking inside [(folder, how many levels down)] for at most `budget`
+    seconds, wherever the game was put. Returns (the folders found, True when the time ran out before every folder was looked at). Windows, Program Files, AppData and the like are not entered."""
+    found, start = [], time.time()
+    for root, depth in places:
+        if not os.path.isdir(root):
+            continue
+        base = root.rstrip("\\/").count(os.sep)
+        for cur, dirs, _files in os.walk(root):
+            if time.time() - start > budget:
+                return found, True
+            name, parent = os.path.basename(cur).lower(), os.path.basename(os.path.dirname(cur)).lower()
+            if (name == "content" and parent in TOOLS81_USERDATA) or (name == PCPORT_SAVES_DIR.lower() and parent == PCPORT_DOCS_DIR.lower()):
+                if os.path.normcase(cur) not in [os.path.normcase(f) for f in found]:
+                    found.append(cur)
+                dirs[:] = []
+                continue
+            if cur.count(os.sep) - base >= depth:
+                dirs[:] = []
+            else:
+                dirs[:] = [d for d in dirs if d.lower() not in PCPORT_SEARCH_SKIP]
+    return found, False
+
+
 def candidate_pcport_roots(recent_paths=(), extra_dirs=()):
     """The saves folders of the PC versions to look at, best first: the ones the recent saves live in, the ones the user added (the saves folder or a folder that holds it), the usual
     places."""
