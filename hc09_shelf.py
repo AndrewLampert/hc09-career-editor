@@ -97,7 +97,27 @@ def _unique_dir(parent, label):
     return path
 
 
+def _log(text):
+    """Note a move or copy of a save in the editor's write log (hc09_crashlog), when that module is there: a report about a missing save then says what was moved where."""
+    try:
+        import hc09_crashlog as crash
+        crash.log_write(text)
+    except Exception:
+        pass
+
+
 def move_folder(src, dst, copy=False):
+    """move_folder_unlogged, with the result in the write log (a problem report says which save was moved or copied where, and if it failed)."""
+    what = "copied" if copy else "moved"
+    try:
+        move_folder_unlogged(src, dst, copy)
+    except Exception as e:
+        _log(f"FAILED  save folder {what}: {src} -> {dst}: {e}")
+        raise
+    _log(f"{what}  save folder {src} -> {dst}")
+
+
+def move_folder_unlogged(src, dst, copy=False):
     """Move (or, with copy=True, copy) the folder src to the not yet existing dst. Same drive: one rename. Otherwise: copy next to the destination, check every file against the original,
     rename into place, and only then take the original away. Raises ShelfError and leaves src as it was if anything fails."""
     if os.path.exists(dst):

@@ -90,6 +90,11 @@ except ImportError:
     hc09_iso = None
 
 try:
+    import hc09_crashlog as CRASH      # problem reports (next to this file); the editor still runs without it
+except ImportError:
+    CRASH = None
+
+try:
     import hc09_update          # the update check (next to this file); the editor still runs without it
 except ImportError:
     hc09_update = None
@@ -1908,21 +1913,35 @@ class CSVModel:
     def run_bridge(self, args):
         """Run hc09-bridge/bridge.js with the given args, return parsed JSON stdout."""
         cmd = [NODE_EXE, BRIDGE_JS] + args
+        writes, summary = CRASH.summarize_bridge(args) if CRASH is not None else (False, "")
+        if CRASH is not None:
+            CRASH.note("bridge " + summary)
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=True
             )
         except FileNotFoundError:
+            if CRASH is not None:
+                CRASH.bridge_failed(args, "node was not found")
             raise RuntimeError(
                 "Could not find 'node'. Install Node.js and make sure it's on your PATH."
             )
         except subprocess.CalledProcessError as e:
+            if CRASH is not None:
+                CRASH.bridge_failed(args, e.stderr or e.stdout)
+                if writes:
+                    CRASH.log_write("FAILED  " + summary)
             raise RuntimeError(f"bridge.js failed:\n{e.stderr or e.stdout}")
 
         try:
-            return json.loads(result.stdout)
+            parsed = json.loads(result.stdout)
         except (json.JSONDecodeError, ValueError):
+            if CRASH is not None:
+                CRASH.bridge_failed(args, "unexpected output: " + (result.stdout or "")[:300])
             raise RuntimeError(f"bridge.js returned unexpected output:\n{result.stdout}")
+        if CRASH is not None and writes:
+            CRASH.log_write("written  " + summary)
+        return parsed
 
     def load_all_from_db(self, db_path):
         """Export all tables from the .db save file straight into memory (no manual CSV steps)."""
@@ -11022,6 +11041,7 @@ class App(tk.Tk):
         ttk.Checkbutton(inner, text="Check for a newer version when the editor starts", variable=self.check_updates_var,
                         command=self.on_toggle_check_updates).pack(anchor="w")
         ttk.Button(inner, text="Check for updates now", command=lambda: self.start_update_check(force=True)).pack(anchor="w", pady=(6, 0))
+        ttk.Button(inner, text="Save a problem report...", command=self.on_save_problem_report).pack(anchor="w", pady=(6, 0))
 
         ttk.Button(inner, text="Close", command=dlg.destroy).pack(anchor="e", pady=(14, 0))
         self._options_dlg = dlg
@@ -11035,6 +11055,43 @@ class App(tk.Tk):
         dlg.geometry(f"+{x}+{y}")
 
     # ---------- Update notice (see hc09_update.py) ----------
+    def _crash_context(self):
+        """What is open, for a problem report: kinds and counts, never rows (see hc09_crashlog)."""
+        out = {}
+
+        def put(label, fn):
+            try:
+                out[label] = fn()
+            except Exception as e:
+                out[label] = f"(not known: {type(e).__name__})"
+        path = self.model.db_path
+        if path:
+            put("save", lambda: "{}, {} tables".format(*hc09_detect.classify_save(path)))
+            put("save file", lambda: CRASH.shorten(path))
+            put("Xbox 360 save", lambda: hc09_detect.is_xbox_save(path))
+            put("players loaded", lambda: len(self.model.players))
+            put("unsaved changes", lambda: bool(self.dirty))
+        else:
+            out["save"] = "none open"
+        put("tab shown", lambda: self.notebook.tab(self.notebook.select(), "text"))
+        put("game files", lambda: CRASH.shorten(self.ui_prefs.get("boot_ast_path") or "not located"))
+        put("game files from a disc image", lambda: bool(self._boot_is_from_iso()))
+        return out
+
+    def on_save_problem_report(self):
+        """Options > Save a problem report...: a report of what the editor was doing, for a problem that did not crash it."""
+        if CRASH is None:
+            messagebox.showinfo("Problem report", "hc09_crashlog.py is missing next to the editor.")
+            return
+        said = simpledialog.askstring("Save a problem report", "What went wrong? One or two sentences are plenty (you may leave this empty).", parent=self)
+        if said is None:
+            return
+        path = CRASH.write_report(None, "", said)
+        if path:
+            CrashReportDialog(self, path, "", title="Problem report saved")
+        else:
+            messagebox.showerror("Problem report", "The report could not be saved: there is no folder the editor can write to.")
+
     def on_toggle_check_updates(self):
         self.ui_prefs["check_updates"] = bool(self.check_updates_var.get())
         save_ui_prefs(self.ui_prefs)
@@ -15985,8 +16042,85 @@ for _name in _MUTATING_APP_METHODS:
 del _name
 
 
+class CrashReportDialog(tk.Toplevel):
+    """The box that says a problem report was saved and where: the path to copy and a button that opens the folder."""
+
+    def __init__(self, app, path, short="", title="The editor hit a problem"):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title(title)
+        self.transient(app)
+        self.geometry("640x250")
+        self.path = path
+        ttk.Label(self, text=title, font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=600, justify="left", padding=(14, 0, 14, 6),
+                  text=(f"{short}\n\n" if short else "") + "A report of what happened was saved. It has no player or save contents, and your user name is blanked out; open it to read it if you like. "
+                  "Send that file to whoever looks after the editor.").pack(anchor="w")
+        self.path_var = tk.StringVar(value=path)
+        ttk.Entry(self, textvariable=self.path_var, state="readonly").pack(fill="x", padx=14)
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="OK", command=self.destroy, style="Accent.TButton").pack(side="right")
+        ttk.Button(btn, text="Show folder", command=self._show_folder).pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Copy path", command=self._copy).pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _copy(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.path)
+
+    def _show_folder(self):
+        try:
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(self.path)])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(self.path)])
+        except OSError:
+            pass
+
+
+def attach_crash_reporting(app):
+    """Connect problem reports to the window: errors inside a button or window callback, the box that tells where the report is, what is open, the windows and tabs and error boxes as 'last things done'.
+    (hc09_crashlog.install() ran before the window was built, so that an error while it was built is reported too.)"""
+    if CRASH is None:
+        return
+
+    def notify(path, short):
+        try:
+            app.after(0, lambda: CrashReportDialog(app, path, short))
+        except Exception:
+            pass
+    CRASH.attach(context=app._crash_context, notify=notify)
+    app.report_callback_exception = lambda exc, val, tb: CRASH.handle_exception((exc, val, tb), "a button or window of the editor")
+    shown_error = messagebox.showerror
+
+    def showerror(title=None, message=None, **options):
+        CRASH.note(f"error box: {title}: {' '.join(str(message).split())[:240]}")
+        return shown_error(title, message, **options)
+    messagebox.showerror = showerror
+    app.bind_class("Toplevel", "<Map>", lambda e: CRASH.note("window: " + str(e.widget.title())), add="+")
+    app.notebook.bind("<<NotebookTabChanged>>", lambda e: CRASH.note("tab: " + str(app.notebook.tab(app.notebook.select(), "text"))), add="+")
+
+
 if __name__ == "__main__":
-    app = App()
+    if CRASH is not None:
+        CRASH.install(os.path.dirname(os.path.abspath(__file__)))          # before the window is built: an error while it is built is reported too
+    try:
+        app = App()
+    except Exception:
+        path = CRASH.handle_exception(sys.exc_info(), "starting the editor") if CRASH is not None else None
+        try:
+            root_ = tk.Tk()
+            root_.withdraw()
+            messagebox.showerror("HC09 Editor could not start", "The editor stopped while it was starting." + (f"\n\nA report was saved:\n{path}\n\nSend that file to whoever looks after the editor." if path else ""))
+        except Exception:
+            pass
+        sys.exit(1)
+    attach_crash_reporting(app)
+    if CRASH is not None and CRASH._state.get("previous"):
+        app.after(1500, lambda: CrashReportDialog(app, CRASH._state["previous"], "The editor closed without warning the last time it ran.", title="Problem report saved"))
     app.after(400, app.reopen_last_save)          # after the window is up; never from __init__
     app.after(2500, app.start_update_check)       # after the window is up; never from __init__, so tests make no network calls
     app.mainloop()
