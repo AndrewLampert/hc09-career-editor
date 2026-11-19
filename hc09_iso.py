@@ -12,6 +12,7 @@ MAGIC = b"MICROSOFT*XBOX*MEDIA"
 PARTITION_OFFSETS = (0x00000000, 0x0FD90000, 0x02080000, 0x18300000)        # plain image, XGD2 (the Xbox 360 discs of 2007 on), XGD3, XGD1
 DIRECTORY = 0x10
 CHUNK = 8 << 20
+MAX_TABLE = 16 << 20                                           # a folder's table is a few kilobytes; more than this means the descriptor is damaged
 
 
 def _partition(f):
@@ -25,8 +26,10 @@ def _partition(f):
 
 def _root(f, off):
     f.seek(off + 32 * SECTOR + len(MAGIC))
-    sector, size = struct.unpack("<II", f.read(8))
-    return sector, size
+    raw = f.read(8)
+    if len(raw) < 8:
+        raise ValueError("The disc image is cut short: it ends inside the volume descriptor.")
+    return struct.unpack("<II", raw)
 
 
 def _entries(table):
@@ -48,8 +51,13 @@ def _entries(table):
 
 
 def _table(f, off, sector, size):
+    if size > MAX_TABLE:
+        raise ValueError("The disc image looks damaged: a folder in it claims to be " + f"{size:,} bytes.")
     f.seek(off + sector * SECTOR)
-    return f.read(size)
+    data = f.read(size)
+    if len(data) < size:
+        raise ValueError("The disc image is cut short: it ends inside a folder.")
+    return data
 
 
 def find(path, name):
