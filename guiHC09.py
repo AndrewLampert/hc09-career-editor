@@ -9545,17 +9545,15 @@ class PlaybookData:
     def _is_special(self, bases):
         return bool(bases) and all(b.lower() in PLAYBOOK_SPECIAL_FORMATIONS for b in bases)
 
+    def set_counts(self, bokl, setl):
+        """Do the plays of this set count against the game's per-playbook cap? Everything does but special teams (a set under only the per-save Created Plays formation counts)."""
+        bases = {self.formation_base(f, self.formation_srfm.get((bokl, f), ""))
+                 for f in self.set_formations.get((bokl, setl), []) if f not in PLAYBOOK_CREATED_FORMATIONS}
+        return not self._is_special(bases)
+
     def counted_plays(self, bokl):
         """Plays that count against the game's per-playbook cap (special teams don't)."""
-        n = 0
-        for (b, st), plays in self.set_plays.items():
-            if b != bokl:
-                continue
-            bases = {self.formation_base(f, self.formation_srfm.get((bokl, f), ""))
-                     for f in self.set_formations.get((bokl, st), []) if f not in PLAYBOOK_CREATED_FORMATIONS}
-            if not self._is_special(bases):
-                n += len(plays)
-        return n
+        return sum(len(plays) for (b, st), plays in self.set_plays.items() if b == bokl and self.set_counts(bokl, st))
 
     def violations(self):
         """Breaks of the rules every stock playbook satisfies (verified on all 98
@@ -9793,7 +9791,7 @@ class PlaybookData:
                 plan["rows"]["PGFM"].append((bokl, f))
                 plan["formations"].append(f)
         plan["sets"] = emptied
-        plan["counted_after"] = plan["counted_before"] - len(gone)
+        plan["counted_after"] = plan["counted_before"] - sum(1 for s, _p in gone if self.set_counts(bokl, s))      # the same rule as counted_plays
         return plan
 
     def apply_removal(self, plan):
