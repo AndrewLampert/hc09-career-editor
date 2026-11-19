@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # Start the HC09 editor on Linux / macOS: checks Python 3.9+ (with Tk) and Node.js 18+, checks that the bridge starts (its libraries ship with the editor,
 # nothing is installed), then starts the editor.   ./start-hc09-editor.sh --check   only reports what is installed (exit code 0 = ready)
-cd "$(dirname "$0")" || exit 1
+# Go to the editor's own folder even when this file is started through a symbolic link (a link on PATH): follow the link to the real file first.
+src="$0"
+while [ -h "$src" ]; do
+  link="$(readlink "$src")"
+  case "$link" in /*) src="$link" ;; *) src="$(dirname "$src")/$link" ;; esac
+done
+cd "$(dirname "$src")" || exit 1
+check_only=0
+if [ "$1" = "--check" ]; then check_only=1; shift; fi              # --check is the only argument this script uses; the others go to the editor
 problem=0
 py=""
 for cand in python3 python; do
@@ -22,5 +30,5 @@ else
   echo "         (The folder hc09-bridge/vendor has to be there: download the editor again if it is missing.)"
   exit 1
 fi
-if [ "$1" = "--check" ]; then echo "Ready: the editor would start with: $py guiHC09.py"; exit 0; fi
-exec "$py" guiHC09.py
+if [ "$check_only" -eq 1 ]; then echo "Ready: the editor would start with: $py guiHC09.py"; exit 0; fi
+exec "$py" guiHC09.py "$@"

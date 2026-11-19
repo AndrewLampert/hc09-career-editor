@@ -27,6 +27,8 @@ import threading
 import time
 import traceback
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)         # the editor runs under pythonw: a console program started without this opens a black window (0 off Windows)
+
 REPORT_DIR_NAME = "crash-reports"
 WRITE_LOG_NAME = "write_log.txt"
 FAULT_NAME = "fault.txt"
@@ -362,7 +364,7 @@ def _versions(root):
     except Exception:
         out.append("tk: not available")
     try:
-        node = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5)
+        node = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5, creationflags=NO_WINDOW)
         out.append("node: " + (node.stdout.strip() or node.stderr.strip() or "no answer"))
     except Exception as e:
         out.append(f"node: not found ({type(e).__name__})")

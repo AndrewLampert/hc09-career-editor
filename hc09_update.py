@@ -23,11 +23,13 @@ import urllib.request
 
 REPO = "AndrewLampert/hc09-career-editor"
 BRANCH = "main"
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # the editor runs under pythonw: git started without this opens a black console window (0 off Windows)
 API = "https://api.github.com"
 PAGE = f"https://github.com/{REPO}"
 TRACKED_FILES = ("guiHC09.py", "hc09_update.py", "hc09-bridge/bridge.js", "hc09-bridge/package.json")
 # A copy without a git folder is compared file by file: these, and every Python module beside guiHC09.py that the repository has (the editor is
 # split into modules such as hc09_plays.py, and a change in any of them is an update).
+PAGE_SIZE = 100            # commits per page of the GitHub comparison (the most it gives)
 CHECK_EVERY = 3600          # seconds between checks (the editor remembers the last answer in between)
 
 
@@ -117,7 +119,12 @@ def git_origin_url(root):
 
 
 def is_our_repo(url, repo=REPO):
-    return repo.lower() in re.sub(r"/+", "/", url.lower().replace("\\", "/"))
+    """True when the url ends in this repository's owner/name (https://host/owner/name[.git], git@host:owner/name[.git], ssh://git@host/owner/name, a folder path ending in owner/name.git): the name is compared whole,
+    so a fork's -old or -tests repository, or a longer path that only contains it, is not ours."""
+    u = re.sub(r"/+", "/", url.strip().lower().replace("\\", "/")).rstrip("/")
+    if u.endswith(".git"):
+        u = u[:-4]
+    return re.search(r"(?:^|[/:@])" + re.escape(repo.lower()) + r"$", u) is not None
 
 
 # ---------- GitHub
@@ -158,9 +165,13 @@ def _check_clone(root, head, fetch, repo, branch):
     origin = git_origin_url(root)
     if origin and not is_our_repo(origin, repo):
         return {"status": "current", "why": "a clone of another repository"}
-    cmp = fetch(f"{API}/repos/{repo}/compare/{head['sha']}...{branch}")
+    url = f"{API}/repos/{repo}/compare/{head['sha']}...{branch}"
+    cmp = fetch(url + f"?per_page={PAGE_SIZE}")
     if cmp.get("status") == "ahead" and int(cmp.get("ahead_by") or 0) > 0:
         commits = cmp.get("commits") or []
+        behind = int(cmp["ahead_by"])
+        if behind > len(commits):                  # the comparison lists the OLDEST commits first, one page at a time: the newest are on the last page (the tip is what "latest" and the date are)
+            commits = fetch(url + f"?per_page={PAGE_SIZE}&page={-(-behind // PAGE_SIZE)}").get("commits") or commits
         latest = commits[-1]["sha"] if commits else ""
         return {"status": "update", "kind": "git", "latest": latest, "behind": int(cmp["ahead_by"]), "changes": _titles(commits),
                 "date": ((commits[-1].get("commit") or {}).get("committer") or {}).get("date", "") if commits else ""}
@@ -172,7 +183,7 @@ def _check_files(root, fetch, repo, branch):
     remote = {e["path"]: e["sha"] for e in tree.get("tree", []) if e.get("type") == "blob"}
     tracked = tracked_files(remote)
     local = local_blob_shas(root, tracked)
-    differ = [p for p in tracked if local.get(p) is not None and p in remote and local[p] != remote[p]]
+    differ = [p for p in tracked if p in remote and local.get(p) != remote[p]]          # a file the repository has and this copy lacks (None) is a difference too
     if not differ:
         return {"status": "current", "why": "files match"}
     latest = hashlib.sha1("".join(remote[p] for p in sorted(differ)).encode()).hexdigest()
@@ -188,7 +199,8 @@ def _check_files(root, fetch, repo, branch):
 
 # ---------- updating a clone in place
 def _git(root, *args, timeout=120):
-    return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=timeout)
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}      # nobody is there to answer: fail at once with a message instead of waiting for the timeout
+    return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW)
 
 
 def can_update_in_place(root, repo=REPO, branch=BRANCH):
