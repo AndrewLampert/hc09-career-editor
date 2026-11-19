@@ -6580,6 +6580,87 @@ class PlayDesignerDialog(tk.Toplevel):
         """Is the play shown one of the profile's own custom plays (changes can be saved into it)?"""
         return self.plyl is not None and self.lib.is_custom(self.plyl)
 
+    def refresh_from_game_files(self, reselect=True):
+        """Read the game's files again after a window of this one changed them (Make a game play, Add a play, Convert my plays, Put the game files back), so that the list and the play shown are what the files
+        hold now, without closing and reopening the play creator. reselect: show the play again as the files have it (the changes made to it here are dropped: they are what was written); False keeps the
+        play shown and the changes made to it here (an Add a play window can be used again with them)."""
+        if not self.winfo_exists():
+            return
+        app = self.app
+        archives = app._personnel_archives()
+        if not archives:
+            return
+        art = getattr(self.lib, "_ui_art", None)
+
+        def work():
+            try:
+                os.remove(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE))        # the playbooks' own names for plays may have changed (a new name, an added play): read them again
+            except OSError:
+                pass
+            lib = app.load_play_library(archives)
+            lib._ui_art = art
+            return lib
+
+        app.run_in_thread_with_busy("Reading the game's plays again...", work, lambda lib: self._use_library(lib, reselect), error_title="Play creator")
+
+    def _use_library(self, lib, reselect):
+        """Show a library that was read again (refresh_from_game_files): the same side and playbook filter, the profile's custom plays mounted again, the play shown selected again."""
+        if not self.winfo_exists():
+            return
+        current, book, profile = self.plyl, self.book_var.get(), self.my_profile
+        self.lib = lib
+        if PlayTypes is not None and getattr(lib, "_play_types", None) is None:
+            lib._play_types = PlayTypes(lib)
+        self.types = getattr(lib, "_play_types", None)
+        if JobCatalog is not None and self.types is not None and getattr(lib, "_job_catalog", None) is None:
+            lib._job_catalog = JobCatalog(lib, self.types)
+        self.catalog = getattr(lib, "_job_catalog", None)
+        if profile:                                        # the profile's custom plays were mounted in the old library (Plays I made, Convert my plays list them from it): mount them again
+            try:
+                self.app.load_my_plays(lib, profile)
+            except Exception:
+                if book == self.MINE:
+                    book = "Any playbook"
+        self._side_changed()
+        if book in self._book_values:
+            self.book_var.set(book)
+            self._fill()
+        self._refresh_make()
+        if current is not None and current not in lib.plays:
+            self._clear_play()                             # the play shown is not in the files any more (taken out, or the files were put back): do not go on showing it
+            return
+        self._keep_state = not reselect
+        try:
+            if current is not None and self.tree.exists(str(current)):
+                self.tree.selection_set(str(current))
+                self.tree.see(str(current))
+                self.update()                              # the selection event is handled here, while _keep_state says whether it may reset the play shown
+            elif current is not None:                       # the play is in the files but the list hides it (the Find box still has its old name): no row to select, so read it from the new library here
+                if reselect:
+                    self._load_play(current)
+                else:
+                    self.detail = self.lib.detail(current)  # the same play from the new library; the changes made to it here stay
+                    self._show()
+        finally:
+            self._keep_state = False
+
+    def _clear_play(self):
+        """Show no play (as before one is picked): the play that was shown is gone from the game files."""
+        self.plyl = None
+        self.detail = None
+        self.overrides = {}
+        self.plyt_override = None
+        self.reads_override = None
+        self.align_override = {}
+        self.base_family = None
+        for iid in self.slots.get_children():
+            self.slots.delete(iid)
+        self.canvas.delete("all")
+        self.lbl_info.configure(text="The play that was shown is no longer in the game files. Pick another play from the list.")
+        self._refresh_make()
+        self._refresh_kind()
+        self._slot_selected()
+
     def _fill(self):
         want_book = self._book_values.get(self.book_var.get())
         mine = want_book == "mine"
@@ -6603,10 +6684,16 @@ class PlayDesignerDialog(tk.Toplevel):
 
     # ---- one play
     def _select(self):
+        if getattr(self, "_keep_state", False):          # the list was filled again and the same play selected again: nothing of the play shown changes (refresh_from_game_files)
+            return
         sel = self.tree.selection()
         if not sel:
             return
-        self.plyl = int(sel[0])
+        self._load_play(int(sel[0]))
+
+    def _load_play(self, plyl):
+        """Show a play of the library as the files have it, with no changes made to it."""
+        self.plyl = plyl
         self.detail = self.lib.detail(self.plyl)
         self.overrides = {}
         self.plyt_override = None
@@ -8154,8 +8241,9 @@ class GameFilesDialog(tk.Toplevel):
 
         def done(result):
             targets, report = result
-            self.lbl_result.configure(text="Done: " + "; ".join(f"{name}: {n_} value{'s' if n_ != 1 else ''}" for name, n_ in report) + ". Start the game and look at the play. Reopen the Play creator to see it there.")
+            self.lbl_result.configure(text="Done: " + "; ".join(f"{name}: {n_} value{'s' if n_ != 1 else ''}" for name, n_ in report) + ". Start the game and look at the play. The Play creator shows it now.")
             messagebox.showinfo("Change in game files", "Done. Start the game and look at the play (Play Now, a playbook that has it).\n\nPut the game files back (this window) restores the files as they were.", parent=self)
+            self.designer.refresh_from_game_files(reselect=True)
 
         app.run_in_thread_with_busy("Changing the game files...", work, done, error_title="Change in game files")
 
@@ -8177,6 +8265,7 @@ class GameFilesDialog(tk.Toplevel):
         def done(result):
             self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}.")
             messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
+            self.designer.refresh_from_game_files(reselect=True)
 
         app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
 
@@ -8695,8 +8784,9 @@ class AddPlayDialog(tk.Toplevel):
             names = app.playbook_name_map(self.boot)
             out = [f"{names.get(b, 'playbook')} ({b}): {why}" for b, why in left_out]
             out_text = ("\n\nLeft out:\n" + "\n".join(out[:8]) + (f"\nand {len(out) - 8} more" if len(out) > 8 else "")) if out else ""
-            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook; or open the Play creator again to see it." + (" " + note if note else "") + out_text)
+            self.lbl_result.configure(text="Done. " + "; ".join(lines) + (" " if lines else "") + "Start the game, make a NEW career and look in the playbook. The Play creator shows it now." + (" " + note if note else "") + out_text)
             messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}), {where}.\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it." + ("\n\n" + note if note else "") + out_text, parent=self)
+            self.designer.refresh_from_game_files(reselect=False)
 
         app.run_in_thread_with_busy("Adding the play to the game files...", work, done, error_title="Add a play")
 
@@ -8721,6 +8811,7 @@ class AddPlayDialog(tk.Toplevel):
             self._fill_added()
             lines = self._link(remove=[gone], keep=plays) if self._selected_saves() else []
             self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
+            self.designer.refresh_from_game_files(reselect=False)
 
         app.run_in_thread_with_busy("Taking the play out...", work, done, error_title="Add a play")
 
@@ -8747,6 +8838,7 @@ class AddPlayDialog(tk.Toplevel):
             lines = self._link(remove=gone) if gone and self._selected_saves() else []
             self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}. " + "; ".join(lines))
             messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
+            self.designer.refresh_from_game_files(reselect=True)            # the files are back as they were before the FIRST change, a Make a game play edit of the play shown included: show the play as they have it
 
         app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
 
@@ -8914,6 +9006,7 @@ class ConvertPlaysDialog(AddPlayDialog):
             self._set_skipped([f"{p['name']}: play {p['plyl']}, formation {p['new_set']}" for p in plays] + (["", "Not converted:"] + notes if notes else []))
             messagebox.showinfo("Convert my plays", f"{len(plays)} play{'s' if len(plays) != 1 else ''} are in the game files.\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links "
                                 "were written here) to find them." + (f"\n\n{len(skipped)} play{'s' if len(skipped) != 1 else ''} could not be converted: see the list in the window." if skipped else ""), parent=self)
+            self.designer.refresh_from_game_files(reselect=False)
 
         app.run_in_thread_with_busy("Converting the plays...", work, done, error_title="Convert my plays")
 
