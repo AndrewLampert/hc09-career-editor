@@ -9877,6 +9877,7 @@ class App(tk.Tk):
         self.minsize(1180, 700)
 
         self.ui_prefs = load_ui_prefs()
+        self._check_iso_copy_at_start()
         set_philosophy_overrides(self.ui_prefs.get("philosophy_overrides"))
         set_philosophy_presets(self.ui_prefs.get("philosophy_presets"))
         self.dark_mode_var = tk.BooleanVar(value=(self.ui_prefs.get("mode") == "dark"))
@@ -13612,7 +13613,8 @@ class App(tk.Tk):
                     have = json.load(f)
             except (OSError, ValueError):
                 have = None
-            if not (os.path.isfile(dest) and have == want):
+            extracted = not (os.path.isfile(dest) and have == want)
+            if extracted:
                 messagebox.showinfo("Reading the disc image", f"The editor reads {BOOT_AST_FILENAME} (about 460 MB) out of the disc image\n{iso}\ninto its own folder, once. This can take a minute; the window may not answer meanwhile.")
                 self.config(cursor="watch")
                 self.update_idletasks()
@@ -13625,9 +13627,35 @@ class App(tk.Tk):
         except (ValueError, OSError) as e:
             messagebox.showerror("Disc image", f"{BOOT_AST_FILENAME} could not be read out of the disc image.\n\n{e}\n\n{hc09_iso.describe(iso)}")
             return ""
+        before = self.ui_prefs.get("boot_ast_path") or ""
+        if extracted or (before and os.path.normcase(os.path.abspath(before)) != os.path.normcase(os.path.abspath(dest))):
+            self._clear_game_data_caches()                   # the file behind them changed (another image, or the same image replaced)
         self.ui_prefs["boot_ast_path"] = dest
         save_ui_prefs(self.ui_prefs)
         return dest
+
+    def _clear_game_data_caches(self):
+        """The tables read out of qkl_boot.ast (philosophy weights, game reference, playbook names, personnel) are kept in the editor's cache without a record of which file they came from. When the game file
+        behind them changes they are removed, so that they are read again from the new one (and the philosophy tables in memory are emptied)."""
+        for d in (PHILOSOPHY_CACHE_DIR, REFERENCE_CACHE_DIR, PLAYBOOK_CACHE_DIR, PERSONNEL_CACHE_DIR):
+            shutil.rmtree(d, ignore_errors=True)
+        reload_philosophy_data()
+
+    def _check_iso_copy_at_start(self):
+        """At start: when the game file is a copy read out of a disc image and the image has changed since (or is another one than the copy's source says), the tables that were read out of the old file are
+        dropped before anything uses them (the philosophy tables are loaded when the editor starts, and Player Type Fit would use them without asking for the file again). The copy itself is read again
+        when it is next asked for."""
+        if not self._boot_is_from_iso():
+            return
+        copy = self.ui_prefs.get("boot_ast_path") or ""
+        try:
+            with open(os.path.join(os.path.dirname(copy), "source.json"), encoding="utf-8") as f:
+                meta = json.load(f)
+            st = os.stat(meta["iso"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        if st.st_size != meta.get("size") or int(st.st_mtime) != meta.get("mtime"):
+            self._clear_game_data_caches()
 
     def _fresh_iso_copy(self, copy):
         """The qkl_boot.ast copy read out of a disc image, checked against its image before it is used: when the image has changed since (the recompiled game plays from the image, so the copy would be
@@ -13636,9 +13664,15 @@ class App(tk.Tk):
             with open(os.path.join(os.path.dirname(copy), "source.json"), encoding="utf-8") as f:
                 meta = json.load(f)
             iso = meta["iso"]
-            st = os.stat(iso)
         except (OSError, ValueError, KeyError, TypeError):
-            return copy                                      # no record of the source, or the image is not there (any more): nothing to compare with
+            return copy                                      # no record of the source: nothing to compare with
+        active = self._recomp_disc_image()                   # the image the install of the open (or a recent) save plays from: when it is another one than the copy's, that is the one that counts
+        if active and os.path.normcase(os.path.abspath(active)) != os.path.normcase(os.path.abspath(iso)):
+            return self._boot_from_iso(active)
+        try:
+            st = os.stat(iso)
+        except OSError:
+            return copy                                      # the image is not there (any more): nothing to compare with
         if st.st_size == meta.get("size") and int(st.st_mtime) == meta.get("mtime"):
             return copy
         return self._boot_from_iso(iso)
