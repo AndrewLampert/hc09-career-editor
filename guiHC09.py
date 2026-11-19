@@ -6576,6 +6576,12 @@ class PlayDesignerDialog(tk.Toplevel):
                 self.tree.selection_set(str(current))
                 self.tree.see(str(current))
                 self.update()                              # the selection event is handled here, while _keep_state says whether it may reset the play shown
+            elif current is not None:                       # the play is in the files but the list hides it (the Find box still has its old name): no row to select, so read it from the new library here
+                if reselect:
+                    self._load_play(current)
+                else:
+                    self.detail = self.lib.detail(current)  # the same play from the new library; the changes made to it here stay
+                    self._show()
         finally:
             self._keep_state = False
 
@@ -6624,7 +6630,11 @@ class PlayDesignerDialog(tk.Toplevel):
         sel = self.tree.selection()
         if not sel:
             return
-        self.plyl = int(sel[0])
+        self._load_play(int(sel[0]))
+
+    def _load_play(self, plyl):
+        """Show a play of the library as the files have it, with no changes made to it."""
+        self.plyl = plyl
         self.detail = self.lib.detail(self.plyl)
         self.overrides = {}
         self.plyt_override = None
