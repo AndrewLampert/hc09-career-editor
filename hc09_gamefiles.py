@@ -264,6 +264,36 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
     return targets, report
 
 
+def name_only_changes(lib, plyl, name):
+    """The changes of changes_for() for a play whose NAME is all that changes (any side: offense, defense, special teams): the play's own name in every copy of the play database that holds
+    it, and (through targets_for) its name in every playbook that has it. Raises ValueError for a play the library does not have or a name the game cannot hold. The name is always in the
+    changes, even when it is the play's own name: the playbooks' names for it may differ, and targets_for() writes only what differs."""
+    plyl = int(plyl)
+    if plyl not in lib.plays:
+        raise ValueError("The play is not in the game's play database.")
+    want = clean_name(name)
+    p = lib.plays[plyl]
+    return {"plyl": plyl, "base": plyl, "setl": p["setl"], "name": want, "plys": {}, "play": {}, "plpd": {}, "plrd": {}, "plcm": {}, "setp": {}, "setg": {},
+            "default_group": None, "shared_with": [], "playbooks": len(lib.books_of_play.get(plyl, ())), "target_name": p["name"]}
+
+
+def book_name_targets(names_entry, names_rows, plyl, books, name):
+    """Bridge entry-patch targets that give the play PLYL the name NAME in the playbooks BOOKS (their BOKL numbers) and in no other: the playbooks' own names for plays (table PPPN of
+    qkl_boot.ast, the entry names_entry = {ast, index, start, size}; names_rows = its rows [{BOKL, PLYL, PPPM}]) are what the game's play-call screen shows. Only rows that exist are edited
+    (every playbook has a row for each of its plays), each carrying the name it has now (expect), so nothing is written over a row that is not what was read. The play's own (master)
+    name and the other playbooks are not touched. Returns (targets, report, missing): missing lists the playbooks that have no row for the play. Raises ValueError for a bad name."""
+    name = clean_name(name)
+    wanted = {int(b) for b in books}
+    mine = {int(r["BOKL"]): r for r in names_rows if int(r["PLYL"]) == int(plyl)}
+    missing = sorted(wanted - set(mine))
+    edits = [{"table": "PPPN", "match": {"BOKL": b, "PLYL": int(plyl)}, "expect": {"PPPM": _text(mine[b]["PPPM"])}, "set": {"PPPM": name}}
+             for b in sorted(wanted & set(mine)) if _text(mine[b]["PPPM"]) != name]
+    if not edits:
+        return [], [], missing
+    target = {"ast": names_entry["ast"], "index": names_entry["index"], "start": names_entry["start"], "size": names_entry["size"], "edits": edits}
+    return [target], [(f"{os.path.basename(names_entry['ast'])} #{names_entry['index']} (the playbooks' names for the play)", len(edits))], missing
+
+
 def describe(lib, changes):
     """The changes in words, one line each (for the window that asks before anything is written)."""
     d = lib.detail(changes["base"])
