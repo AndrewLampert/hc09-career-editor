@@ -106,15 +106,21 @@ def _log(text):
         pass
 
 
+def _short(path):
+    """The last two parts of a path (the save's folder and where it went), so that the write log does not carry whole paths."""
+    parts = [p for p in re.split(r"[\\/]+", str(path or "")) if p]
+    return "/".join(parts[-2:])
+
+
 def move_folder(src, dst, copy=False):
     """move_folder_unlogged, with the result in the write log (a problem report says which save was moved or copied where, and if it failed)."""
     what = "copied" if copy else "moved"
     try:
         move_folder_unlogged(src, dst, copy)
     except Exception as e:
-        _log(f"FAILED  save folder {what}: {src} -> {dst}: {e}")
+        _log(f"FAILED  save folder {what}: {_short(src)} -> {_short(dst)}: {e}")
         raise
-    _log(f"{what}  save folder {src} -> {dst}")
+    _log(f"{what}  save folder {_short(src)} -> {_short(dst)}")
 
 
 def move_folder_unlogged(src, dst, copy=False):
