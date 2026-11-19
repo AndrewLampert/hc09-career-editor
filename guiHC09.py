@@ -6567,6 +6567,9 @@ class PlayDesignerDialog(tk.Toplevel):
             self.book_var.set(book)
             self._fill()
         self._refresh_make()
+        if current is not None and current not in lib.plays:
+            self._clear_play()                             # the play shown is not in the files any more (taken out, or the files were put back): do not go on showing it
+            return
         self._keep_state = not reselect
         try:
             if current is not None and self.tree.exists(str(current)):
@@ -6575,6 +6578,23 @@ class PlayDesignerDialog(tk.Toplevel):
                 self.update()                              # the selection event is handled here, while _keep_state says whether it may reset the play shown
         finally:
             self._keep_state = False
+
+    def _clear_play(self):
+        """Show no play (as before one is picked): the play that was shown is gone from the game files."""
+        self.plyl = None
+        self.detail = None
+        self.overrides = {}
+        self.plyt_override = None
+        self.reads_override = None
+        self.align_override = {}
+        self.base_family = None
+        for iid in self.slots.get_children():
+            self.slots.delete(iid)
+        self.canvas.delete("all")
+        self.lbl_info.configure(text="The play that was shown is no longer in the game files. Pick another play from the list.")
+        self._refresh_make()
+        self._refresh_kind()
+        self._slot_selected()
 
     def _fill(self):
         want_book = self._book_values.get(self.book_var.get())
