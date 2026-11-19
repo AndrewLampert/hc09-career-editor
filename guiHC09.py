@@ -6732,6 +6732,8 @@ class PlayDesignerDialog(tk.Toplevel):
         books = lib.books_of_play.get(plyl, ()) if plyl is not None else ()
         if plyl is None:
             text = ""
+        elif lib.is_custom(plyl):                            # a play of "Plays I made": its playbook links are in the profile and the career, which the library does not read (books_of_play is the game's own)
+            text = "A play you made. Its playbooks are kept in your profile and career; this box lists only the game's own."
         elif not books:
             text = "In no playbook."
         else:
