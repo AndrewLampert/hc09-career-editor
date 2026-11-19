@@ -9743,8 +9743,16 @@ class PlaybookData:
     REMOVE_KEYS = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSS": ("BOKL", "SETL"), "PGSL": ("BOKL", "SETL", "PBFM"), "PGFM": ("BOKL", "PBFM")}
 
     def set_is_special(self, bokl, setl):
-        """Is the set one of the playbook's special teams sets (kickoff, punt, kick return ...)? The game needs those."""
-        bases = {self.formation_base(f, self.formation_srfm.get((bokl, f), "")) for f in self.set_formations.get((bokl, setl), []) if f not in PLAYBOOK_CREATED_FORMATIONS}
+        """Is the set one of the playbook's special teams sets (kickoff, punt, kick return ...)? The game needs those. A set under a formation that has no name in the game's files cannot be told from one:
+        it counts as special, so it is never removed."""
+        bases = set()
+        for f in self.set_formations.get((bokl, setl), []):
+            if f in PLAYBOOK_CREATED_FORMATIONS:
+                continue
+            srfm = self.formation_srfm.get((bokl, f), "")
+            if not (self.formation_name.get(f) or self.formation_name.get(srfm)):
+                return True
+            bases.add(self.formation_base(f, srfm))
         return self._is_special(bases)
 
     def plan_remove(self, bokl, keys):
@@ -9752,6 +9760,9 @@ class PlaybookData:
         (every set has plays, every formation has sets), the PGSS / PGSL rows of a set left with no plays and the PGFM row of a formation left with no sets. Special teams plays are never removed
         (the game needs them). Nothing is changed until apply_removal()."""
         plan = {"book": bokl, "plays": [], "sets": [], "formations": [], "special": [], "missing": 0, "rows": {t: [] for t in self.REMOVE_KEYS}, "error": None, "counted_before": self.counted_plays(bokl)}
+        if not self.formation_name:                       # the game's names were not read (the game files were not located): special teams sets cannot be told from the others
+            plan["error"] = "Plays cannot be removed without the game's names: they are how the editor tells the special teams plays the game needs from the others. Locate the game files (qkl_boot.ast), then refresh the tab."
+            return plan
         have = {(st, pl) for (b, st), plays in self.set_plays.items() if b == bokl for pl, _pltp in plays}
         gone = []
         for key in dict.fromkeys((str(s).strip(), str(p).strip()) for s, p in keys):
@@ -9763,7 +9774,7 @@ class PlaybookData:
                 gone.append(key)
         plan["plays"] = gone
         if not gone:
-            plan["error"] = ("Special teams plays (kickoffs, punts, returns) cannot be removed: the game needs them." if plan["special"] else "Nothing to remove: those plays are not in this playbook.")
+            plan["error"] = ("Special teams plays (kickoffs, punts, returns, and anything under a formation the game's files do not name) cannot be removed: the game needs them." if plan["special"] else "Nothing to remove: those plays are not in this playbook.")
             return plan
         plan["rows"]["PGPL"] = [(bokl, s, p) for s, p in gone]
         by_set = defaultdict(set)
