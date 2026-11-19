@@ -15,7 +15,7 @@ Standard library only (no Tk). Built on hc09_plays.PlayLibrary. How it works (se
 """
 import collections
 
-from hc09_plays import steps_in_words
+from hc09_plays import CUSTOM_OFFSETS, POSITIONS, steps_in_words
 
 # key, name, kind (what the quarterback ends with: 7 is a pass, anything else a run), one-line description
 FAMILIES = (
@@ -236,7 +236,6 @@ class PlayTypes:
     def stock_twin(self, setl):
         """The game's own set a custom set was copied from (the same eleven positions on the same diagram places), else the set itself: the plays of the twin are what a conversion of a
         custom play takes its assignments from."""
-        from hc09_plays import CUSTOM_OFFSETS
         if setl < CUSTOM_OFFSETS["SETL"] or setl not in self.lib.sets:
             return setl
         if self._twins is None:
@@ -353,7 +352,6 @@ class PlayTypes:
         return out
 
     def _label(self, sl):
-        from hc09_plays import POSITIONS
         base = POSITIONS.get(sl["epos"], str(sl["epos"]))
         return base + (str(sl["dpos"]) if sl["epos"] in (1, 2, 3, 4) else "")
 
@@ -371,8 +369,8 @@ class PlayTypes:
             chosen = [sl["poso"] for sl in runners][:5]
             others = [sl["poso"] for sl in slots if sl["poso"] not in chosen and sl["epos"] in (1, 2, 3, 4)]
             chosen += others[:5 - len(chosen)]
-            while len(chosen) < 5:
-                chosen.append(chosen[-1] if chosen else 1)
+            if len(chosen) < 5:
+                return {}                                   # fewer than five backs, receivers and tight ends in this set: no pass reads can be made (convert() says so in its issues)
             pers = []
             for k in range(1, 6):
                 vals = sorted(p for _, p in self.per_values[fam][k]) or [0]
@@ -436,6 +434,8 @@ class PlayTypes:
         if sib is None:
             tables = self._tables_synth(target, plyl, out, s["setl"])
         issues = self.validate(s["setl"], out, target)
+        if FAMILY_KIND[target] == "pass" and sib is None and not tables.get("PLPD"):
+            issues = list(issues) + [(None, "reads", "this formation has fewer than five backs, receivers and tight ends, so the quarterback's five pass reads cannot be made; the play would have no reads")]
         if FAMILY_KIND[target] == "pass":
             vpos = None                                        # the primary receiver follows from the reads (see hc09_plays.build_custom_play)
         elif sib is not None:

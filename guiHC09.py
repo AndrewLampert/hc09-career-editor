@@ -8107,8 +8107,10 @@ class CustomPlayDialog(tk.Toplevel):
         if not name:
             messagebox.showerror("Make custom play", "Give the new play a name.", parent=self)
             return None
-        if len(name) > 24:
-            messagebox.showerror("Make custom play", "The name can have 24 characters at most.", parent=self)
+        try:
+            name = clean_play_name(name)                           # 1 to 24 letters, digits and ordinary signs (the same rule as Rename my plays)
+        except ValueError as e:
+            messagebox.showerror("Make custom play", str(e), parent=self)
             return None
         why = self.target.problem()
         if why:
@@ -8134,8 +8136,10 @@ class CustomPlayDialog(tk.Toplevel):
     def _update_files(self):
         """Put the changes into the play itself, in copies of the profile and the career; the result, or None after telling why not."""
         name = self.name_var.get().strip()
-        if not name or len(name) > 24:
-            messagebox.showerror("Save changes", "Give the play a name of 1 to 24 characters.", parent=self)
+        try:
+            name = clean_play_name(name)                           # 1 to 24 letters, digits and ordinary signs (the same rule as Rename my plays)
+        except ValueError as e:
+            messagebox.showerror("Save changes", str(e), parent=self)
             return None
         why = self.target.problem()
         if why:

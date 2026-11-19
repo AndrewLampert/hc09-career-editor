@@ -49,6 +49,28 @@ def clean_name(name, what="name"):
     return n[:80].rstrip(". ")
 
 
+def safe_folder_name(value):
+    """True when a `folder` value read from shelf.json is a plain folder name (no separator, not '.', '..' or empty, not a drive or a path): a damaged or edited file must not make the shelf look
+    for a save in the folder above the wrapper or somewhere else."""
+    return isinstance(value, str) and value not in ("", ".", "..") and os.path.basename(value) == value and "/" not in value and "\\" not in value and ":" not in value
+
+
+def write_meta(path, meta):
+    """shelf.json of the wrapper folder `path`, written to a temporary file first and put in place in one step: a crash, a power cut or a full disk leaves the old file (or none), never half of one."""
+    target = os.path.join(path, META)
+    tmp = target + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=1)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def fingerprint(folder):
     """{relative path: (size, sha256)} of every file below a folder."""
     out = {}
@@ -188,7 +210,7 @@ class Shelf:
     def entry(self, path):
         """The shelved save in the wrapper folder `path`, or None."""
         meta = self.read_meta(path)
-        if not meta or not meta.get("folder"):
+        if not isinstance(meta, dict) or not safe_folder_name(meta.get("folder")):
             return None
         save_dir = os.path.join(path, meta["folder"])
         if not os.path.isdir(save_dir):
@@ -284,8 +306,7 @@ class Shelf:
         if meta is None:
             raise ShelfError("That is not a shelved save.")
         meta["note"] = str(note)[:500]
-        with open(os.path.join(path, META), "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=1)
+        write_meta(path, meta)
 
     # ---- saves
     def put_away(self, save, folder_rel="", label=None, copy=False):
@@ -312,13 +333,13 @@ class Shelf:
                 "source_mtime": self._newest(src), "copy": bool(copy), "note": ""}
         meta_path = os.path.join(wrapper, META)
         try:
-            with open(meta_path, "w", encoding="utf-8") as f:                # first, so a save on the shelf always says where it came from
-                json.dump(meta, f, indent=1)
+            write_meta(wrapper, meta)                                        # first, so a save on the shelf always says where it came from
             move_folder(src, os.path.join(wrapper, os.path.basename(src)), copy=copy)
         except Exception:
             if not os.path.exists(os.path.join(wrapper, os.path.basename(src))):
                 try:
-                    os.remove(meta_path)
+                    if os.path.exists(meta_path):
+                        os.remove(meta_path)
                     os.rmdir(wrapper)                                       # the wrapper and note made for nothing
                 except OSError:
                     pass
@@ -343,6 +364,8 @@ class Shelf:
         meta = entry["meta"]
         if meta.get("platform") not in MOVABLE:
             raise ShelfError("That save cannot be put back by the shelf.")
+        if not safe_folder_name(meta.get("folder")):
+            raise ShelfError("The note of this shelved save (shelf.json) is damaged: it does not name the save's folder, so it cannot be put back.")
         root = os.path.abspath(target_root or meta["root"])
         if not os.path.isdir(root):
             raise ShelfError(f"The folder it came from is not there any more ({root}). Choose where to put it.")
@@ -352,11 +375,27 @@ class Shelf:
                 raise ShelfError(f"The game already has a save called {meta['folder']}. Put that one on the shelf first, or use Replace (it is shelved, not lost).")
             if not game_save:
                 raise ShelfError("The save in the game was not found, so it cannot be shelved before replacing it.")
-            self.put_away(game_save, folder_rel=entry["folder_rel"], label=f"{meta.get('name') or meta['folder']} replaced {time.strftime('%Y-%m-%d %H-%M')}")
-        move_folder(entry["save_dir"], dst, copy=copy)
+            shelved = self.put_away(game_save, folder_rel=entry["folder_rel"], label=f"{meta.get('name') or meta['folder']} replaced {time.strftime('%Y-%m-%d %H-%M')}")
+            try:
+                move_folder(entry["save_dir"], dst, copy=copy)
+            except (ShelfError, OSError) as e:
+                raise ShelfError(str(e) + "\n\n" + self._undo_replace(shelved, dst))
+        else:
+            move_folder(entry["save_dir"], dst, copy=copy)
         if not copy:
             self._remove_empty_wrapper(entry["path"])
         return os.path.join(dst, self._save_file_name(dst, meta))
+
+    def _undo_replace(self, shelved, dst):
+        """After a Replace failed half way (the game's own save is on the shelf and the shelved one did not come back): put the game's save back where it was, and say what the state is."""
+        if os.path.exists(dst):
+            return f"Your save in the game was put on the shelf as '{shelved['label']}' (in the shelf folder of the save you were bringing back) and nothing was lost; a folder of that name is in the game now, see above."
+        try:
+            move_folder(shelved["save_dir"], dst)
+            self._remove_empty_wrapper(shelved["path"])
+            return "Your save in the game is back where it was, as it was; nothing was changed."
+        except (ShelfError, OSError) as e2:
+            return f"Your save in the game could not be put back ({e2}). It is safe on the shelf as '{shelved['label']}'; bring it back from there."
 
     @staticmethod
     def _save_file_name(folder, meta):

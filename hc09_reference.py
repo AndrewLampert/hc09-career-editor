@@ -12,8 +12,9 @@ a match is not confirmed, so the window says "the game's table holds" and does n
         (bins EHCB, POGB, NCOB, PCPG); two more keys (a negotiation type and a player trait) are not named, so they are shown as a range
   PHAE  which ratings an injured body part lowers, by position group (PLPS: position -> group); how MUCH it lowers them is not in this table
 """
-import csv
 import os
+
+from hc09_plays import read_csv as read_rows              # the one reader of the cache's CSV files
 
 GAME_TABLES = ("LINC", "Eirt", "Ebph", "EFAT", "Eisv", "DVCD", "DVCP", "DVFD", "DVFP", "LPCN", "NCOB", "PCPG", "POGB", "EHCB")   # the big shipped database (streameddata); table names are case sensitive
 STATIC_TABLES = ("PHAE", "PLPS")                                                                                          # the small one (STATICDATA)
@@ -71,12 +72,9 @@ def _int(text, default=None):
         return default
 
 
-def read_rows(path):
-    try:
-        with open(path, newline="", encoding="utf-8") as f:
-            return list(csv.DictReader(f))
-    except OSError:
-        return []
+def _plain_digits(text):
+    """True for 0-9 only (str.isdigit is also true for a superscript two, which int() refuses)."""
+    return text.isascii() and text.isdigit()
 
 
 def read_bins(rows):
@@ -90,12 +88,17 @@ def read_bins(rows):
 
 
 def bin_of(value, bins):
-    """The bin value (ENUV) a number falls in; a number below the lowest range counts as the lowest bin, above the highest as the highest."""
+    """The bin value (ENUV) a number falls in; a number below the lowest range counts as the lowest bin, above the highest as the highest, in a gap between two ranges as the range below it; None when there are no bins."""
+    if not bins:
+        return None
     value = int(value // 1)
-    for lo, hi, v in bins:
+    below = None
+    for lo, hi, v in bins:                                  # lowest first
         if lo <= value <= hi:
             return v
-    return bins[0][2] if value < bins[0][0] else bins[-1][2]
+        if hi < value:
+            below = v                                       # a number in a gap between two ranges takes the range below it
+    return below if below is not None else bins[0][2]
 
 
 def bin_text(bins, enuv, open_top=False):
@@ -216,9 +219,9 @@ class Reference:
                 continue
             if tok.startswith("next"):
                 tok = "n" + tok[4:]
-            if tok.startswith("n") and tok[1:].isdigit() and 1 <= int(tok[1:]) <= ROUNDS:
+            if tok.startswith("n") and _plain_digits(tok[1:]) and 1 <= int(tok[1:]) <= ROUNDS:
                 picks.append(("next", int(tok[1:])))
-            elif tok.isdigit() and 1 <= int(tok) <= PICKS_PER_ROUND * ROUNDS:
+            elif _plain_digits(tok) and 1 <= int(tok) <= PICKS_PER_ROUND * ROUNDS:
                 picks.append(("now", int(tok)))
             else:
                 bad.append(tok)

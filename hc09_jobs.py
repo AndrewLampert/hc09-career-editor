@@ -50,12 +50,18 @@ def qb_variant(steps):
     return f"Dropback pass, {'short drop' if drop < 4 else 'deep drop'} ({drop:.0f} yard{'s' if round(drop) != 1 else ''})"
 
 
+def _way(direction):
+    """'left' -> 'to the left', 'right' -> 'to the right', 'straight ahead' -> 'straight ahead' (the end of a quarterback option's label)."""
+    direction = direction.strip()
+    return direction if direction == "straight ahead" else f"to the {direction}"
+
+
 def qb_variant_text(label, steps):
     """What a named quarterback option does, in a sentence (the text under the choice)."""
     if label.startswith("Rollout"):
-        return f"the quarterback runs out to the {label.split(' ', 1)[1]} and throws on the move; the linemen pass block"
+        return f"the quarterback runs out {_way(label[len('Rollout'):])} and throws on the move; the linemen pass block"
     if label.startswith("Play-action boot"):
-        return f"the quarterback fakes the handoff, then runs out to the {label.rsplit(' ', 1)[1]} and throws on the move"
+        return f"the quarterback fakes the handoff, then runs out {_way(label[len('Play-action boot'):])} and throws on the move"
     if "stays in place" in label:
         return "the quarterback stays where he is and throws (the quickest throw); the linemen pass block"
     return "the quarterback drops back a few steps and throws; the linemen pass block"
@@ -128,7 +134,6 @@ class JobCatalog:
         pts = [q for q in art if (q["ax"], q["ay"]) != (0, 0)]
         zone = [q for q in pts if q["ct"] == 3]
         cats = {41: "Pass rush", 26: "Blitz", 19: "Man coverage", 34: "Spy", 20: "Zones", 21: "Zones", 22: "Zones", 23: "Zones"}
-        codes = [c for c in sig if c in cats]
         first = next((c for c in sig if c in (41, 26, 19, 34, 20, 21, 22, 23)), None)
         category = cats.get(first, "Other")
         if 26 in sig and 41 in sig:
@@ -148,6 +153,8 @@ class JobCatalog:
     def _index(self):
         lib = self.lib
         for plyl, play in lib.plays.items():
+            if plyl in lib.custom:                              # the profile's own plays (mounted for the Play creator) are not the game's: PlayTypes and PlayLibrary.usage skip them too
+                continue
             s = lib.sets.get(play["setl"])
             if not s or s["side"] not in ("offense", "defense"):
                 continue
@@ -187,7 +194,7 @@ class JobCatalog:
                 if key not in merged and key[1] not in ("Routes", "Zones", "Pass rush", "Blitz"):
                     merged[key].update(entries)
         for (label, cat), entries in merged.items():
-            entry = self._pick(entries, table, epos)
+            entry = self._pick(entries)
             if table == "offense" and only_fitting and kind and self.types is not None and not self.types.slot_fine(kind, epos, dpos, entry):
                 continue
             out.append({"category": cat, "label": label, "entry": entry, "uses": sum(entries.values()), "words": steps_in_words(self.lib.steps_of(table, entry[0]), table, epos)})
@@ -202,7 +209,7 @@ class JobCatalog:
         out.sort(key=sort_key)
         return out
 
-    def _pick(self, entries, table, epos):
+    def _pick(self, entries):
         """The entry of a choice that the game's plays use most (ties by the lower ids)."""
         return max(entries.items(), key=lambda kv: (kv[1], -kv[0][0], -kv[0][1]))[0]
 
@@ -227,7 +234,7 @@ class JobCatalog:
                     merged[key[0]].update(entries)
         more = []
         for label, entries in merged.items():
-            entry = self._pick(entries, "offense", 0)
+            entry = self._pick(entries)
             if qb_variant(self.lib.steps_of("offense", entry[0])) != label:             # only the named options, not every other quarterback list of every kind
                 continue
             more.append({"category": "Quarterback", "label": label, "entry": entry, "uses": sum(entries.values()), "words": qb_variant_text(label, self.lib.steps_of("offense", entry[0]))})
