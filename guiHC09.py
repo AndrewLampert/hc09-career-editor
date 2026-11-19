@@ -8575,7 +8575,7 @@ class AddPlayDialog(tk.Toplevel):
             lines = self._link(remove=gone) if gone and self._selected_saves() else []
             self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}. " + "; ".join(lines))
             messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
-            self.designer.refresh_from_game_files(reselect=False)
+            self.designer.refresh_from_game_files(reselect=True)            # the files are back as they were before the FIRST change, a Make a game play edit of the play shown included: show the play as they have it
 
         app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
 
