@@ -1862,6 +1862,7 @@ class CSVModel:
         self.players = []          # list[dict]
         self.player_headers = []   # list[str]
         self.picks = []            # list[dict]
+        self.missing_tables = []   # codes (DRPK ...) of the tables the loaded save does not have at all (as against having no rows)
         self.pick_headers = []     # list[str]
         self.salaries = []         # list[dict]
         self.salary_headers = []   # list[str]
@@ -1938,6 +1939,7 @@ class CSVModel:
 
             for code, _rows_attr, _headers_attr, path_attr in DB_TABLE_ATTRS:
                 setattr(self, path_attr, os.path.join(tmp_dir, DB_TABLE_FILES[code]))
+            self.missing_tables = [code for code, _r, _h, path_attr in DB_TABLE_ATTRS if not os.path.isfile(getattr(self, path_attr))]
 
             self._finish_load()
         finally:
@@ -4081,6 +4083,21 @@ PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
 PLAYBOOK_PLAYNAMES_FILE = "pppn.csv"     # the names each playbook gives its plays (PPPN); optional: without it the master names are shown
 PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM"]
+PLAYBOOK_LINK_TABLES = ("PGPL", "PGSL", "PGSS", "PGFM")        # what puts plays and formations into a career's playbooks: without them the Playbooks tab has nothing to list
+
+
+def playbook_table_problems(absent, save):
+    """Sentences for the Playbooks tab when the save does not hold its playbook links: absent: the tables (of PLAYBOOK_SAVE_TABLES) the save did not have at all; save: {table in lowercase: rows}. [] when they are there."""
+    gone = [t for t in PLAYBOOK_LINK_TABLES if t in absent]
+    empty = [t for t in PLAYBOOK_LINK_TABLES if t not in absent and not save.get(t.lower())]
+    out = []
+    if gone:
+        out.append("this save has no " + ", ".join(gone) + " table" + ("s" if len(gone) > 1 else "") + " (the playbook links), so there is nothing to list")
+    if empty:
+        out.append(", ".join(empty) + (" have" if len(empty) > 1 else " has") + " no rows in this save")
+    if out:
+        out.append("check_save.py shows what the save holds")
+    return out
 # The tables that make up a playbook's contents, in CSV column order. PLAB is the playbook's own row: a career that plays a custom playbook (one from the profile) holds the
 # definition of it, put there by the game when the playbook is chosen (checked in every career that has one); without it the game shows the team no plays at all.
 PLAYBOOK_TABLE_HEADERS = {
@@ -5749,7 +5766,7 @@ class PersonnelBulkDialog(tk.Toplevel):
 class SavesDialog(tk.Toplevel):
     """Saves...: every career save found in RPCS3's savedata folders (newest first), open with a click, plus the recent list
     with a remove button per entry and the "reopen my last save" setting. Look in another folder... adds a folder to look in;
-    Search this computer looks a few levels down in the usual folders for an RPCS3 install."""
+    Search this computer looks a few levels down in the usual folders for RPCS3 and Xenia, and in the user's folder and on every drive for an HC09 / HC27 PC install (on a background thread)."""
 
     def __init__(self, app):
         super().__init__(app)
@@ -5813,12 +5830,44 @@ class SavesDialog(tk.Toplevel):
         self._shelf_dlg = ShelfDialog(self.app, on_change=self._refresh)
 
     def _refresh(self, search=False):
+        self._refresh_serial = getattr(self, "_refresh_serial", 0) + 1
+        serial = self._refresh_serial
+        if not search:
+            self.config(cursor="watch")
+            self.update_idletasks()
+            try:
+                saves = self.app.detected_saves()
+            finally:
+                self.config(cursor="")
+            self._show_saves(saves)
+            return
+        # Search this computer can take most of half a minute (it looks for RPCS3, Xenia and the PC versions wherever they were put): on a background thread, so the window stays alive
+        self.lbl_note.configure(text="Searching this computer for RPCS3, Xenia, and HC09 / HC27 for PC. This can take up to half a minute; the list is filled in when it is done.")
         self.config(cursor="watch")
-        self.update_idletasks()
-        try:
-            self.saves = self.app.detected_saves(search=search)
-        finally:
-            self.config(cursor="")
+
+        def worker():
+            try:
+                saves, error = self.app.detected_saves(search=True), None
+            except Exception as e:
+                saves, error = None, e
+            try:
+                self.after(0, lambda: self._search_done(serial, saves, error))
+            except (tk.TclError, RuntimeError):
+                pass                                                      # the window was closed while it searched
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _search_done(self, serial, saves, error):
+        if not self.winfo_exists() or serial != self._refresh_serial:      # closed, or a newer refresh was asked for in the meantime
+            return
+        self.config(cursor="")
+        if error is not None:
+            self.lbl_note.configure(text=f"The search failed: {error}")
+            return
+        self._show_saves(saves, searched=True, timed_out=bool(getattr(self.app, "last_search_timed_out", False)))
+
+    def _show_saves(self, saves, searched=False, timed_out=False):
+        self.saves = saves
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         for i, sv in enumerate(self.saves):
@@ -5827,10 +5876,15 @@ class SavesDialog(tk.Toplevel):
         if self.saves:
             self.tree.selection_set("0")
             self.lbl_note.configure(text="Newest first. Double-click a save, or select it and press Open. The editor looks in the folders your "
-                                         "recent saves live in, the ones you add, and the usual RPCS3, Xenia and HC09 for PC places.")
+                                         "recent saves live in, the ones you add, and the usual RPCS3, Xenia and HC09 / HC27 for PC places. Search this computer looks everywhere else.")
+        elif searched:
+            self.lbl_note.configure(text="The search found no career saves. If the game is somewhere unusual, use Look in another folder... and pick RPCS3's folder (the one that holds dev_hdd0), "
+                                         "Xenia's folder (the one that holds content), or the game's install folder for HC09 / HC27 for PC; or open a save with File > Open.")
         else:
             self.lbl_note.configure(text="No career saves found yet. Use Look in another folder... and pick RPCS3's folder (the one that holds dev_hdd0) "
-                                         "or its savedata folder, or Xenia's folder (the one that holds content), or the Saves folder of HC09 for PC (in Documents\\NFL Head Coach 09), or Search this computer.")
+                                         "or its savedata folder, or Xenia's folder (the one that holds content), or the install folder of HC09 / HC27 for PC (or its Saves folder), or Search this computer.")
+        if timed_out:
+            self.lbl_note.configure(text=self.lbl_note.cget("text") + " The search stopped after 20 seconds before it had looked everywhere: if your game is not listed, use Look in another folder... and pick its folder.")
         self.btn_open.configure(state="normal" if self.saves else "disabled")
 
     def _selected(self):
@@ -11325,10 +11379,11 @@ class App(tk.Tk):
             try:
                 self.model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", ",".join(PLAYBOOK_SAVE_TABLES)])
                 save = {t.lower(): read_csv_dicts(os.path.join(tmp, t.lower() + ".csv")) for t in PLAYBOOK_SAVE_TABLES}
+                absent = [t for t in PLAYBOOK_SAVE_TABLES if not os.path.isfile(os.path.join(tmp, t.lower() + ".csv"))]
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
             profile_path, profile, flagged, problems = self._choose_profile(db_path, game, save, override)
-            return PlaybookData(game, save, coaches, profile), stamp, profile_path, flagged, problems
+            return PlaybookData(game, save, coaches, profile), stamp, profile_path, flagged, list(problems) + playbook_table_problems(absent, save)
 
         def done(result):
             (self._playbook_data, self._playbook_stamp, self._playbook_profile,
@@ -12161,7 +12216,12 @@ class App(tk.Tk):
             if sv["kind"] == "career":
                 found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"], "platform": "xenia"})
         have = {os.path.normcase(os.path.abspath(f["path"])) for f in found}
-        for sv in hc09_detect.list_pcport_saves(self._detect_pcport_roots()):
+        pc_roots = self._detect_pcport_roots()
+        self.last_search_timed_out = False
+        if search:                                  # an install can be anywhere: look in the user's folder and on every drive for the saves folders of the PC versions
+            more, self.last_search_timed_out = hc09_detect.search_pcport_roots(hc09_detect.pcport_search_places())      # the flag: the time ran out before every folder was looked at
+            pc_roots += [r for r in more if os.path.normcase(r) not in [os.path.normcase(x) for x in pc_roots]]
+        for sv in hc09_detect.list_pcport_saves(pc_roots):
             if sv["kind"] == "career" and os.path.normcase(os.path.abspath(sv["path"])) not in have:
                 found.append({"name": f"{sv['name']} (" + ("HC27" if sv.get("variant") == "HC27" else f"HC09 PC{' ' + sv['version'] if sv['version'] else ''}") + ")", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"],
                               "size": sv["size"], "root": sv["root"], "platform": "pcport"})
@@ -14103,6 +14163,9 @@ class App(tk.Tk):
             self.tree_picks.delete(iid)
         if not self.model.picks:
             self._update_pick_selection_label()
+            if getattr(self.model, "db_path", None) and hasattr(self, "lbl_pick_selection"):
+                gone = "DRPK" in getattr(self.model, "missing_tables", [])
+                self.lbl_pick_selection.configure(text=f"This save has no draft picks: its DRPK table is {'missing' if gone else 'empty'}. check_save.py shows what the save holds.")
             return
 
         query = (self.pick_filter_var.get() or "").strip().lower() if hasattr(self, "pick_filter_var") else ""
