@@ -34,3 +34,6 @@ docs/gamedata/
 
 # The report check_save.py writes (it names a real save's path)
 check_save_report.txt
+
+# Problem reports the editor writes (crash-reports/): they are for sending on, not for the repository
+crash-reports/
