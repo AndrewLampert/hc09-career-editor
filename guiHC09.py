@@ -1969,6 +1969,8 @@ class CSVModel:
             if grown:
                 args += ["--tables", ",".join([c for c, *_ in DB_TABLE_ATTRS] + list(pending)),
                          "--allow-append", ",".join(grown)]
+                if pending:                                   # plays taken out of a playbook leave its tables with fewer rows
+                    args += ["--allow-shrink", ",".join(pending)]
             if grown:
                 try:
                     result = self.run_bridge(args)
@@ -1976,7 +1978,7 @@ class CSVModel:
                     # The import may have died partway through writing the file.
                     shutil.copy2(backup_path, self.db_path)
                     raise RuntimeError(
-                        "The edits that add rows (playbooks, special skills) could not be saved, so your save was "
+                        "The playbook and special skill edits could not be saved, so your save was "
                         f"restored from its backup. Details: {e}") from e
                 self._check_playbook_save(result, grown, backup_path)
                 self.pssk_stored = len(self.pssk)
@@ -2007,7 +2009,7 @@ class CSVModel:
         if problems:
             shutil.copy2(backup_path, self.db_path)
             raise RuntimeError(
-                "The edits that add rows could not be saved safely, so your save was restored from its backup. "
+                "The playbook edits could not be saved safely, so your save was restored from its backup. "
                 "Details: " + "; ".join(str(p) for p in problems[:4]))
 
     def _write_csv(self, path, rows, headers):
@@ -9738,6 +9740,74 @@ class PlaybookData:
             raise ValueError("That change would break the playbook's structure and was not applied: " + "; ".join(f"{v[0]}" for v in sorted(new)[:3]))
         return sum(len(r) for r in plan["rows"].values())
 
+    REMOVE_KEYS = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSS": ("BOKL", "SETL"), "PGSL": ("BOKL", "SETL", "PBFM"), "PGFM": ("BOKL", "PBFM")}
+
+    def set_is_special(self, bokl, setl):
+        """Is the set one of the playbook's special teams sets (kickoff, punt, kick return ...)? The game needs those."""
+        bases = {self.formation_base(f, self.formation_srfm.get((bokl, f), "")) for f in self.set_formations.get((bokl, setl), []) if f not in PLAYBOOK_CREATED_FORMATIONS}
+        return self._is_special(bases)
+
+    def plan_remove(self, bokl, keys):
+        """What taking plays out of a playbook would remove. keys: [(SETL, PLYL)]. The plan's "rows" say which rows of PGPL go, and, so that the playbook keeps the structure every stock playbook has
+        (every set has plays, every formation has sets), the PGSS / PGSL rows of a set left with no plays and the PGFM row of a formation left with no sets. Special teams plays are never removed
+        (the game needs them). Nothing is changed until apply_removal()."""
+        plan = {"book": bokl, "plays": [], "sets": [], "formations": [], "special": [], "missing": 0, "rows": {t: [] for t in self.REMOVE_KEYS}, "error": None, "counted_before": self.counted_plays(bokl)}
+        have = {(st, pl) for (b, st), plays in self.set_plays.items() if b == bokl for pl, _pltp in plays}
+        gone = []
+        for key in dict.fromkeys((str(s).strip(), str(p).strip()) for s, p in keys):
+            if key not in have:
+                plan["missing"] += 1
+            elif self.set_is_special(bokl, key[0]):
+                plan["special"].append(key)
+            else:
+                gone.append(key)
+        plan["plays"] = gone
+        if not gone:
+            plan["error"] = ("Special teams plays (kickoffs, punts, returns) cannot be removed: the game needs them." if plan["special"] else "Nothing to remove: those plays are not in this playbook.")
+            return plan
+        plan["rows"]["PGPL"] = [(bokl, s, p) for s, p in gone]
+        by_set = defaultdict(set)
+        for s, p in gone:
+            by_set[s].add(p)
+        emptied = [s for s, ps in by_set.items() if not [pl for pl, _pltp in self.set_plays.get((bokl, s), []) if pl not in ps]]
+        forms = []
+        for s in emptied:
+            plan["rows"]["PGSS"].append((bokl, s))
+            for f in self.set_formations.get((bokl, s), []):
+                plan["rows"]["PGSL"].append((bokl, s, f))
+                if f not in forms:
+                    forms.append(f)
+        for f in forms:
+            if not [s for s in self.formation_sets.get((bokl, f), []) if s not in emptied]:
+                plan["rows"]["PGFM"].append((bokl, f))
+                plan["formations"].append(f)
+        plan["sets"] = emptied
+        plan["counted_after"] = plan["counted_before"] - len(gone)
+        return plan
+
+    def apply_removal(self, plan):
+        """Take a removal plan's rows out of the in-memory tables. Refuses (and undoes it) if that would break any playbook rule that held before. Returns the number of plays removed."""
+        if plan.get("error"):
+            raise ValueError(plan["error"])
+        before_violations = self.violations()
+        snapshot = {t: list(rows) for t, rows in self.tables.items()}
+        dirty_before = set(self.dirty_tables)
+        for table, gone in plan["rows"].items():
+            if not gone:
+                continue
+            cols, gone = self.REMOVE_KEYS[table], set(gone)
+            self.tables[table][:] = [r for r in self.tables[table] if tuple((r.get(c) or "").strip() for c in cols) not in gone]
+            self.dirty_tables.add(table)
+        self._index_structure()
+        new = self.violations() - before_violations
+        if new:
+            for table, rows in snapshot.items():
+                self.tables[table][:] = rows
+            self.dirty_tables = dirty_before
+            self._index_structure()
+            raise ValueError("That change would break the playbook's structure and was not applied: " + "; ".join(f"{v[0]}" for v in sorted(new)[:3]))
+        return len(plan["plays"])
+
     def set_usage(self, coaches):
         """Which real teams have each playbook. A team's playbook is its head coach's (COPS 0: the one chosen at
         New Career Playbook Select, CPID offense / CDID defense). The coordinators (OC = COPS 1, DC = COPS 2) hold
@@ -11020,9 +11090,9 @@ class App(tk.Tk):
 
         panes = ttk.PanedWindow(root, orient="horizontal")
 
-        def make_tree(parent, cols, widths, height=6, weight=1):
+        def make_tree(parent, cols, widths, height=6, weight=1, selectmode="browse"):
             frm = ttk.Frame(parent)
-            tree = ttk.Treeview(frm, columns=[c for c, _ in cols], show="headings", height=height, selectmode="browse")
+            tree = ttk.Treeview(frm, columns=[c for c, _ in cols], show="headings", height=height, selectmode=selectmode)
             for (c, text), w in zip(cols, widths):
                 tree.heading(c, text=text, command=lambda c=c, t=tree: self._sort_tree(t, c))
                 tree.column(c, width=w, anchor="w", stretch=(c == cols[0][0]))
@@ -11037,7 +11107,7 @@ class App(tk.Tk):
                                        [200, 62, 44, 48, 120, 120], weight=3)
         self.tree_pb_forms = make_tree(panes, [("name", "Formation"), ("id", "ID"), ("sets", "Sets")], [160, 50, 44], weight=2)
         self.tree_pb_plays = make_tree(panes, [("play", "Play"), ("set", "Set"), ("type", "Type"), ("setl", "SETL"), ("plyl", "PLYL")],
-                                       [190, 130, 46, 50, 50], weight=3)
+                                       [190, 130, 46, 50, 50], weight=3, selectmode="extended")
         self._apply_pb_columns()
         self.tree_pb_books.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_book_selected())
         self.tree_pb_forms.bind("<<TreeviewSelect>>", lambda e: self._on_playbook_form_selected())
@@ -11050,6 +11120,8 @@ class App(tk.Tk):
         self._pb_res_frame, self._pb_bar_frame = res, bar
         self.btn_pb_add = ttk.Button(bar, text="Add plays...", command=lambda: self.on_playbook_add_plays(side=self.pb_side_var.get()))
         self.btn_pb_add.pack(side="left")
+        self.btn_pb_remove = ttk.Button(bar, text="Remove selected plays", command=self.on_playbook_remove_plays)
+        self.btn_pb_remove.pack(side="left", padx=(8, 0))
         self.lbl_pb_cap = ttk.Label(bar, text="", foreground="gray")
         self.lbl_pb_cap.pack(side="left", padx=(12, 0))
         panes.pack(fill="both", expand=True, padx=10, pady=(0, 4))
@@ -11509,6 +11581,49 @@ class App(tk.Tk):
             messagebox.showinfo("Playbooks", "No other playbook of the same side contains that play, so there is nothing to copy it from.")
             return
         self.on_playbook_add_plays(preselect=(sources[0], setl, plyl), side=side)
+
+    def on_playbook_remove_plays(self):
+        """Take the plays selected in the plays list out of the playbook selected in the books list (this save only; Save to File writes it)."""
+        data = self._playbook_data
+        book, picked = self.tree_pb_books.selection(), self.tree_pb_plays.selection()
+        if data is None or not book:
+            messagebox.showinfo("Playbooks", "Open the tab with a save loaded and select a playbook first.")
+            return
+        if not picked:
+            messagebox.showinfo("Playbooks", "Select the plays to remove in the plays list (Ctrl+click or Shift+click for several), then press Remove selected plays.")
+            return
+        if self._playbook_data_is_stale():
+            return
+        plan = data.plan_remove(book[0], [tuple(iid.split(":")) for iid in picked])
+        if plan["error"]:
+            messagebox.showinfo("Playbooks", plan["error"])
+            return
+        name, n = data.book_label(book[0]), len(plan["plays"])
+        extra = []
+        if plan["sets"]:
+            extra.append(f"{len(plan['sets'])} set{'s' if len(plan['sets']) != 1 else ''} left with no plays {'go' if len(plan['sets']) != 1 else 'goes'} too")
+        if plan["formations"]:
+            extra.append(f"{len(plan['formations'])} formation{'s' if len(plan['formations']) != 1 else ''} left with no sets {'go' if len(plan['formations']) != 1 else 'goes'} too")
+        skipped = []
+        if plan["special"]:
+            skipped.append(f"{len(plan['special'])} special teams play{'s' if len(plan['special']) != 1 else ''} stay (the game needs them)")
+        if plan["missing"]:
+            skipped.append(f"{plan['missing']} not in the playbook")
+        detail = "\n".join(part for part in ("; ".join(extra) + "." if extra else "", "; ".join(skipped) + "." if skipped else "") if part)
+        if not messagebox.askyesno("Remove plays", f"Take {n} play{'s' if n != 1 else ''} out of {name}?\n\n" + (detail + "\n\n" if detail else "")
+                                   + f"{name} goes from {plan['counted_before']} to {plan['counted_after']} plays. This changes this save only (Save to File writes it; a new career copies its playbooks from your profile)."):
+            return
+        try:
+            removed = data.apply_removal(plan)
+        except ValueError as e:
+            messagebox.showerror("Remove plays", str(e))
+            return
+        self.model.pb_pending = {t: data.tables[t] for t in data.dirty_tables}
+        self.mark_dirty()
+        self._fill_playbook_books()
+        if book[0] in self.tree_pb_books.get_children():
+            self.tree_pb_books.selection_set(book[0])
+        self.lbl_playbook_status.configure(text=f"Removed {removed} play{'s' if removed != 1 else ''} from {name} - Save to File to keep it.")
 
     def _apply_playbook_plan(self, plan):
         """Apply a copy plan to the in-memory playbook tables (validated; raises

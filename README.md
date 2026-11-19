@@ -40,6 +40,7 @@ export/import through HC09Editor required.
   at New Career Playbook Select); the coordinators' are listed beside it. Offense and Defense
   are shown one at a time. Playbooks 1-10 (your custom playbooks) and the plays you made in the
   game are named from your profile save, found next to your career and only read.
+  **Remove selected plays** (bottom of the tab) takes plays out of a playbook, default books included: select the playbook, select the plays in the plays list (Ctrl+click or Shift+click for several) and press it. A set left with no plays goes with them, and a formation left with no sets, so the playbook keeps the structure every stock playbook has; special teams plays (kickoffs, punts, returns) stay, the game needs them. Like Add plays it changes **this save** (Save to File writes it; the editor checks the file afterwards and puts the backup back if it does not pass); a new career copies its playbooks from your profile, which this does not change. Checked on a copy of a real career (the save reads back with fewer rows and passes the bridge's structure check); **not yet tried in the game**.
   **Set personnel...** lists the game's own sets with their personnel (11, 10, 00, 4-3-4, ...) and
   changes a set's slot positions, e.g. a fifth receiver into a tight end, one set or many with a
   bulk rule, with player names from your team's depth chart if a save is loaded. Unlike everything
