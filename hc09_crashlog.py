@@ -72,7 +72,7 @@ def shorten(path, keep=2):
     return "/".join(parts[-keep:])
 
 
-_START = r"(?:[A-Za-z]:[\\/]|\\\\|/(?=[\w.-]+/))"            # C:\  C:/  \\server  /dir/
+_START = r"(?:[A-Za-z]:[\\/]|\\\\|<home>[\\/]+|/(?=[\w.-]+/))"            # C:\  C:/  \\server  <home>\ (already blanked out)  /dir/
 _WORD = r"[^\s\\/'\"<>|*?:,;]+"                                # one word of a folder name (no separator, colon, comma or semicolon: those end a path in a sentence)
 _PATH = re.compile(
     r"(?:(?<=['\"])" + _START + r"[^'\"]*(?=['\"]))"                                            # a path in quotes (an OSError names its file that way): all of it, spaces included
@@ -135,9 +135,9 @@ def summarize_bridge(args):
 
 def log_write(text):
     """Something the editor wrote to the game files or to a save (and how it went): kept in memory and, once install() has run, in the write log file next to the reports."""
-    text = " ".join(redact(str(text)).split())               # one line per record, whatever the text holds (an error message with line breaks); the home folder and user name first, so that a path with spaces in it is cut right
-    text = shorten_paths(text)                               # any whole path left in it (an error message names the files: "[Errno 13] Permission denied: 'D:\Saves\...'") is cut to its last two parts
-    line = redact(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {text[:400]}")          # the file is private to this computer, but it is also read into reports: the home folder and user name are blanked out here too
+    text = " ".join(str(text).split())                       # one line per record, whatever the text holds (an error message with line breaks)
+    text = shorten_paths(text)                               # first, while the drive and folders are still there to be recognized: every whole path (an error message names its files) is cut to its last two parts
+    line = redact(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {text[:400]}")          # the file is private to this computer, but it is also read into reports: then the home folder and user name are blanked out wherever they are left
     with _lock:
         _writes.append(line)
         folder = _state["dir"]
