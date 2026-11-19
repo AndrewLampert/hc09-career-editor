@@ -195,7 +195,7 @@ class PlayLibrary:
     """Plays, sets, assignments and art of the game, from the tables of the master play database (qkl_boot.ast entry 40)."""
 
     def __init__(self, tables):
-        t = {k: tables.get(k, []) for k in ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PSLO", "PSLD", "ARTO", "ARTD", "PLPD", "PLRD", "PLCM", "PBAI", "FORM")}
+        t = {k: list(tables.get(k, [])) for k in ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PSLO", "PSLD", "ARTO", "ARTD", "PLPD", "PLRD", "PLCM", "PBAI", "FORM")}
         self.tables = t
         self.sets = {}
         self.plays = {}
@@ -550,6 +550,8 @@ class YardMap:
     @staticmethod
     def _interp(table, v, inverse=False):
         a = [(t[1], t[0]) for t in table] if inverse else table
+        if len(a) < 2:
+            raise ValueError("The editor could not work out the scale of the diagram from this play database (too few formations to compare), so players cannot be moved here.")
         if v <= a[0][0]:
             (x0, y0), (x1, y1) = a[0], a[1]
         elif v >= a[-1][0]:
@@ -621,10 +623,9 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
     The alignment is the stock set's, in the diagram's units (a custom set keeps the diagram coordinates in both the formation and the art columns); each of
     the set's alignment groups (the normal one and the pre-snap motion variants) is copied with its SETG rows. Ids are the smallest that neither the game's own data nor the profile (nor
     avoid, {"SETL", "PLYL", "SETP", "SGF_": ids a career holds}) uses, see free_ids."""
+    name = clean_play_name(name)                       # first: 1 to 24 letters, digits and ordinary signs, the same rule as Rename my plays
     d = lib.detail(base_plyl)
     base, bset = d["play"], d["set"]
-    if len(name) > 24 or not name.strip():
-        raise ValueError("A play name is 1 to 24 characters.")
     groups = [g for g in lib.tables["SGFF"] if int(g["SETL"]) == bset["setl"]]
     # The pre-snap motion alignment groups (M1le ... M5ri, up to 8 of them next to the normal one) are copied only for a play that has pre-snap motion (step 45): the game's own custom plays
     # keep the normal group and the one motion group they use, and the profile's group table holds just 100 rows, which nine groups per play would fill after eleven plays.
@@ -717,6 +718,11 @@ def build_custom_play(lib, base_plyl, name, overrides, profile, plyt=None, plan=
     return dict(rows), summary
 
 
+def _put(row, col, value):
+    """row[col] = value, written the way the row already holds that column (a save's rows hold text, build_custom_play gives numbers): equal values then compare equal."""
+    row[col] = str(value) if isinstance(row.get(col), str) else value
+
+
 def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None, reads=None, alignment=None):
     """Change a custom play of the profile in place: plyl is its MOUNTED id (lib.mount_custom), the other arguments are those of build_custom_play. Returns ({table: the whole table's rows
     with the play's rows changed}, summary) for the profile save: only values change, no row is added or taken out, so the ids, the set and the playbook links stay as they are.
@@ -737,19 +743,21 @@ def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None
     def mine(table, col, value):
         return [r for r in out[table] if int(r[col]) == value]
     pbpl = mine("PBPL", "PLYL", orig_plyl)[0]
-    pbpl["name"], pbpl["PLYT"], pbpl["vpos"] = new["PBPL"][0]["name"], new["PBPL"][0]["PLYT"], new["PBPL"][0]["vpos"]
+    for c in ("name", "PLYT", "vpos"):
+        _put(pbpl, c, new["PBPL"][0][c])
     for nr in new["PLYS"]:
         row = next((r for r in mine("PLYS", "PLYL", orig_plyl) if int(r["poso"]) == int(nr["poso"])), None)
         if row is None:
             raise ValueError("The play has no slot " + str(nr["poso"]) + " in the profile.")
-        row["PSAL"], row["ARTL"], row["PLRR"] = nr["PSAL"], nr["ARTL"], nr["PLRR"]
+        for c in ("PSAL", "ARTL", "PLRR"):
+            _put(row, c, nr[c])
     old_setp = {int(r["poso"]): r for r in mine("SETP", "SETL", orig_setl)}
     new_setp = {int(r["poso"]): r for r in new["SETP"]}
     for poso, nr in new_setp.items():
         if poso not in old_setp:
             raise ValueError("The set has no slot " + str(poso) + " in the profile.")
         for c in ("artx", "arty", "fmtx", "fmty"):
-            old_setp[poso][c] = nr[c]
+            _put(old_setp[poso], c, nr[c])
     # SETG: the new rows are keyed by the new set's slots and groups; the old ones by theirs. Match slots by poso and groups by their order (default group first), as build_custom_play made them
     new_poso = {int(r["SETP"]): int(r["poso"]) for r in new["SETP"]}
     old_poso = {int(r["SETP"]): p_ for p_, r in old_setp.items()}
@@ -766,7 +774,7 @@ def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None
         if row is None:
             raise ValueError("The play's alignment is not complete in the profile, so it cannot be changed in place.")
         for c in ("SF__", "x___", "y___", "fx__", "fy__", "anm_", "dir_", "fanm", "fdir"):
-            row[c] = nr[c]
+            _put(row, c, nr[c])
     for table in ("PLPD", "PLRD", "PLCM"):
         have = mine(table, "PLYL", orig_plyl)
         want = new.get(table, [])
@@ -777,8 +785,8 @@ def update_custom_play(lib, plyl, name, overrides, profile, plyt=None, plan=None
         for old_row, nr in zip(have, want):
             for c in old_row:
                 if c != "PLYL" and c in nr:
-                    old_row[c] = nr[c]
-    summary = {"setl": orig_setl, "plyl": orig_plyl, "name": name, "plyt": int(new["PBPL"][0]["PLYT"]), "from": info["name"], "slots_changed": sorted(overrides),
+                    _put(old_row, c, nr[c])
+    summary = {"setl": orig_setl, "plyl": orig_plyl, "name": new["PBPL"][0]["name"], "plyt": int(new["PBPL"][0]["PLYT"]), "from": info["name"], "slots_changed": sorted(overrides),
                "slots_moved": summ["slots_moved"], "mounted": plyl}
     return out, summary
 
@@ -923,15 +931,15 @@ def sync_play_definition(profile, career, setl, plyl):
         if t == "PLRD":
             pairs = list(zip(a, b))
         else:
-            index = {tuple(r[k] for k in keys[t]): r for r in b}
-            pairs = [(x, index.get(tuple(x[k] for k in keys[t]))) for x in a]
+            index = {tuple(str(r[k]) for k in keys[t]): r for r in b}                       # ids as text: 5 and "5" are the same id
+            pairs = [(x, index.get(tuple(str(x[k]) for k in keys[t]))) for x in a]
         changed = False
         for x, y in pairs:
             if y is None:
                 raise ValueError(f"The career's copy of the play has a {t} row that the profile's does not, so it cannot be brought up to date in place.")
             for c in x:
-                if c in y and x[c] != y[c]:
-                    x[c] = y[c]
+                if c in y and str(x[c]) != str(y[c]):          # 5 and "5" are the same value (the profile's rows may hold numbers where the career's hold text)
+                    _put(x, c, y[c])
                     changed = True
         if changed:
             out[t] = career[t]
