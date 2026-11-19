@@ -6523,6 +6523,8 @@ class PlayDesignerDialog(tk.Toplevel):
         self.btn_make.pack(side="right", padx=(0, 8))
         self.btn_files = ttk.Button(bottom, text="Make a game play...", command=self._open_game_files)
         self.btn_files.pack(side="right", padx=(0, 8))
+        self.btn_book_name = ttk.Button(bottom, text="Rename in playbooks...", command=self._open_rename_in_books)
+        self.btn_book_name.pack(side="right", padx=(0, 8))
         self.btn_add = ttk.Button(bottom, text="Add a play...", command=self._open_add_play)
         self.btn_add.pack(side="right", padx=(0, 8))
         self.btn_convert = ttk.Button(bottom, text="Convert my plays...", command=self._open_convert)
@@ -6945,6 +6947,7 @@ class PlayDesignerDialog(tk.Toplevel):
             state, note = "normal", ("This is one of your own plays: Save changes... puts the changes into it, or saves them as a new play." if self.is_mine() else "")
         self.btn_make.configure(state=state, text="Save changes..." if self.is_mine() else "Make custom play...")
         self.btn_files.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
+        self.btn_book_name.configure(state="normal" if d is not None and not self.is_mine() and GF is not None else "disabled")
         self.btn_add.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None and AP is not None else "disabled")
         self.btn_convert.configure(state="normal" if getattr(self.lib, "custom", None) and GF is not None and AP is not None else "disabled")
         self.btn_cpu.configure(state="normal" if getattr(self.lib, "custom", None) and self.my_profile else "disabled")
@@ -7076,6 +7079,11 @@ class PlayDesignerDialog(tk.Toplevel):
         if self.detail is None or self.is_mine() or GF is None or AP is None:
             return
         AddPlayDialog(self.app, self)
+
+    def _open_rename_in_books(self):
+        if self.detail is None or self.is_mine() or GF is None:
+            return
+        RenameInBooksDialog(self.app, self)
 
     def _open_convert(self):
         if not getattr(self.lib, "custom", None) or GF is None or AP is None:
@@ -8540,6 +8548,155 @@ class RenamePlaybooksDialog(tk.Toplevel):
                 pass
 
         app.run_in_thread_with_busy("Putting the playbook names back...", work, done, error_title="Put the names back")
+
+
+def plain_bridge_error(e):
+    """The reason in a bridge failure, without the stack: the first line that says ERROR (or the first line), as one sentence."""
+    text = str(e)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("at ")]
+    why = next((ln for ln in lines if ln.startswith("ERROR")), lines[0] if lines else text)
+    return re.sub(r"^ERROR:\s*(Error:\s*)?", "", why)
+
+
+class RenameInBooksDialog(tk.Toplevel):
+    """Rename in playbooks: the name a play has in the game's playbooks (the play-call screen shows each playbook's own name for a play), changed in the playbooks picked here only, or everywhere (the
+    play's own name and the name in every playbook that has it). Written into the game's own files (qkl_boot.ast, in place); the first time the changed entries are backed up and Put the game files
+    back restores them."""
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Rename in playbooks")
+        self.transient(designer)
+        self.geometry("780x640")
+        self.app, self.designer = app, designer
+        self.plyl = designer.plyl
+        play = designer.lib.plays[self.plyl]
+        ttk.Label(self, text=f"Rename {play['name']} in the playbooks", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=740, justify="left", padding=(14, 0, 14, 6),
+                  text="Each playbook has its own name for a play, and the play-call screen shows that one. Pick the playbooks that should call the play something else, or rename it everywhere. "
+                       "Close RPCS3 first. The first time, the changed file entries are saved in Documents\\hc09-game-file-backup, and Put the game files back restores them. The playbooks' names are kept "
+                       "in a compressed table that cannot grow: a name that needs more room than the old ones leave is refused (nothing is written), so a shorter name always works. "
+                       "A name cannot be changed after a play was added with Add a play: put the game files back first.").pack(anchor="w")
+        lf = ttk.Frame(self)
+        lf.pack(fill="both", expand=True, padx=14, pady=4)
+        self.lst = tk.Listbox(lf, selectmode="extended", height=12, exportselection=False)
+        self.lst.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self.lst.yview)
+        sb.pack(side="left", fill="y")
+        self.lst.configure(yscrollcommand=sb.set)
+        self._books = []
+        sel = ttk.Frame(self)
+        sel.pack(fill="x", padx=14)
+        ttk.Button(sel, text="Select all", command=lambda: self.lst.selection_set(0, "end")).pack(side="left")
+        ttk.Button(sel, text="Clear selection", command=lambda: self.lst.selection_clear(0, "end")).pack(side="left", padx=(6, 0))
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=14, pady=(8, 2))
+        ttk.Label(form, text="New name (24 characters):").grid(row=0, column=0, sticky="w", pady=3)
+        self.name_var = tk.StringVar(value=play["name"][:24])
+        ttk.Entry(form, width=30, textvariable=self.name_var).grid(row=0, column=1, sticky="w", padx=6)
+        self.scope_var = tk.StringVar(value="some")
+        ttk.Radiobutton(form, text="Only in the playbooks selected above", variable=self.scope_var, value="some").grid(row=1, column=1, sticky="w", padx=6)
+        ttk.Radiobutton(form, text="Everywhere: the play's own name and every playbook that has it", variable=self.scope_var, value="all").grid(row=2, column=1, sticky="w", padx=6)
+        self.lbl_result = ttk.Label(self, wraplength=740, justify="left", foreground="gray", padding=(14, 6, 14, 4))
+        self.lbl_result.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_apply = ttk.Button(btn, text="Rename", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Put the game files back...", command=self._restore).pack(side="left")
+        self._fill_books()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _fill_books(self):
+        lib, d = self.designer.lib, self.designer
+        keep = [self._books[i] for i in self.lst.curselection()] if self._books else []
+        self._books = sorted(lib.books_of_play.get(self.plyl, ()), key=lambda b: d.books.get(b, (f"playbook {b}", ""))[0].lower())
+        self.lst.delete(0, "end")
+        for b in self._books:
+            self.lst.insert("end", f"{d.books.get(b, (f'playbook {b}', ''))[0]}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
+        for i, b in enumerate(self._books):
+            if b in keep:
+                self.lst.selection_set(i)
+
+    def _apply(self):
+        app, d = self.app, self.designer
+        try:
+            name = GF.clean_name(self.name_var.get())
+        except ValueError as e:
+            messagebox.showerror("Rename in playbooks", str(e), parent=self)
+            return
+        everywhere = self.scope_var.get() == "all"
+        picked = [self._books[i] for i in self.lst.curselection()]
+        if not everywhere and not picked:
+            messagebox.showinfo("Rename in playbooks", "Select the playbooks (Ctrl+click or Shift+click for several, or Select all), or choose Everywhere.", parent=self)
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Rename in playbooks", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        archives = app._personnel_archives()
+        if not archives:
+            return
+        where = "everywhere (the play's own name and every playbook that has it)" if everywhere else f"in {len(picked)} playbook{'s' if len(picked) != 1 else ''}"
+        if not messagebox.askyesno("Rename in playbooks", f"Rename {d.lib.plays[self.plyl]['name']} to {name} {where}?\n\nThis writes into qkl_boot.ast of your game. The first time, the changed entry is saved in "
+                                   "Documents\\hc09-game-file-backup and Put the game files back restores it.", parent=self):
+            return
+        lib, plyl = d.lib, self.plyl
+
+        def work():
+            try:
+                return app.game_file_rename(lib, plyl, name, None if everywhere else picked, archives)
+            except RuntimeError as e:
+                raise RuntimeError(plain_bridge_error(e)) from None
+
+        def done(result):
+            _targets, report, missing, rows = result
+            if not self.winfo_exists():
+                return
+            if rows:
+                lib.set_book_play_names(rows)
+            if everywhere:
+                lib.plays[plyl]["name"] = name
+                if d.detail is not None and d.plyl == plyl:
+                    d.detail["play"]["name"] = name
+            if d.winfo_exists():
+                d._fill()
+                if d.detail is not None and d.plyl == plyl:
+                    d._show()
+            self._fill_books()
+            n = sum(v for _name, v in report)
+            self.lbl_result.configure(text=f"Done: {n} name{'s' if n != 1 else ''} written ({'; '.join(f'{rep}: {v}' for rep, v in report)}). Start the game and look at the play-call screen; "
+                                           "Put the game files back restores the names." + (f" {len(missing)} playbook(s) had no name row for the play." if missing else ""))
+            messagebox.showinfo("Rename in playbooks", f"Done. {name} is the play's name {where}.\n\nPut the game files back (this window) restores the names as they were.", parent=self)
+
+        app.run_in_thread_with_busy("Renaming the play...", work, done, error_title="Rename in playbooks")
+
+    def _restore(self):
+        app = self.app
+        if app._rpcs3_running():
+            messagebox.showerror("Put the game files back", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        archives = app._personnel_archives()
+        if not archives:
+            return
+        if not messagebox.askyesno("Put the game files back", "Put every play database entry that the editor changed (plays, names, Set personnel) back as it was before the first change?\n\nThe backups are in "
+                                   "Documents\\hc09-game-file-backup.", parent=self):
+            return
+
+        def work():
+            return app.game_file_restore(archives)
+
+        def done(result):
+            messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
+            designer = self.designer
+            self.destroy()
+            if designer.winfo_exists():
+                designer.refresh_from_game_files(reselect=True)
+
+        app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
 
 
 class AddPlayDialog(tk.Toplevel):
@@ -13917,10 +14074,7 @@ class App(tk.Tk):
         copies, cache = self.game_file_copies(archives)
         names_entry = names_rows = None
         if changes["name"]:                       # the playbooks' own names for the play (PPPN) are in another entry of qkl_boot.ast
-            ex = self.model.run_bridge(["shipped-table-export", "--ast", archives[0], "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows", "--out-dir", cache])
-            loc = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(ex["entryIndex"])])
-            names_entry = {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"]}
-            names_rows = read_csv_dicts(os.path.join(cache, "pppn.csv"))
+            names_entry, names_rows = self._book_name_rows(archives[0], cache)
         try:
             targets, report = GF.targets_for(copies, cache, changes, names_entry, names_rows)
         except ValueError as e:
@@ -13928,14 +14082,53 @@ class App(tk.Tk):
         if not targets:
             raise RuntimeError("The game files already have these values.")
         apply_personnel_targets(self.model, targets, self._personnel_backup_dir(), mode=mode)
+        if changes["name"]:
+            self.reload_book_play_names(archives[0])
         return targets, report
+
+    def _book_name_rows(self, boot_ast, cache):
+        """The entry of qkl_boot.ast that holds the playbooks' own names for plays (PPPN) and its rows: ({ast, index, start, size}, [{BOKL, PLYL, PPPM}]). Bridge only (worker thread)."""
+        ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows", "--out-dir", cache])
+        loc = self.model.run_bridge(["entry-locate", "--ast", boot_ast, "--index", str(ex["entryIndex"])])
+        return {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"], "file": loc.get("file", os.path.basename(loc["ast"]))}, read_csv_dicts(os.path.join(cache, "pppn.csv"))
+
+    def reload_book_play_names(self, boot_ast):
+        """After the game files' playbook names changed (a rename, Put the game files back): drop the cached copy and read them again, so that the editor shows what the files hold. Returns the
+        rows ([{BOKL, PLYL, PPPM}], [] when they cannot be read). Bridge only (worker thread)."""
+        try:
+            os.remove(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE))
+        except OSError:
+            pass
+        try:
+            if self._ensure_book_play_names(boot_ast):
+                return read_csv(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE))
+        except Exception:
+            pass
+        return []
+
+    def game_file_rename(self, lib, plyl, name, books, archives):
+        """Give a play of the game a new name. books None: everywhere (the play's own name in every copy of the play database that holds it, and its name in every playbook that has it);
+        else a list of playbook numbers (BOKL): the name in those playbooks only, nothing else changes. Every entry is checked before the first write and backed up the first time (the Set
+        personnel and Make a game play backups: Put the game files back undoes it). Returns (targets, report, missing, rows): rows = the playbook names read again afterwards.
+        Raises when nothing would change or a row is not what was read. Bridge only (worker thread)."""
+        self._refuse_write_to_iso_copy(*archives)
+        if books is None:
+            targets, report = self.game_file_apply(GF.name_only_changes(lib, plyl, name), archives)
+            return targets, report, [], self.reload_book_play_names(archives[0])
+        os.makedirs(self.GAMEFILE_CACHE_DIR, exist_ok=True)
+        names_entry, names_rows = self._book_name_rows(archives[0], self.GAMEFILE_CACHE_DIR)
+        targets, report, missing = GF.book_name_targets(names_entry, names_rows, plyl, books, name)
+        if not targets:
+            raise RuntimeError("Those playbooks already call the play that." + (f" ({len(missing)} playbook(s) have no name row for the play.)" if missing else ""))
+        apply_personnel_targets(self.model, targets, self._personnel_backup_dir())
+        return targets, report, missing, self.reload_book_play_names(archives[0])
 
     def game_file_restore(self, archives):
         """Write every backed-up entry of the play databases back (the Set personnel tool shares the backups); returns how many were put back."""
         self._refuse_write_to_iso_copy(*archives)
-        copies, _cache = self.game_file_copies(archives)
-        names = self.model.run_bridge(["entry-locate", "--ast", archives[0], "--index", str(GF.NAMES_ENTRY)])      # the entry of the playbooks' own play names (backed up only if a rename was made)
-        copies = list(copies) + [{"ast": names["ast"], "index": names["index"], "start": names["start"], "size": names["size"], "file": names["file"]}]
+        copies, cache = self.game_file_copies(archives)
+        names, _rows = self._book_name_rows(archives[0], cache)        # the entry of the playbooks' own play names (found by its table, as when it was written: an Xbox 360 archive numbers its entries one higher); backed up only if a rename was made
+        copies = list(copies) + [dict(names)]
         if PN is not None:                        # the playbooks' own names (Rename playbooks) are in another entry: backed up only if a playbook was renamed
             try:
                 _rows, plab = self.playbook_rows_for_rename(archives[0])
@@ -13949,6 +14142,7 @@ class App(tk.Tk):
         holder.copies = copies
         res = restore_personnel_files(self.model, holder, self._personnel_backup_dir())
         self._forget_playbook_names()
+        self.reload_book_play_names(archives[0])                       # the playbook names may be as they were before a rename: the editor reads them again
         return sum(1 for r in res.get("results", []) if r.get("restored"))
 
     # ---- Rename playbooks (the default playbooks' names: PLAB.BNAM in qkl_boot.ast, see hc09_playbooknames.py)
