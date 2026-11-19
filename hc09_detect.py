@@ -603,8 +603,24 @@ def pcport_search_places():
     is four levels down), then the top of every drive (C:\\Games\\HC09Recomp\\build\\userdata-hc27\\content is five)."""
     places = [(os.path.expanduser("~"), 6)]
     if os.name == "nt":
-        places += [(d + ":\\", 5) for d in "CDEFGH" if os.path.isdir(d + ":\\")]
+        places += [(root, 5) for root in drive_roots()]
     return [p for p in places if os.path.isdir(p[0])]
+
+
+def drive_roots():
+    """The root of every local or removable drive (C:\\, D:\\ ... any letter): Windows is asked which drives there are (nothing is read from them); network and disc drives are left out (a disconnected
+    one can stall a search) and so are the floppy letters A and B. If Windows cannot be asked, C to H that exist."""
+    roots = []
+    try:
+        import ctypes
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        for i in range(2, 26):
+            root = chr(65 + i) + ":\\"
+            if mask & (1 << i) and ctypes.windll.kernel32.GetDriveTypeW(root) in (2, 3):      # 2 removable, 3 fixed
+                roots.append(root)
+    except (OSError, AttributeError, ImportError):
+        roots = [d + ":\\" for d in "CDEFGH" if os.path.isdir(d + ":\\")]
+    return roots
 
 
 def search_pcport_roots(places, budget=20.0):

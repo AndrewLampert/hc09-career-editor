@@ -5859,9 +5859,9 @@ class SavesDialog(tk.Toplevel):
         if error is not None:
             self.lbl_note.configure(text=f"The search failed: {error}")
             return
-        self._show_saves(saves, searched=True)
+        self._show_saves(saves, searched=True, timed_out=bool(getattr(self.app, "last_search_timed_out", False)))
 
-    def _show_saves(self, saves, searched=False):
+    def _show_saves(self, saves, searched=False, timed_out=False):
         self.saves = saves
         for iid in self.tree.get_children():
             self.tree.delete(iid)
@@ -5878,6 +5878,8 @@ class SavesDialog(tk.Toplevel):
         else:
             self.lbl_note.configure(text="No career saves found yet. Use Look in another folder... and pick RPCS3's folder (the one that holds dev_hdd0) "
                                          "or its savedata folder, or Xenia's folder (the one that holds content), or the install folder of HC09 / HC27 for PC (or its Saves folder), or Search this computer.")
+        if timed_out:
+            self.lbl_note.configure(text=self.lbl_note.cget("text") + " The search stopped after 20 seconds before it had looked everywhere: if your game is not listed, use Look in another folder... and pick its folder.")
         self.btn_open.configure(state="normal" if self.saves else "disabled")
 
     def _selected(self):
@@ -12005,8 +12007,10 @@ class App(tk.Tk):
                 found.append({"name": f"{sv['name']} (Xenia)", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "root": sv["root"], "platform": "xenia"})
         have = {os.path.normcase(os.path.abspath(f["path"])) for f in found}
         pc_roots = self._detect_pcport_roots()
+        self.last_search_timed_out = False
         if search:                                  # an install can be anywhere: look in the user's folder and on every drive for the saves folders of the PC versions
-            pc_roots += [r for r in hc09_detect.search_pcport_roots(hc09_detect.pcport_search_places())[0] if os.path.normcase(r) not in [os.path.normcase(x) for x in pc_roots]]
+            more, self.last_search_timed_out = hc09_detect.search_pcport_roots(hc09_detect.pcport_search_places())      # the flag: the time ran out before every folder was looked at
+            pc_roots += [r for r in more if os.path.normcase(r) not in [os.path.normcase(x) for x in pc_roots]]
         for sv in hc09_detect.list_pcport_saves(pc_roots):
             if sv["kind"] == "career" and os.path.normcase(os.path.abspath(sv["path"])) not in have:
                 found.append({"name": f"{sv['name']} (" + ("HC27" if sv.get("variant") == "HC27" else f"HC09 PC{' ' + sv['version'] if sv['version'] else ''}") + ")", "folder": sv["package"], "path": sv["path"], "mtime": sv["mtime"],
