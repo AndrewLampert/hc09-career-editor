@@ -68,7 +68,7 @@ def table_counts(db_path, node=None):
     if not os.path.isfile(BRIDGE_JS):
         raise CheckError(f"The editor's bridge is missing ({BRIDGE_JS}): run this from the editor's own folder.")
     try:
-        r = subprocess.run([node, BRIDGE_JS, "inspect", "--db", db_path], capture_output=True, text=True, timeout=180)
+        r = subprocess.run([node, BRIDGE_JS, "inspect", "--db", db_path], capture_output=True, text=True, timeout=180, creationflags=D.NO_WINDOW)
     except subprocess.TimeoutExpired:
         raise CheckError("Reading the save took more than three minutes: it may be damaged.")
     except OSError as e:
@@ -96,21 +96,21 @@ def saves_in(path):
     if os.path.isfile(same_name):
         return [same_name]
     found = list(D._save_files(path))
-    found.sort(key=lambda p: -os.path.getmtime(p))
+
+    def newest_first(p):
+        try:
+            return -os.path.getmtime(p)
+        except OSError:
+            return 0                                   # a file that went away since it was listed sorts last; reading it then says so
+    found.sort(key=newest_first)
     return found
-
-
-def emulator_search_roots():
-    """The folders a search for a portable RPCS3 or Xenia looks in (the same as the editor's Search this computer)."""
-    home = os.path.expanduser("~")
-    return [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")]
 
 
 def find_saves(extra=(), search=True, budget=25.0):
     """Every career or profile save this computer has, newest first: the places the editor looks (RPCS3, Xenia, the PC versions, the folders in `extra`) and, with `search`, a time-limited search for
     a portable RPCS3 or Xenia in the usual folders (emulator_search_roots) and for the PC versions' saves folders (an install can be anywhere). Returns ([{"platform", "name", "path", "mtime", "size", "kind"}], the folders searched, True when the search ran out of time)."""
     found = []
-    roots_to_search = emulator_search_roots() if search else ()           # the bounded search for an RPCS3 / Xenia folder outside the usual places (it runs only when none turned up)
+    roots_to_search = D.emulator_search_roots() if search else ()         # the bounded search for an RPCS3 / Xenia folder outside the usual places (it runs only when none turned up)
     for sv in D.list_saves(D.savedata_roots(D.candidate_rpcs3_dirs([], extra, roots_to_search))):
         found.append({"platform": "RPCS3", "name": sv["name"], "path": sv["path"], "mtime": sv["mtime"], "size": sv["size"], "kind": "career"})
     for sv in D.list_xenia_saves(D.candidate_xenia_dirs([], extra, roots_to_search)):
@@ -249,23 +249,31 @@ def main(argv):
         args = [picked] if picked else []
     if not args:
         return 2
-    out, full = [], []
+    out, full, empty = [], [], 0                         # empty: how many of the given paths had nothing to check (the exit code says so)
     for given in args:
         saves = saves_in(given)
         if not saves:
             out += [f"Nothing to check at {given}: it is not a file or a folder with a save in it.", ""]
+            empty += 1
             continue
         extra = saves[MAX_SAVES:]
+        checked = skipped = 0
         for path in saves[:MAX_SAVES]:
             kind, _n = D.classify_save(path)
             if kind == "other" and len(saves) > 1:
-                continue                               # a folder: skip the files that are not saves (headers, thumbnails) without a word
+                skipped += 1
+                continue                               # a folder: skip the files that are not saves (headers, thumbnails) without a word, unless nothing in it is a save (below)
             try:
                 lines, table_list = report(path)
             except CheckError as e:
                 lines, table_list = [f"Save:   {path}", "", str(e)], []
             out += lines + ["", "-" * 100, ""]
             full += table_list + [""]
+            checked += 1
+        if skipped and not checked:
+            out += [f"Nothing to check at {given}: {skipped} file(s) of a useful size were looked at and none is a career or profile save (they may be roster saves, headers or files of another game). "
+                    "Give the save itself, or the folder it is in.", ""]
+            empty += 1
         if extra:
             out += [f"{len(extra)} more file(s) in {given} were not checked (the {MAX_SAVES} newest were).", ""]
     text = "\n".join(out).rstrip() + "\n"
@@ -284,7 +292,7 @@ def main(argv):
                 target = ""
         if target:
             print(f"The same report, with every table of the save listed, is in {target}")
-    return 0
+    return 1 if empty else 0
 
 
 if __name__ == "__main__":

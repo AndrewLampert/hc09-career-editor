@@ -6,6 +6,7 @@ plain image is 0). The descriptor starts with MICROSOFT*XBOX*MEDIA and names the
 four bytes: left (2 bytes), right (2), first sector (4), size (4), attributes (1, 0x10 = directory), name length (1), the name; entries are padded to four bytes with 0xFF."""
 import os
 import struct
+import tempfile
 
 SECTOR = 2048
 MAGIC = b"MICROSOFT*XBOX*MEDIA"
@@ -106,28 +107,33 @@ def describe(path):
 
 
 def extract(path, name, dest, progress=None):
-    """Copy a file out of the image to dest (written as dest + '.part' first and renamed, so a stopped copy never leaves a file that looks complete). progress(done, total) is called now and then. Returns
+    """Copy a file out of the image to dest (written to a temporary .part file beside it first and renamed, so a stopped copy never leaves a file that looks complete). progress(done, total) is called now and then. Returns
     the number of bytes. Raises ValueError (see find) or OSError."""
     off, sector, size = find(path, name)
-    os.makedirs(os.path.dirname(os.path.abspath(dest)) or ".", exist_ok=True)
-    part = dest + ".part"
-    done = 0
+    if off + sector * SECTOR + size > os.path.getsize(path):                  # a damaged or cut-short image: say so before hundreds of megabytes are copied for nothing
+        raise ValueError(f"The disc image ends before {name} does (it is cut short).")
+    folder = os.path.dirname(os.path.abspath(dest)) or "."
+    os.makedirs(folder, exist_ok=True)
+    done, part = 0, None
     try:
-        with open(path, "rb") as src, open(part, "wb") as out:
-            src.seek(off + sector * SECTOR)
-            while done < size:
-                block = src.read(min(CHUNK, size - done))
-                if not block:
-                    raise ValueError(f"The disc image ends before {name} does (it is cut short).")
-                out.write(block)
-                done += len(block)
-                if progress:
-                    progress(done, size)
+        with open(path, "rb") as src:
+            handle, part = tempfile.mkstemp(prefix=os.path.basename(dest) + ".", suffix=".part", dir=folder)      # its own name: two copies to the same place do not write into one file
+            with os.fdopen(handle, "wb") as out:
+                src.seek(off + sector * SECTOR)
+                while done < size:
+                    block = src.read(min(CHUNK, size - done))
+                    if not block:
+                        raise ValueError(f"The disc image ends before {name} does (it is cut short).")
+                    out.write(block)
+                    done += len(block)
+                    if progress:
+                        progress(done, size)
         os.replace(part, dest)
     except BaseException:                                         # a failed or stopped copy leaves no half file behind (it may be hundreds of MB)
-        try:
-            os.remove(part)
-        except OSError:
-            pass
+        if part:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
         raise
     return done

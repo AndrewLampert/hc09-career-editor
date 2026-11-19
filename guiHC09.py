@@ -109,6 +109,7 @@ except ImportError:
 # Bridge (direct .db load/save, no more manual CSV export/import via HC09Editor)
 # -----------------------------
 NODE_EXE = "node"
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # the editor runs under pythonw: a console program (node, tasklist) started without this opens a black window for as long as it runs (0 off Windows)
 BRIDGE_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hc09-bridge", "bridge.js")
 
 # Recent-files list (QoL). Save files are always literally named "USR-DATA",
@@ -1919,7 +1920,7 @@ class CSVModel:
             CRASH.note("bridge " + summary)
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, check=True
+                cmd, capture_output=True, text=True, check=True, creationflags=NO_WINDOW
             )
         except FileNotFoundError:
             if CRASH is not None:
@@ -4825,7 +4826,7 @@ PERSONNEL_DEFENSE_EDITABLE = tuple(range(10, 19))  # every defensive position
 def rpcs3_running():
     """True if rpcs3.exe is running (the game files cannot be written reliably then)."""
     try:
-        out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=20).stdout
+        out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW).stdout
     except (OSError, subprocess.SubprocessError):
         return False
     return "rpcs3" in out.lower()
@@ -12702,15 +12703,13 @@ class App(tk.Tk):
     def _detect_rpcs3_dirs(self, search=False):
         if hc09_detect is None:
             return []
-        home = os.path.expanduser("~")
-        roots = [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")] if search else []
+        roots = hc09_detect.emulator_search_roots() if search else []
         return hc09_detect.candidate_rpcs3_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
 
     def _detect_xenia_dirs(self, search=False):
         if hc09_detect is None:
             return []
-        home = os.path.expanduser("~")
-        roots = [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")] if search else []
+        roots = hc09_detect.emulator_search_roots() if search else []
         return hc09_detect.candidate_xenia_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
 
     def _detect_pcport_roots(self):
@@ -13763,10 +13762,10 @@ class App(tk.Tk):
         names = ("rpcs3", "xenia", "xenia_canary", "xenia_edge", "xenia-edge") + (hc09_detect.PCPORT_PROGRAMS if hc09_detect is not None else ("hc09", "hc09-launcher"))
         try:
             if os.name == "nt":
-                out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=15)
+                out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=15, creationflags=NO_WINDOW)
                 running = {line.split()[0].lower() for line in out.stdout.splitlines() if line.strip()}
                 return any(n + ".exe" in running for n in names)
-            return any(subprocess.run(["pgrep", "-x", n], capture_output=True, timeout=15).returncode == 0 for n in names)
+            return any(subprocess.run(["pgrep", "-x", n], capture_output=True, timeout=15, creationflags=NO_WINDOW).returncode == 0 for n in names)
         except (OSError, subprocess.SubprocessError):
             return False
 

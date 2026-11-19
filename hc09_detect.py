@@ -11,8 +11,15 @@ import re
 import subprocess
 import time
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # the editor runs under pythonw: a console program started without this opens a black window for as long as it runs (0 off Windows)
 GAME_ID = "BLUS30128"                                   # NFL Head Coach 09 (USA)
 GAME_FILES = ("qkl_boot.ast", "qkl_fe2ig.ast")
+
+
+def emulator_search_roots():
+    """The folders a search for a portable RPCS3 or Xenia looks in: the editor's Search this computer and Check My Save use this one list."""
+    home = os.path.expanduser("~")
+    return [r"C:\Emulators", r"C:\Games", os.path.join(home, "Documents"), os.path.join(home, "Desktop"), os.path.join(home, "Downloads")]
 
 
 def common_rpcs3_dirs():
@@ -204,20 +211,32 @@ def xenia_named_dirs(parents):
     return out
 
 
+_running_cache = [0.0, []]                         # [when it was asked, the answer]
+RUNNING_CACHE_SECONDS = 10
+
+
 def running_xenia_dirs():
     """The folders of Xenia programs (Canary, Edge) that are running now, asked of Windows: a portable Xenia keeps `content` next to its program, wherever that is. [] elsewhere or on
-    any failure."""
+    any failure. The answer is kept for RUNNING_CACHE_SECONDS: asking starts tasklist (and PowerShell when a Xenia runs), and a list of saves is rebuilt many times."""
     if os.name != "nt":
         return []
+    if time.time() - _running_cache[0] < RUNNING_CACHE_SECONDS:
+        return list(_running_cache[1])
+    dirs = _ask_running_xenia_dirs()
+    _running_cache[0], _running_cache[1] = time.time(), list(dirs)
+    return dirs
+
+
+def _ask_running_xenia_dirs():
     try:                                 # a quick look first: PowerShell is slow to start and is only needed when something called xenia* runs
-        listing = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10).stdout
+        listing = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW).stdout
         if not any(line.lower().startswith('"xenia') for line in listing.splitlines()):
             return []
     except (OSError, subprocess.SubprocessError):
         pass
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Process | Where-Object { $_.Name -like 'xenia*' } | ForEach-Object { $_.Path }"],
-                             capture_output=True, text=True, timeout=10).stdout
+                             capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     dirs = []
@@ -250,11 +269,12 @@ def search_xenia_dirs(roots, max_depth=4, budget=3.0):
 
 
 def xenia_dir_of(path):
-    """The Xenia folder a save (or any path inside its content folder) lives in, or None: the parent of the `content` folder on the way up."""
+    """The Xenia folder a save (or any path inside its content folder) lives in, or None: the parent of the `content` folder on the way up, when that content folder holds this game
+    (content/<profile id>/<title id>): any other folder that happens to be called content (a download, a fix pack) is not Xenia's."""
     cur = os.path.abspath(path)
     for _ in range(12):
         parent = os.path.dirname(cur)
-        if os.path.basename(cur).lower() == XENIA_CONTENT_DIR:
+        if os.path.basename(cur).lower() == XENIA_CONTENT_DIR and xenia_title_folders(parent):
             return parent
         if parent == cur:
             return None
@@ -280,33 +300,59 @@ def title_folder_of(path):
     return None
 
 
+TDB_SEARCH_LIMIT = 64 << 20                      # how far into a file a database is looked for when the header does not point at it (a save is a few megabytes)
+
+
+def _find_signature(f, limit=TDB_SEARCH_LIMIT, chunk=4 << 20):
+    """The offset of the first TDB_SIGNATURE in an open file, looking at most `limit` bytes in, `chunk` bytes at a time (a large file is not read into memory); -1 when there is none."""
+    f.seek(0)
+    pos, tail, scanned = 0, b"", 0                  # pos: the file offset of the first byte of tail + the block read next
+    keep = len(TDB_SIGNATURE) - 1
+    while scanned < limit:
+        block = f.read(chunk)
+        if not block:
+            return -1
+        data = tail + block
+        i = data.find(TDB_SIGNATURE)
+        if i >= 0:
+            return pos + i
+        tail = data[-keep:]
+        pos += len(data) - len(tail)
+        scanned += len(block)
+    return -1
+
+
+def _db_start_in(f):
+    """mc02_db_start for a file that is already open (read from its start)."""
+    head = f.read(12)
+    if head[:2] == b"DB":
+        return 0
+    if head[:4] != MC02_MAGIC or len(head) < 12:
+        return None
+    start = MC02_HEADER_SIZE + int.from_bytes(head[8:12], "big")
+    f.seek(start)
+    if f.read(2) == b"DB":
+        return start
+    found = _find_signature(f)                      # the header does not point at a database: look for one (as the converter does)
+    return found if found >= 0 else None
+
+
 def mc02_db_start(path):
     """Where the database starts in a save file: after the MC02 header and its metadata block; 0 for a bare database; None when the file holds neither."""
     try:
         with open(path, "rb") as f:
-            head = f.read(12)
-            if head[:2] == b"DB":
-                return 0
-            if head[:4] != MC02_MAGIC or len(head) < 12:
-                return None
-            start = MC02_HEADER_SIZE + int.from_bytes(head[8:12], "big")
-            f.seek(start)
-            if f.read(2) == b"DB":
-                return start
-            f.seek(0)
-            found = f.read().find(TDB_SIGNATURE)                    # the header does not point at a database: look for one (as the converter does)
-            return found if found >= 0 else None
+            return _db_start_in(f)
     except OSError:
         return None
 
 
 def db_table_count(path):
-    """The number of tables in a save's database (43 in a profile, 208 in a career), or None when it cannot be read."""
-    start = mc02_db_start(path)
-    if start is None:
-        return None
+    """The number of tables in a save's database (43 in a profile, 208 in a career), or None when it cannot be read. The file is opened once."""
     try:
         with open(path, "rb") as f:
+            start = _db_start_in(f)
+            if start is None:
+                return None
             f.seek(start + 0x10)
             raw = f.read(4)
         return int.from_bytes(raw, "big") if len(raw) == 4 else None
@@ -360,13 +406,16 @@ def list_xenia_saves(xenia_dirs):
                 key = os.path.normcase(os.path.abspath(path))
                 if key in seen:
                     continue
+                try:
+                    st = os.stat(path)                                   # first: a save that Xenia replaces or deletes at this moment is left out, not an error
+                except OSError:
+                    continue
                 kind, tables = classify_save(path)
                 if kind == "other":
                     continue
                 seen.add(key)
                 rel = os.path.relpath(path, title).split(os.sep)
                 package = rel[-2] if len(rel) >= 3 else ""             # <type>/<package>/<file>; a file straight in the type folder has no package folder
-                st = os.stat(path)
                 shown = re.sub(r"^(CAREER|PROFILE)-", "", package, flags=re.I)                      # CAREER-ME is shown as ME, as the PS3 saves are
                 out.append({"name": shown or package or os.path.splitext(os.path.basename(path))[0], "path": path, "mtime": st.st_mtime, "size": st.st_size, "root": title, "kind": kind,
                             "tables": tables, "xuid": xuid, "package": package})
@@ -397,7 +446,8 @@ def candidate_xenia_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search
         add(xenia_dir_of(p))
     for p in extra_dirs:
         add(p if os.path.isdir(os.path.join(p, XENIA_CONTENT_DIR)) else xenia_dir_of(p))
-        for d in search_xenia_dirs([p], budget=search_budget):
+    if search_roots:                     # a search of the folders the user added is part of the search, and shares its time (it used to run on every call, 3 seconds for each folder)
+        for d in search_xenia_dirs(list(extra_dirs), budget=search_budget):
             add(d)
     for d in common_xenia_dirs():
         add(d)
@@ -527,13 +577,16 @@ def list_pcport_saves(roots):
             key = os.path.normcase(os.path.abspath(path))
             if key in seen:
                 continue
+            try:
+                st = os.stat(path)                                       # first: a save that is replaced or deleted at this moment is left out, not an error
+            except OSError:
+                continue
             kind, tables = classify_save(path)
             if kind == "other":
                 continue
             seen.add(key)
             package = os.path.basename(os.path.dirname(path))
             group = os.path.basename(os.path.dirname(os.path.dirname(path)))
-            st = os.stat(path)
             shown = re.sub(r"^(CAREER|PROFILE)-", "", package, flags=re.I)
             out.append({"name": shown or package, "path": path, "mtime": st.st_mtime, "size": st.st_size, "root": os.path.dirname(os.path.dirname(path)), "kind": kind, "tables": tables,
                         "package": package, "version": group if group in PCPORT_VERSIONS else "", "variant": "HC27" if os.sep + "userdata-hc27" + os.sep in os.path.abspath(path).lower() + os.sep else ""})
@@ -625,15 +678,20 @@ def drive_roots():
 
 def search_pcport_roots(places, budget=20.0):
     """Saves folders of the PC versions (<install>\\build\\userdata[-hc27]\\content, or <Documents>\\NFL Head Coach 09\\Saves) found by looking inside [(folder, how many levels down)] for at most `budget`
-    seconds, wherever the game was put. Returns (the folders found, True when the time ran out before every folder was looked at). Windows, Program Files, AppData and the like are not entered."""
-    found, start = [], time.time()
-    for root, depth in places:
+    seconds, wherever the game was put. Returns (the folders found, True when the time ran out before every folder was looked at). Windows, Program Files, AppData and the like are not entered, nor
+    are folders whose name starts with a dot (.cargo, .gradle) or a place that was walked already (the user's folder is not walked again when the drive it is on is). Each place gets an equal share
+    of the time that is left, so a large first folder cannot use up the whole budget before the drives are looked at."""
+    found, start, cut, walked = [], time.time(), False, []
+    for i, (root, depth) in enumerate(places):
         if not os.path.isdir(root):
             continue
+        now = time.time()
+        limit = now + max(0.0, budget - (now - start)) / (len(places) - i)
         base = root.rstrip("\\/").count(os.sep)
         for cur, dirs, _files in os.walk(root):
-            if time.time() - start > budget:
-                return found, True
+            if time.time() >= limit:
+                cut = True
+                break
             name, parent = os.path.basename(cur).lower(), os.path.basename(os.path.dirname(cur)).lower()
             if (name == "content" and parent in TOOLS81_USERDATA) or (name == PCPORT_SAVES_DIR.lower() and parent == PCPORT_DOCS_DIR.lower()):
                 if os.path.normcase(cur) not in [os.path.normcase(f) for f in found]:
@@ -643,8 +701,9 @@ def search_pcport_roots(places, budget=20.0):
             if cur.count(os.sep) - base >= depth:
                 dirs[:] = []
             else:
-                dirs[:] = [d for d in dirs if d.lower() not in PCPORT_SEARCH_SKIP]
-    return found, False
+                dirs[:] = [d for d in dirs if d.lower() not in PCPORT_SEARCH_SKIP and not d.startswith(".") and os.path.normcase(os.path.join(cur, d)) not in walked]
+        walked.append(os.path.normcase(root))
+    return found, cut
 
 
 def candidate_pcport_roots(recent_paths=(), extra_dirs=()):
