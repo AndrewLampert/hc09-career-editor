@@ -13553,7 +13553,7 @@ class App(tk.Tk):
     def _find_boot_ast(self, feature="Player Type Fit", what="team philosophies and their weights"):
         saved = self.ui_prefs.get("boot_ast_path") or ""
         if saved and os.path.isfile(saved):
-            return saved
+            return self._fresh_iso_copy(saved) if self._boot_is_from_iso() else saved
         fe2ig = self.get_game_ast_path()
         if fe2ig:
             sibling = os.path.join(os.path.dirname(fe2ig), BOOT_AST_FILENAME)
@@ -13628,6 +13628,20 @@ class App(tk.Tk):
         self.ui_prefs["boot_ast_path"] = dest
         save_ui_prefs(self.ui_prefs)
         return dest
+
+    def _fresh_iso_copy(self, copy):
+        """The qkl_boot.ast copy read out of a disc image, checked against its image before it is used: when the image has changed since (the recompiled game plays from the image, so the copy would be
+        out of date) it is read again; when the image is gone the copy is used as it is. Returns the path, or "" when the new copy could not be read (the reason is shown)."""
+        try:
+            with open(os.path.join(os.path.dirname(copy), "source.json"), encoding="utf-8") as f:
+                meta = json.load(f)
+            iso = meta["iso"]
+            st = os.stat(iso)
+        except (OSError, ValueError, KeyError, TypeError):
+            return copy                                      # no record of the source, or the image is not there (any more): nothing to compare with
+        if st.st_size == meta.get("size") and int(st.st_mtime) == meta.get("mtime"):
+            return copy
+        return self._boot_from_iso(iso)
 
     def _boot_is_from_iso(self):
         """Is the game file the editor uses a copy it read out of a disc image?"""
