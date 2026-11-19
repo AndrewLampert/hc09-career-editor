@@ -123,7 +123,8 @@ def summarize_bridge(args):
 
 def log_write(text):
     """Something the editor wrote to the game files or to a save (and how it went): kept in memory and, once install() has run, in the write log file next to the reports."""
-    line = f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {str(text)[:400]}"
+    text = " ".join(str(text).split())                       # one line per record, whatever the text holds (an error message with line breaks)
+    line = redact(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {text[:400]}")          # the file is private to this computer, but it is also read into reports: the home folder and user name are blanked out here too
     with _lock:
         _writes.append(line)
         folder = _state["dir"]
