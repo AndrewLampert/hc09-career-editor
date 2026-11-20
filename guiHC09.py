@@ -11195,6 +11195,43 @@ class App(tk.Tk):
                 ("*Entry.selectForeground", p["accent_text"]),
                 ("*Label.background", p["bg"]),
                 ("*Label.foreground", p["text"]),
+                # Every other plain Tk widget a window can be made of takes the palette as its default too (a window or frame that sets no colour of its own was left in Windows' light grey/white
+                # in Dark Mode: windows that are a bare tk.Toplevel or hold tk.Frame / tk.Checkbutton / tk.Canvas ...). A widget that sets its own colour keeps it.
+                ("*Toplevel.background", p["bg"]),
+                ("*Frame.background", p["bg"]),
+                ("*Labelframe.background", p["bg"]),
+                ("*Labelframe.foreground", p["text"]),
+                ("*Canvas.background", p["bg"]),
+                ("*Message.background", p["bg"]),
+                ("*Message.foreground", p["text"]),
+                ("*Checkbutton.background", p["bg"]),
+                ("*Checkbutton.foreground", p["text"]),
+                ("*Checkbutton.activeBackground", p["bg"]),
+                ("*Checkbutton.activeForeground", p["text"]),
+                ("*Checkbutton.selectColor", p["surface"]),
+                ("*Checkbutton.highlightBackground", p["bg"]),
+                ("*Radiobutton.background", p["bg"]),
+                ("*Radiobutton.foreground", p["text"]),
+                ("*Radiobutton.activeBackground", p["bg"]),
+                ("*Radiobutton.activeForeground", p["text"]),
+                ("*Radiobutton.selectColor", p["surface"]),
+                ("*Radiobutton.highlightBackground", p["bg"]),
+                ("*Button.background", p["surface"]),
+                ("*Button.foreground", p["text"]),
+                ("*Button.activeBackground", p["accent"]),
+                ("*Button.activeForeground", p["accent_text"]),
+                ("*Button.highlightBackground", p["bg"]),
+                ("*Scale.background", p["bg"]),
+                ("*Scale.foreground", p["text"]),
+                ("*Scale.troughColor", p["surface"]),
+                ("*Scale.highlightBackground", p["bg"]),
+                ("*Scrollbar.background", p["surface"]),
+                ("*Scrollbar.troughColor", p["bg"]),
+                ("*Spinbox.background", p["surface"]),
+                ("*Spinbox.foreground", p["text"]),
+                ("*Spinbox.insertBackground", p["text"]),
+                ("*Spinbox.selectBackground", p["accent"]),
+                ("*Spinbox.selectForeground", p["accent_text"]),
             ):
                 self.option_add(pattern, value)
 
@@ -11314,6 +11351,12 @@ class App(tk.Tk):
             lbl.configure(background=p["bg"], foreground=p["subtle"])
         for canvas in getattr(self, "_themed_canvases", []):
             canvas.configure(background=p["bg"])
+        for win in self.winfo_children():                  # windows that are open now (Swap, Sign, the dialogs...) take the new background too; their widgets pick the colours up the next time the window is opened
+            if isinstance(win, tk.Toplevel):
+                try:
+                    win.configure(background=p["bg"])
+                except tk.TclError:
+                    pass
 
     def on_toggle_dark_mode(self):
         mode = "dark" if self.dark_mode_var.get() else "light"
