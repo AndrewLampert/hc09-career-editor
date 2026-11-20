@@ -4077,6 +4077,9 @@ class PlayerTypeFitDialog(tk.Toplevel):
         value = self._preset_ids.get(self.preset_var.get())
         if value is None:
             return
+        old = getattr(self, "_breakdown", None)
+        if old is not None and old.winfo_exists():         # one at a time: an older one would keep showing the numbers of a preset it was opened for
+            old.destroy()
         self._breakdown = PhilosophyBreakdownDialog(self.parent, self, self.group_var.get(), field, value, self._open_weights)
 
     def _open_weights(self, value=None):
@@ -4591,6 +4594,7 @@ class PhilosophyWeightsDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Edit weights")
         self.transient(parent)
+        make_modal(self)                                   # it edits a snapshot of the preset taken now: a second window (or the list behind) must not change that preset meanwhile
         self.geometry(f"960x{min(760, self.winfo_screenheight() - 70)}")
         self.minsize(800, 560)
         self.app, self.parent, self.on_changed = app, parent, on_changed
@@ -5675,6 +5679,9 @@ class PersonnelDialog(tk.Toplevel):
         return True
 
     def _run(self, targets, what):
+        if getattr(self, "_stale", False):
+            messagebox.showinfo("Set personnel", "This window shows the sets as they were before the last change, and they could not be read again. Close it and open Set personnel again.", parent=self)
+            return False
         if not targets:
             messagebox.showinfo("Nothing to change", "The game files already hold this.")
             return False
@@ -5703,12 +5710,25 @@ class PersonnelDialog(tk.Toplevel):
             self.app.end_game_write()
 
     def _reload(self, keep=None):
+        """Read the sets again after a write. Returns True when it worked. When it does not, the write itself went through, but this window still holds what it read BEFORE the write: it says so and
+        turns the Apply buttons off (a second Apply would plan its change from values that are no longer in the files)."""
         try:
             self.data = self.app.reload_personnel_data()
         except Exception as e:
-            messagebox.showerror("Set personnel", str(e))
-            return
+            messagebox.showerror("Set personnel", f"The change was written, but the game's play sets could not be read again:\n\n{e}\n\nWhat this window shows is from before the change. Close it and open Set personnel again.", parent=self)
+            self._stale = True
+            for name in ("btn_apply", "btn_reset"):
+                btn = getattr(self, name, None)
+                if btn is not None:
+                    try:
+                        btn.configure(state="disabled")
+                    except tk.TclError:
+                        pass
+            return False
+        self._stale = False
         self._fill(keep=keep)
+        self.app.refresh_play_creators()                   # an open Play creator holds the sets it read earlier (their slot positions): read them again
+        return True
 
     def _apply_set(self):
         chosen = self._chosen_changes()
@@ -5807,6 +5827,9 @@ class PersonnelBulkDialog(tk.Toplevel):
         self.tree.pack(fill="both", expand=True, padx=12, pady=(0, 4))
         self.lbl_info = ttk.Label(self, foreground="gray", wraplength=820, justify="left", padding=(12, 0, 12, 4))
         self.lbl_info.pack(anchor="w")
+        self.lbl_warn = ttk.Label(self, wraplength=820, justify="left", foreground="#d98c1f", padding=(12, 0, 12, 4))      # the warnings of the set selected (or of all, when several are)
+        self.lbl_warn.pack(anchor="w")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._show_warnings(), add="+")
         btn = ttk.Frame(self)
         btn.pack(fill="x", padx=12, pady=(0, 12))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
@@ -5827,6 +5850,7 @@ class PersonnelBulkDialog(tk.Toplevel):
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         self._plans = {}
+        self.lbl_warn.configure(text="")
         nums = self._numbers()
         if nums is None:
             self.lbl_info.configure(text="Use whole numbers.")
@@ -5852,10 +5876,28 @@ class PersonnelBulkDialog(tk.Toplevel):
                                                              self.data.code(s), self.data.code(s, plan["slots"]), what))
         self.tree.selection_set(self.tree.get_children())
         self.lbl_info.configure(text=f"{len(self._plans)} sets match. Select the ones to change.")
+        self._show_warnings()
+
+    def _warnings_of(self, sets):
+        """{warning text: how many of the sets have it} for the sets given (the plans' own warnings: renumbered players, copies that already differ)."""
+        out = {}
+        for s in sets:
+            for w in self._plans.get(s, {}).get("warnings", []):
+                out[w] = out.get(w, 0) + 1
+        return out
+
+    def _show_warnings(self):
+        chosen = [int(i) for i in self.tree.selection() if i.isdigit()]
+        found = self._warnings_of(chosen)
+        self.lbl_warn.configure(text="\n".join(f"{w}  (in {n} of the {len(chosen)} selected sets)" for w, n in found.items()))
 
     def _apply(self):
         chosen = [int(i) for i in self.tree.selection()]
         if not chosen:
+            return
+        found = self._warnings_of(chosen)
+        if found and not messagebox.askyesno("Apply the bulk change", "Some of the selected sets come with a warning:\n\n" + "\n".join(f"- {w} (in {n} sets)" for w, n in found.items())
+                                             + "\n\nThe change is written to every copy of each set. Apply anyway?", parent=self):
             return
         changes = {s: self._plans[s]["changes"] for s in chosen}
         owner = self.owner
@@ -6560,6 +6602,7 @@ class PlayDesignerDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Play creator (prototype)")
         self.transient(app)
+        self.after(500, lambda: self._warn_book_names() if self.winfo_exists() else None)
         self.geometry(f"{min(1250, self.winfo_screenwidth() - 30)}x{min(700, self.winfo_screenheight() - 110)}")
         self.minsize(1000, 560)
         self.app, self.lib = app, lib
@@ -6798,12 +6841,21 @@ class PlayDesignerDialog(tk.Toplevel):
             pass
         return books
 
+    def _warn_book_names(self):
+        """The playbooks' own names for plays could not be read: the master names are shown. Said once for each reason."""
+        err = getattr(self.lib, "book_names_error", None)
+        if err and err != getattr(self, "_warned_names", None) and self.winfo_exists():
+            self._warned_names = err
+            messagebox.showwarning("Play creator", "The names the playbooks give their plays could not be read from the game files, so the plays show their own (master) names. "
+                                   f"A play you renamed in a playbook may look as if the rename did not work; it is in the game files.\n\n({err})", parent=self)
+
     def _use_library(self, lib, reselect):
         """Show a library that was read again (refresh_from_game_files): the same side and playbook filter, the profile's custom plays mounted again, the play shown selected again."""
         if not self.winfo_exists():
             return
         current, book, profile = self.plyl, self.book_var.get(), self.my_profile
         self.lib = lib
+        self.after(200, self._warn_book_names)
         if PlayTypes is not None and getattr(lib, "_play_types", None) is None:
             lib._play_types = PlayTypes(lib)
         self.types = getattr(lib, "_play_types", None)
@@ -14240,11 +14292,12 @@ class App(tk.Tk):
         for name in ("SPKF", "SPKG"):
             path = os.path.join(cache, f"{name.lower()}_{master['base']}.csv")
             lib.quick_subs[name] = read_csv(path) if os.path.isfile(path) else []
+        lib.book_names_error = None
         try:                              # the names the playbooks give their plays, if they can be read (the master names are shown otherwise)
             if self._ensure_book_play_names(archives[0]):
                 lib.set_book_play_names(read_csv(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE)))
-        except Exception:
-            pass
+        except Exception as e:
+            lib.book_names_error = f"{type(e).__name__}: {e}"[:300]        # the play creator tells the person (a rename that "did not work" is otherwise a silent fallback to the master names)
         return lib
 
     def load_play_art(self, boot_ast):
@@ -14958,6 +15011,16 @@ class App(tk.Tk):
     def reload_personnel_data(self):
         """Read the play sets from the game archives again (after a write); slow, may run off the main thread."""
         return load_personnel_data(self.model, self._personnel_archives(), self._personnel_backup_dir())
+
+    def refresh_play_creators(self):
+        """After a window changed the game files (Set personnel: the positions of a set's slots), every open Play creator reads them again, keeping the play shown and the changes made to it. A creator
+        that is not open holds nothing: it reads the files when it is opened."""
+        for win in self.winfo_children():
+            if isinstance(win, PlayDesignerDialog) and win.winfo_exists():
+                try:
+                    win.refresh_from_game_files(reselect=False)
+                except Exception:
+                    pass                                   # (a window that cannot refresh keeps what it shows; it is read again the next time it is opened)
 
     def on_open_personnel(self):
         archives = self._personnel_archives()
