@@ -5,6 +5,7 @@ The image holds an XDVDFS ("GDF") file system: 2,048-byte sectors, the volume de
 plain image is 0). The descriptor starts with MICROSOFT*XBOX*MEDIA and names the root directory (its first sector and its size); a directory is a table of entries, a binary tree whose links are in units of
 four bytes: left (2 bytes), right (2), first sector (4), size (4), attributes (1, 0x10 = directory), name length (1), the name; entries are padded to four bytes with 0xFF."""
 import os
+import shutil
 import struct
 import tempfile
 
@@ -137,3 +138,109 @@ def extract(path, name, dest, progress=None):
                 pass
         raise
     return done
+
+
+def _locate_entry(f, off, name):
+    """Return parent directory sector/size and the byte offset of a file entry."""
+    sector, size = _root(f, off)
+    parts = [p for p in name.replace("\\", "/").split("/") if p]
+    if not parts:
+        raise ValueError("No file name was given.")
+    for i, part in enumerate(parts):
+        table = _table(f, off, sector, size)
+        found = None
+        stack, seen = [0], set()
+        while stack:
+            pos = stack.pop()
+            if pos in seen or pos + 14 > len(table):
+                continue
+            seen.add(pos)
+            left, right, child_sector, child_size, attr, name_len = struct.unpack_from("<HHIIBB", table, pos)
+            if (child_sector == 0xFFFFFFFF and child_size == 0xFFFFFFFF) or name_len == 0 or pos + 14 + name_len > len(table):
+                continue
+            entry_name = table[pos + 14:pos + 14 + name_len].decode("latin-1")
+            if entry_name.lower() == part.lower():
+                found = (pos, child_sector, child_size, bool(attr & DIRECTORY))
+                break
+            for child in (left, right):
+                if child not in (0, 0xFFFF):
+                    stack.append(child * 4)
+        if found is None:
+            raise ValueError(f"{name} is not in the disc image.")
+        pos, child_sector, child_size, is_dir = found
+        if i == len(parts) - 1:
+            if is_dir:
+                raise ValueError(f"{name} is a folder, not a file.")
+            return sector, pos, child_sector, child_size
+        if not is_dir:
+            raise ValueError(f"{part} is a file, not a folder.")
+        sector, size = child_sector, child_size
+    raise ValueError("No file name was given.")
+
+
+def replace_file(source_iso, name, replacement_path, destination_iso, progress=None):
+    """Create a new XDVDFS image with one file replaced; never modifies source_iso.
+
+    The replacement is appended at a sector-aligned location and the existing
+    directory entry is redirected to it. All other image bytes remain intact.
+    """
+    source_iso = os.path.abspath(source_iso)
+    replacement_path = os.path.abspath(replacement_path)
+    destination_iso = os.path.abspath(destination_iso)
+    if os.path.normcase(source_iso) == os.path.normcase(destination_iso):
+        raise ValueError("Choose a new output filename; the original disc image is never overwritten.")
+    if not os.path.isfile(source_iso) or not os.path.isfile(replacement_path):
+        raise FileNotFoundError("The source disc image or replacement archive does not exist.")
+    size = os.path.getsize(replacement_path)
+    if size <= 0 or size > 0xFFFFFFFF:
+        raise ValueError("The replacement archive has an unsupported size for XDVDFS.")
+    with open(source_iso, "rb") as src:
+        off = _partition(src)
+        if off is None:
+            raise ValueError("This is not an Xbox 360 disc image the editor can read.")
+        parent_sector, entry_pos, old_sector, old_size = _locate_entry(src, off, name)
+    if off + old_sector * SECTOR + old_size > os.path.getsize(source_iso):
+        raise ValueError(f"The original {name} extends beyond the end of the disc image.")
+    folder = os.path.dirname(destination_iso) or "."
+    os.makedirs(folder, exist_ok=True)
+    temp = None
+    try:
+        fd, temp = tempfile.mkstemp(prefix=os.path.basename(destination_iso) + ".", suffix=".part", dir=folder)
+        os.close(fd)
+        shutil.copyfile(source_iso, temp)
+        image_size = os.path.getsize(temp)
+        data_offset = off + ((max(0, image_size - off) + SECTOR - 1) // SECTOR) * SECTOR
+        new_sector = (data_offset - off) // SECTOR
+        if new_sector > 0xFFFFFFFF:
+            raise ValueError("The output image is too large for an XDVDFS sector address.")
+        done = 0
+        with open(temp, "r+b") as out:
+            out.seek(0, os.SEEK_END)
+            if out.tell() < data_offset:
+                out.write(b"\x00" * (data_offset - out.tell()))
+            with open(replacement_path, "rb") as repl:
+                while True:
+                    block = repl.read(CHUNK)
+                    if not block:
+                        break
+                    out.write(block)
+                    done += len(block)
+                    if progress:
+                        progress(done, size)
+            out.seek(off + parent_sector * SECTOR + entry_pos + 6)
+            out.write(struct.pack("<II", new_sector, size))
+            out.flush()
+            os.fsync(out.fileno())
+        check_off, check_sector, check_size = find(temp, name)
+        if (check_off, check_sector, check_size) != (off, new_sector, size):
+            raise ValueError("The output image failed its XDVDFS directory-entry verification.")
+        shutil.copystat(source_iso, temp)
+        os.replace(temp, destination_iso)
+        temp = None
+        return destination_iso
+    finally:
+        if temp and os.path.exists(temp):
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
