@@ -3750,7 +3750,7 @@ class AssignPortraitDialog(tk.Toplevel):
         try:
             ast_path = self.parent.get_game_ast_path()
             if not ast_path:
-                self.after(0, lambda: self.lbl_status.configure(text="Locate your game files first (see the Portrait panel)."))
+                self._later(lambda: self.lbl_status.configure(text="Locate your game files first (see the Portrait panel)."))
                 return
             cache_path = self.parent._portrait_archive_cache_path("player")
             if not os.path.isfile(cache_path):
@@ -3769,10 +3769,7 @@ class AssignPortraitDialog(tk.Toplevel):
 
     def _later(self, fn):
         """Run fn on the window's thread, but only if the window is still there (a result that arrives after Cancel must not touch destroyed widgets)."""
-        try:
-            self.after(0, lambda: fn() if self.winfo_exists() else None)
-        except (tk.TclError, RuntimeError):
-            pass
+        call_later_if_alive(self, fn)
 
     def _on_index_loaded(self, shortids, start_idx):
         self.shortids = shortids
@@ -5973,7 +5970,8 @@ class SavesDialog(tk.Toplevel):
             return
         self._shelf_dlg = ShelfDialog(self.app, on_change=self._refresh)
 
-    def _refresh(self, search=False):
+    def _refresh(self, search=False, saves=None):
+        """saves: the list the caller has just read (the shelf window does, after every action): shown as it is, without scanning for the saves a second time."""
         if not self.winfo_exists():                        # the shelf window calls this after every action, and it can outlive the Saves window
             return
         if search and getattr(self, "_searching", False):  # a search is running: a second one would only compete with it
@@ -5981,12 +5979,13 @@ class SavesDialog(tk.Toplevel):
         self._refresh_serial = getattr(self, "_refresh_serial", 0) + 1
         serial = self._refresh_serial
         if not search:
-            self.config(cursor="watch")
-            self.update_idletasks()
-            try:
-                saves = self.app.detected_saves()
-            finally:
-                self.config(cursor="")
+            if saves is None:
+                self.config(cursor="watch")
+                self.update_idletasks()
+                try:
+                    saves = self.app.detected_saves()
+                finally:
+                    self.config(cursor="")
             self._show_saves(saves)
             return
         # Search this computer can take most of half a minute (it looks for RPCS3, Xenia and the PC versions wherever they were put): on a background thread, so the window stays alive
@@ -6000,10 +5999,7 @@ class SavesDialog(tk.Toplevel):
             except Exception as e:
                 saves, error = None, e
             self._searching = False
-            try:
-                self.after(0, lambda: self._search_done(serial, saves, error))
-            except (tk.TclError, RuntimeError):
-                pass                                                      # the window was closed while it searched
+            call_later_if_alive(self, lambda: self._search_done(serial, saves, error))       # (nothing happens when the window was closed while it searched)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -6212,7 +6208,7 @@ class ShelfDialog(tk.Toplevel):
             self.tree_shelf.insert("f:" + parent if parent else "", tk.END, iid=iid, text=e["label"], values=(time.strftime("%Y-%m-%d %H:%M", time.localtime(e["mtime"])), f"{e['size'] / 1048576:.1f} MB", where))
             self._shelf_rows[iid] = ("entry", e["rel"])
         if self.on_change:
-            self.on_change()
+            self.on_change(saves=self.game)                # the Saves window shows the list just read: it does not scan again
 
     def _say(self, text):
         self.lbl_status.configure(text=text)
@@ -6422,6 +6418,15 @@ class ShelfDialog(tk.Toplevel):
 
 
 PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 20: ("#d96ad0", 14, 6), 21: ("#e0c040", 12, 7)}   # zone step code (deep, curl, flat, hook) -> (colour, half width, half height)
+
+
+def call_later_if_alive(widget, fn):
+    """fn() on Tk's own thread, asked for from ANY thread (a worker that is done), but only when `widget` still exists: a window (or the whole application) that was closed meanwhile swallows the
+    call instead of raising TclError in a callback, or touching destroyed widgets. One place for what five threads did five different ways."""
+    try:
+        widget.after(0, lambda: fn() if widget.winfo_exists() else None)
+    except (tk.TclError, RuntimeError):
+        pass
 
 
 def make_modal(win):
@@ -10944,12 +10949,14 @@ class App(tk.Tk):
             if self.lbl_status.cget("text") == getattr(self, "_busy_text", None):       # the busy text goes unless something else already replaced it
                 self.lbl_status.configure(text="")
 
-    def run_in_thread_with_busy(self, busy_text, work_fn, on_success, error_title="Error"):
+    def run_in_thread_with_busy(self, busy_text, work_fn, on_success, error_title="Error", owner=None):
         """Runs work_fn() (e.g. a slow bridge.js export/import) on a background
         thread so the window keeps painting/responding instead of Windows
         marking it "(Not Responding)" for the duration. work_fn must only
         touch self.model (plain data), never Tk widgets - those are only
-        touched again in on_success, which runs back on the main thread."""
+        touched again in on_success, which runs back on the main thread.
+        owner: the window that asked for the work. When it is closed before the work is done, on_success is
+        not called (it would touch destroyed widgets); an error is still shown, and the busy state is still cleared."""
         self.set_busy(busy_text)
         result_box = {}
 
@@ -10958,13 +10965,13 @@ class App(tk.Tk):
                 result_box["value"] = work_fn()
             except Exception as e:
                 result_box["error"] = e
-            self.after(0, finish)
+            call_later_if_alive(self, finish)
 
         def finish():
             self.clear_busy()
             if "error" in result_box:
                 messagebox.showerror(error_title, str(result_box["error"]))
-            else:
+            elif owner is None or owner.winfo_exists():
                 on_success(result_box.get("value"))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -10986,7 +10993,7 @@ class App(tk.Tk):
             try:
                 return work_fn()
             except BaseException:
-                self.after(0, release)                     # the error is shown by run_in_thread_with_busy; the next request may start after it
+                call_later_if_alive(self, release)         # the error is shown by run_in_thread_with_busy; the next request may start after it
                 raise
 
         def done(value):
@@ -11134,7 +11141,7 @@ class App(tk.Tk):
                 error = str(e)
             else:
                 error = None
-            self.after(0, lambda: self._on_portrait_loaded(kind, req_id, pil_image, error))
+            call_later_if_alive(self, lambda: self._on_portrait_loaded(kind, req_id, pil_image, error))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -11629,9 +11636,13 @@ class App(tk.Tk):
         self._hide_update_banner()
 
     def on_update_whats_new(self, info):
-        """What changed and how to update; Update now when this copy is a git clone that can safely pull."""
+        """What changed and how to update; Update now when this copy is a git clone that can safely pull. (Whether it can is a `git status` that can take seconds on a big clone or a busy disk: it is asked in the
+        background, and the window opens with the answer.)"""
         root = os.path.dirname(os.path.abspath(__file__))
-        ok, why = hc09_update.can_update_in_place(root) if hc09_update else (False, "")
+        self.run_in_thread_with_busy("Checking this folder...", lambda: hc09_update.can_update_in_place(root) if hc09_update else (False, ""),
+                                     lambda res: self._show_whats_new(info, res[0], res[1]), error_title="Update")
+
+    def _show_whats_new(self, info, ok, why):
         dlg = tk.Toplevel(self)
         dlg.title("A newer version is available")
         dlg.transient(self)
@@ -11662,7 +11673,10 @@ class App(tk.Tk):
 
     def on_update_now(self, info):
         root = os.path.dirname(os.path.abspath(__file__))
-        ok, why = hc09_update.can_update_in_place(root)
+        self.run_in_thread_with_busy("Checking this folder...", lambda: hc09_update.can_update_in_place(root),
+                                     lambda res: self._update_now_checked(info, root, res[0], res[1]), error_title="Update")
+
+    def _update_now_checked(self, info, root, ok, why):
         if not ok:
             messagebox.showinfo("Update", f"Can't update from here: {why}.")
             return
@@ -11701,6 +11715,7 @@ class App(tk.Tk):
         if previous == runtime:
             return
         self.ui_prefs["runtime"] = runtime
+        self._recomp_images_memo = None                    # (the disc images found are asked again)
         # Game archive paths are runtime-specific. Force the next lookup to
         # resolve files from the newly selected install rather than carrying a
         # loose archive or ISO extraction across runtimes.
@@ -15044,36 +15059,46 @@ class App(tk.Tk):
         if not self.model.players:
             messagebox.showinfo("No data", "Load a save first.")
             return
-        if not PHILOSOPHY_MODEL and not self._extract_philosophy_weights_from_game():
+        if PHILOSOPHY_MODEL:
+            PlayerTypeFitDialog(self, self.model)
             return
-        PlayerTypeFitDialog(self, self.model)
+        boot_ast = self._find_boot_ast()                   # (may ask the person: on the Tk thread)
+        if not boot_ast:
+            return
+
+        def done(_result):                                 # the export (12 tables, a few seconds) ran in the background; the editor stayed alive
+            if self._philosophy_loaded(boot_ast):
+                PlayerTypeFitDialog(self, self.model)
+
+        self.run_in_thread_with_busy("Reading the game's team philosophies...", lambda: self._philosophy_export(boot_ast), done, error_title="Couldn't read game data")
 
     def on_open_game_reference(self):
         if GREF is None:
             messagebox.showerror("Game reference", "The game reference needs hc09_reference.py next to guiHC09.py, and it was not found.")
             return
         ref = GREF.Reference.load(REFERENCE_CACHE_DIR)
-        if ref is None:
-            ref = self._extract_reference_tables_from_game()
         if ref is not None:
             GameReferenceDialog(self, ref)
-
-    def _extract_reference_tables_from_game(self):
-        """Pull the injury, draft pick, contract talk and injured-body-part tables out of the user's own qkl_boot.ast into the local cache. Returns the loaded Reference, or None."""
+            return
         boot_ast = self._find_boot_ast(feature="Game reference", what="injury, draft pick, contract and health tables")
         if not boot_ast:
-            return None
-        self.config(cursor="watch")
-        self.update_idletasks()
-        try:
-            os.makedirs(REFERENCE_CACHE_DIR, exist_ok=True)
-            for args in GREF.extract_commands(boot_ast, REFERENCE_CACHE_DIR):
-                self.model.run_bridge(args)
-        except Exception as e:
-            messagebox.showerror("Couldn't read game data", str(e))
-            return None
-        finally:
-            self.config(cursor="")
+            return
+
+        def done(_result):
+            loaded = self._reference_loaded(boot_ast)
+            if loaded is not None:
+                GameReferenceDialog(self, loaded)
+
+        self.run_in_thread_with_busy("Reading the game's tables...", lambda: self._reference_export(boot_ast), done, error_title="Couldn't read game data")
+
+    def _reference_export(self, boot_ast):
+        """The bridge exports of the Game reference's tables into the cache. Touches no widget: it may run on a background thread."""
+        os.makedirs(REFERENCE_CACHE_DIR, exist_ok=True)
+        for args in GREF.extract_commands(boot_ast, REFERENCE_CACHE_DIR):
+            self.model.run_bridge(args)
+
+    def _reference_loaded(self, boot_ast):
+        """After _reference_export: the loaded Reference (and the archive remembered), or None with a message. Main thread."""
         ref = GREF.Reference.load(REFERENCE_CACHE_DIR)
         if ref is None:
             messagebox.showerror("Couldn't read game data", f"Extracted tables from {os.path.basename(boot_ast)} but these were missing or empty: "
@@ -15082,6 +15107,23 @@ class App(tk.Tk):
         self.ui_prefs["boot_ast_path"] = boot_ast
         save_ui_prefs(self.ui_prefs)
         return ref
+
+    def _extract_reference_tables_from_game(self):
+        """Pull the injury, draft pick, contract talk and injured-body-part tables out of the user's own qkl_boot.ast into the local cache. Returns the loaded Reference, or None. (All on the calling
+        thread; the Game reference button uses _reference_export in the background.)"""
+        boot_ast = self._find_boot_ast(feature="Game reference", what="injury, draft pick, contract and health tables")
+        if not boot_ast:
+            return None
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            self._reference_export(boot_ast)
+        except Exception as e:
+            messagebox.showerror("Couldn't read game data", str(e))
+            return None
+        finally:
+            self.config(cursor="")
+        return self._reference_loaded(boot_ast)
 
     def _find_boot_ast(self, feature="Player Type Fit", what="team philosophies and their weights"):
         runtime = self.ui_prefs.get("runtime", "xenia")
@@ -15165,10 +15207,21 @@ class App(tk.Tk):
         if hc09_detect is None:
             return "", []
         db = getattr(getattr(self, "model", None), "db_path", None) or ""         # no model yet when this is asked at start
+        recent = list(load_recent_files())
+        extra = list(self._extra_dirs())
+        # One click on Playbooks / Play creator / Set personnel asks this two or three times in a row (the copy's state, the image to read from, ...), and each is a walk over the installs and a stat of
+        # every disc image (slow on a share or a sleeping drive): the answer is kept for a few seconds, and dropped when the open save, the recent list or the folders change.
+        key = (db, tuple(recent), tuple(extra))
+        memo = getattr(self, "_recomp_images_memo", None)
+        if memo is not None and memo[0] == key and time.monotonic() - memo[1] < self.RECOMP_IMAGES_KEEP:
+            return memo[2]
         install = hc09_detect.recomp_install_of(db) if db else None
         own = hc09_detect.recomp_iso(install) if install else ""
-        isos = hc09_detect.find_recomp_isos(([db] if db else []) + list(load_recent_files()), self._extra_dirs())
+        isos = hc09_detect.find_recomp_isos(([db] if db else []) + recent, extra)
+        self._recomp_images_memo = (key, time.monotonic(), (own, isos))
         return own, isos
+
+    RECOMP_IMAGES_KEEP = 3.0                              # seconds
 
     def _recomp_disc_image(self):
         """The disc image of a recompiled PC version: that of the install the open save belongs to, else the first found (hc09.ini's IsoPath of the install a recent save belongs to, or of the usual places), or ""."""
@@ -15251,6 +15304,7 @@ class App(tk.Tk):
             messagebox.showerror("Disc image", "The disc image reader (hc09_iso.py) is missing from the editor's folder.")
             return ""
         import hashlib
+        self._recomp_images_memo = None                    # (an image is being read: what is known about the images may change)
         iso = os.path.abspath(iso)
         folder = os.path.join(self.ISO_CACHE_DIR, hashlib.sha1(os.path.normcase(iso).encode("utf-8")).hexdigest()[:8])
         dest, meta = os.path.join(folder, BOOT_AST_FILENAME), os.path.join(folder, "source.json")
@@ -15425,13 +15479,21 @@ class App(tk.Tk):
         self.config(cursor="watch")
         self.update_idletasks()
         try:
-            self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", ",".join(PHILOSOPHY_WEIGHT_TABLES + (BODY_WEIGHT_TABLE,) + PHILOSOPHY_SIZE_TABLES),
-                                   "--out-dir", PHILOSOPHY_CACHE_DIR])
+            self._philosophy_export(boot_ast)
         except Exception as e:
             messagebox.showerror("Couldn't read game data", str(e))
             return False
         finally:
             self.config(cursor="")
+        return self._philosophy_loaded(boot_ast)
+
+    def _philosophy_export(self, boot_ast):
+        """The bridge export of the philosophy tables into the cache. Touches no widget: it may run on a background thread."""
+        self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", ",".join(PHILOSOPHY_WEIGHT_TABLES + (BODY_WEIGHT_TABLE,) + PHILOSOPHY_SIZE_TABLES),
+                               "--out-dir", PHILOSOPHY_CACHE_DIR])
+
+    def _philosophy_loaded(self, boot_ast):
+        """After _philosophy_export: load the tables, check them, remember the archive. True when the weights are available. Main thread."""
         reload_philosophy_data()
         if not PHILOSOPHY_MODEL:
             messagebox.showerror(
