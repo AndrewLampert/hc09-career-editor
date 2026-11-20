@@ -10687,6 +10687,9 @@ class App(tk.Tk):
     # AST archive is a separate, unsolved problem (repacking a nested BGFA
     # archive) and hasn't been attempted.
     def get_game_ast_path(self):
+        # The Recomp ISO workflow currently publishes qkl_boot.ast only.
+        if self.ui_prefs.get("runtime", "xenia") == "recomp":
+            return ""
         path = self.ui_prefs.get("game_ast_path") or ""
         if path and os.path.isfile(path):
             return path
@@ -11278,6 +11281,8 @@ class App(tk.Tk):
         save_ui_prefs(self.ui_prefs)
         if getattr(self, "_runtime_btn", None) is not None:
             self._runtime_btn.configure(text=f"Runtime: {runtime.upper()}")
+        if getattr(self, "_recomp_build_btn", None) is not None:
+            self._recomp_build_btn.configure(state="normal" if runtime == "recomp" else "disabled")
         self.lbl_status.configure(text=f"Runtime set to {runtime.upper()}. Load or locate the matching game's files.")
 
     def _show_runtime_picker(self, on_done=None):
@@ -11370,6 +11375,9 @@ class App(tk.Tk):
         # Windows renders tk.Menu via the OS menu system, which ignores Tk's
         # color options entirely, so a real dropdown menu here would always
         # look like a plain light Windows menu regardless of Dark Mode.
+        self._recomp_build_btn = ttk.Button(top, text="Build Recomp ISO...", command=self.on_build_recomp_iso,
+                                             state="normal" if self.ui_prefs.get("runtime", "xenia") == "recomp" else "disabled")
+        self._recomp_build_btn.pack(side="right", padx=(8, 0))
         self._runtime_btn = ttk.Button(top, text=f"Runtime: {self.ui_prefs.get('runtime', 'xenia').upper()}", command=self._show_runtime_picker)
         self._runtime_btn.pack(side="right", padx=(8, 0))
         self._options_btn = ttk.Button(top, text="Options...", command=self._open_options_dialog)
@@ -14794,13 +14802,84 @@ class App(tk.Tk):
         """Is the game file the editor uses a copy it read out of a disc image?"""
         return self._is_iso_copy_path(self.ui_prefs.get("boot_ast_path") or "")
 
+    def on_build_recomp_iso(self):
+        """Publish the edited qkl_boot.ast cache as a separate Recomp ISO."""
+        if self.ui_prefs.get("runtime", "xenia") != "recomp":
+            messagebox.showinfo("Build Recomp ISO", "Select Static Recomp as the runtime first.")
+            return
+        boot = self.ui_prefs.get("boot_ast_path") or ""
+        if not self._is_iso_copy_path(boot) or not os.path.isfile(boot):
+            messagebox.showinfo("Build Recomp ISO", "Read the Recomp disc image first so the editor has its extracted qkl_boot.ast.")
+            return
+        meta = self._iso_copy_source(boot)
+        source = (meta or {}).get("iso", "")
+        if not source or not os.path.isfile(source):
+            messagebox.showerror("Build Recomp ISO", "The original ISO is no longer available. Re-select the Recomp disc image.")
+            return
+        if not messagebox.askyesno("Build Recomp ISO", "Close HC09/HC27 Recomp before continuing. A separate ISO will be created; your original image will not be changed. Continue?"):
+            return
+        stem, ext = os.path.splitext(source)
+        output = filedialog.asksaveasfilename(
+            title="Save modified Recomp disc image",
+            initialdir=os.path.dirname(source),
+            initialfile=os.path.basename(stem + "-editor" + (ext or ".iso")),
+            defaultextension=".iso",
+            filetypes=[("Disc image", "*.iso"), ("All files", "*.*")]
+        )
+        if not output:
+            return
+        if os.path.normcase(os.path.abspath(output)) == os.path.normcase(os.path.abspath(source)):
+            messagebox.showerror("Build Recomp ISO", "The original ISO cannot be overwritten. Choose another output filename.")
+            return
+
+        def work():
+            return hc09_iso.replace_file(source, BOOT_AST_FILENAME, boot, output)
+
+        def done(result):
+            self.ui_prefs["recomp_output_iso"] = result
+            save_ui_prefs(self.ui_prefs)
+            install = hc09_detect.recomp_install_of(self.model.db_path) if hc09_detect is not None and self.model.db_path else None
+            ini_updated = False
+            if install:
+                ini = os.path.join(install, "hc09.ini")
+                try:
+                    with open(ini, "r", encoding="utf-8", errors="replace") as f:
+                        lines = f.readlines()
+                    for i, line in enumerate(lines):
+                        if line.lstrip().lower().startswith("isopath="):
+                            lines[i] = "IsoPath=" + os.path.abspath(result) + "\n"
+                            backup = ini + ".bak"
+                            if not os.path.exists(backup):
+                                shutil.copy2(ini, backup)
+                            tmp_ini = ini + ".tmp"
+                            with open(tmp_ini, "w", encoding="utf-8", newline="") as f:
+                                f.writelines(lines)
+                            os.replace(tmp_ini, ini)
+                            ini_updated = True
+                            break
+                except OSError:
+                    pass
+            self._boot_from_iso(result)
+            message = f"Created the modified Recomp image:\n{result}\n\nOriginal image left untouched."
+            if ini_updated:
+                message += "\n\nhc09.ini now points to the modified image. Its original is backed up as hc09.ini.bak."
+            else:
+                message += "\n\nSet IsoPath in your Recomp install's hc09.ini to this new image before launching the game."
+            messagebox.showinfo("Recomp ISO created", message)
+
+        self.run_in_thread_with_busy("Building a separate Recomp ISO (this may take several minutes)...", work, done, error_title="Build Recomp ISO")
+
     def _refuse_write_to_iso_copy(self, *paths):
-        """Raises RuntimeError when a game file about to be written is a copy read out of a disc image: a change to the copy would never reach the game (the recompiled PC version plays from the image itself).
-        paths: the files about to be written; none given: the game file the editor uses."""
+        """Permit edits to the extracted Recomp qkl_boot.ast; Build Recomp ISO...
+        publishes it as a separate image and never overwrites the source."""
         targets = [p for p in paths if p] or [self.ui_prefs.get("boot_ast_path") or ""]
-        if any(self._is_iso_copy_path(p) for p in targets):
-            raise RuntimeError("The game files here are a copy the editor read out of a disc image, for reading only: the recompiled PC game plays from the disc image itself, so a change made here would never reach it. "
-                               "Reading works (play, formation and playbook names, the Playbooks tab, Player Type Fit); changing the game files needs the game's loose files (the Xbox 360 files next to default.xex, as Xenia plays them).")
+        iso_targets = [p for p in targets if self._is_iso_copy_path(p)]
+        if self.ui_prefs.get("runtime", "xenia") == "recomp":
+            if len(iso_targets) != len(targets):
+                raise RuntimeError("Recomp edits must target qkl_boot.ast extracted from the selected Recomp ISO. Re-select the Recomp disc image before editing.")
+            return
+        if iso_targets:
+            raise RuntimeError("This is an extracted Recomp archive. Select Static Recomp as the runtime to edit it and build a separate modified ISO.")
 
     def _extract_philosophy_weights_from_game(self):
         """Pull the PEAW / PEIW / PEOW / PESW / LPHC tables and the Size lookups (LPHG, LPWG, EPHB, EPWB, PLPS) out of the user's own qkl_boot.ast into a local cache and
