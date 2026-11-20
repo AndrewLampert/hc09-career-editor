@@ -11269,11 +11269,11 @@ class App(tk.Tk):
         if previous == runtime:
             return
         self.ui_prefs["runtime"] = runtime
-        boot = self.ui_prefs.get("boot_ast_path") or ""
-        # A cached AST extracted from a recomp ISO is read-only and must never
-        # be reused as the writable game archive for Xenia or RPCS3.
-        if runtime != "recomp" and self._is_iso_copy_path(boot):
-            self.ui_prefs["boot_ast_path"] = ""
+        # Game archive paths are runtime-specific. Force the next lookup to
+        # resolve files from the newly selected install rather than carrying a
+        # loose archive or ISO extraction across runtimes.
+        self.ui_prefs["boot_ast_path"] = ""
+        self.ui_prefs["game_ast_path"] = ""
         self._clear_game_data_caches()
         save_ui_prefs(self.ui_prefs)
         if getattr(self, "_runtime_btn", None) is not None:
@@ -14575,12 +14575,12 @@ class App(tk.Tk):
         saved = self.ui_prefs.get("boot_ast_path") or ""
         if runtime != "recomp" and saved and os.path.isfile(saved) and not self._is_iso_copy_path(saved):
             return saved
-        fe2ig = self.get_game_ast_path()
+        fe2ig = self.get_game_ast_path() if runtime != "recomp" else ""
         if fe2ig:
             sibling = os.path.join(os.path.dirname(fe2ig), BOOT_AST_FILENAME)
             if os.path.isfile(sibling):
                 return sibling
-        found = self._detected_game_file(BOOT_AST_FILENAME)
+        found = self._detected_game_file(BOOT_AST_FILENAME) if runtime != "recomp" else ""
         if found:
             self.ui_prefs["boot_ast_path"] = found
             save_ui_prefs(self.ui_prefs)
