@@ -1,5 +1,9 @@
-"""Read files out of an Xbox 360 disc image (an .iso), read only: the editor needs the game's qkl_boot.ast, and the recompiled PC versions of the game (tools81/nfl-head-coach-09-static-recomp) read the game
-from the disc image while you play, so the file is not lying loose in a folder. WRITTEN FROM THE FORMAT, NOT YET TRIED ON A REAL DISC IMAGE: if an image is refused, hc09_iso.describe() says what was found.
+"""Read and safely replace files in an Xbox 360 XDVDFS disc image (.iso).
+
+The editor extracts qkl_boot.ast for Recomp and can publish an edited copy into
+a NEW ISO by appending the replacement file and updating its XDVDFS directory
+entry. The source image is never modified. The writer has structural checks,
+but still needs validation against a real Recomp installation/disc image.
 
 The image holds an XDVDFS ("GDF") file system: 2,048-byte sectors, the volume descriptor in sector 32 of the data partition, which starts at an offset that depends on the disc's layout (XGD1, XGD2, XGD3; a
 plain image is 0). The descriptor starts with MICROSOFT*XBOX*MEDIA and names the root directory (its first sector and its size); a directory is a table of entries, a binary tree whose links are in units of
