@@ -10568,6 +10568,11 @@ class App(tk.Tk):
         self.title(BASE_TITLE)
         self.geometry("1320x820")
         self.minsize(1180, 700)
+        self._fullscreen = False
+        self._pre_fullscreen_state = "normal"
+        self._pre_fullscreen_geometry = self.geometry()
+        self.bind_all("<F11>", self._on_fullscreen_key)
+        self.bind_all("<Escape>", self._on_fullscreen_escape)
 
         self.ui_prefs = load_ui_prefs()
         self._check_iso_copy_at_start()
@@ -10631,6 +10636,51 @@ class App(tk.Tk):
         if self.dirty:
             self.dirty = False
             self.title(BASE_TITLE)
+
+    def toggle_fullscreen(self):
+        """Use the desktop's real borderless full-screen mode (not a maximized
+        window), which also lets Windows hide the taskbar. F11 and Escape
+        provide keyboard equivalents for the toolbar button."""
+        if not self._fullscreen:
+            self._pre_fullscreen_state = self.state()
+            self._pre_fullscreen_geometry = self.geometry()
+            try:
+                self.attributes("-fullscreen", True)
+                self._fullscreen = True
+            except tk.TclError:
+                # Older Tk builds may not support the attribute. Fall back to
+                # a borderless screen-sized window rather than doing nothing.
+                self._fullscreen = True
+                self.overrideredirect(True)
+                self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
+            if getattr(self, "_fullscreen_btn", None) is not None:
+                self._fullscreen_btn.configure(text="Exit Full Screen")
+        else:
+            try:
+                self.attributes("-fullscreen", False)
+            except tk.TclError:
+                pass
+            try:
+                self.overrideredirect(False)
+            except tk.TclError:
+                pass
+            self._fullscreen = False
+            if self._pre_fullscreen_state == "zoomed":
+                self.state("zoomed")
+            else:
+                self.state("normal")
+                self.geometry(self._pre_fullscreen_geometry)
+            if getattr(self, "_fullscreen_btn", None) is not None:
+                self._fullscreen_btn.configure(text="Full Screen")
+        return "break"
+
+    def _on_fullscreen_key(self, event=None):
+        return self.toggle_fullscreen()
+
+    def _on_fullscreen_escape(self, event=None):
+        if self._fullscreen:
+            return self.toggle_fullscreen()
+        return None
 
     def on_close_request(self):
         if self.dirty:
@@ -11382,6 +11432,8 @@ class App(tk.Tk):
         self._runtime_btn.pack(side="right", padx=(8, 0))
         self._options_btn = ttk.Button(top, text="Options...", command=self._open_options_dialog)
         self._options_btn.pack(side="right", padx=(8, 0))
+        self._fullscreen_btn = ttk.Button(top, text="Full Screen", command=self.toggle_fullscreen)
+        self._fullscreen_btn.pack(side="right", padx=(8, 0))
         ttk.Separator(top, orient="vertical").pack(side="right", fill="y", padx=12)
 
         self.lbl_status = ttk.Label(top, text="Load a save to begin (Saves... lists the ones found).", style="Status.TLabel", width=40, anchor="w")
