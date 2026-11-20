@@ -14474,6 +14474,22 @@ class App(tk.Tk):
         return ref
 
     def _find_boot_ast(self, feature="Player Type Fit", what="team philosophies and their weights"):
+        # A remembered ISO extraction belongs to the recompiled PC install, not
+        # necessarily to the save that is open now. When the open career is an
+        # RPCS3 save, resolve qkl_boot.ast from that RPCS3 installation first;
+        # otherwise every play-editing operation can be incorrectly blocked as
+        # an attempted write to the read-only ISO cache.
+        db = getattr(getattr(self, "model", None), "db_path", None) or ""
+        if db and hc09_detect is not None and hc09_detect.rpcs3_dir_of(db):
+            found = self._detected_game_file(BOOT_AST_FILENAME)
+            if found:
+                previous = self.ui_prefs.get("boot_ast_path") or ""
+                if previous and os.path.normcase(os.path.abspath(previous)) != os.path.normcase(os.path.abspath(found)):
+                    self._clear_game_data_caches()
+                self.ui_prefs["boot_ast_path"] = found
+                save_ui_prefs(self.ui_prefs)
+                return found
+
         saved = self.ui_prefs.get("boot_ast_path") or ""
         if saved and os.path.isfile(saved):
             return self._fresh_iso_copy(saved) if self._boot_is_from_iso() else saved
