@@ -109,6 +109,7 @@ except ImportError:
 # Bridge (direct .db load/save, no more manual CSV export/import via HC09Editor)
 # -----------------------------
 NODE_EXE = "node"
+BRIDGE_TIMEOUT = 1800                  # seconds a bridge call may take (an archive scan or a big import takes minutes at most); then it is stopped
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # the editor runs under pythonw: a console program (node, tasklist) started without this opens a black window for as long as it runs (0 off Windows)
 BRIDGE_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hc09-bridge", "bridge.js")
 
@@ -131,25 +132,33 @@ def load_recent_files():
 def _same_path(a, b):
     return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
+def write_json_atomic(path, data, **kw):
+    """JSON written to a temporary file and put in place in one step, so a crash, a power cut or a full disk leaves the old file (or none), never half of one. True when written, False when it
+    could not be (a read-only folder: these are conveniences, the editor goes on without them)."""
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, **kw)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
 def save_recent_file(path):
     path = os.path.normpath(path)      # C:/x/USR-DATA and C:\x\USR-DATA are one save
     recents = [p for p in load_recent_files() if not _same_path(p, path)]
     recents.insert(0, path)
     recents = recents[:RECENT_FILES_MAX]
-    try:
-        with open(RECENT_FILES_PATH, "w", encoding="utf-8") as f:
-            json.dump(recents, f)
-    except Exception:
-        pass
+    write_json_atomic(RECENT_FILES_PATH, recents)
     return recents
 
 def remove_recent_file(path):
     recents = [p for p in load_recent_files() if not _same_path(p, path)]
-    try:
-        with open(RECENT_FILES_PATH, "w", encoding="utf-8") as f:
-            json.dump(recents, f)
-    except Exception:
-        pass
+    write_json_atomic(RECENT_FILES_PATH, recents)
     return recents
 
 def recent_file_display(path):
@@ -205,11 +214,7 @@ def load_motivator_state():
     }
 
 def save_motivator_state(state):
-    try:
-        with open(MOTIVATOR_STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
-    except Exception:
-        pass
+    write_json_atomic(MOTIVATOR_STATE_PATH, state, indent=2)
 DB_TABLE_FILES = {
     "PLAY": "play.csv",
     "DRPK": "drpk.csv",
@@ -252,7 +257,6 @@ DB_TABLE_ATTRS = [
 # tracking the season the way it first appeared to; that first match was a
 # coincidence. NOT used anywhere anymore (see refresh_picks's comment) - left
 # defined only in case cINF's real meaning gets solved later.
-CINF_SEASON_YEAR_OFFSET = 1753  # UNRELIABLE - do not use for a "current year" display, see comment above
 
 # TMSA (Team Salary Cap, on the TEAM table, keyed by TGID): confirmed via a
 # live test - editing a player's contract updates their own displayed cap hit
@@ -521,12 +525,9 @@ def sort_table_cells(rows, reverse):
     for text, iid in rows:
         v = (text or "").strip()
         num = None
-        try:
-            num = float(v)
-        except ValueError:
-            m = re.match(r"^-?\d+(\.\d+)?", v)
-            if m:
-                num = float(m.group(0))
+        m = re.match(r"^[+-]?(\d+(\.\d*)?|\.\d+)", v)               # digits only: float() would also take 'nan' and 'inf', and NaN breaks a sort
+        if m:
+            num = float(m.group(0))
         if num is not None:
             numeric.append((num, v.lower(), iid))
         else:
@@ -1901,7 +1902,6 @@ class CSVModel:
 
         self.team_col = None
         self.max_map = {}
-        self.csv_formats = {}
 
         self.db_path = ""       # path to the .db / USR-DATA save file
         # Playbook tables edited in the Playbooks tab and not yet saved:
@@ -1920,8 +1920,14 @@ class CSVModel:
             CRASH.note("bridge " + summary)
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, creationflags=NO_WINDOW
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, creationflags=NO_WINDOW, timeout=BRIDGE_TIMEOUT
             )
+        except subprocess.TimeoutExpired:
+            if CRASH is not None:
+                CRASH.bridge_failed(args, f"no answer after {BRIDGE_TIMEOUT} seconds", summary)
+                if writes:
+                    CRASH.log_write("FAILED  " + summary)
+            raise RuntimeError(f"The bridge did not finish within {BRIDGE_TIMEOUT // 60} minutes and was stopped. If it was saving, your save is checked and restored from its copy where the editor can.")
         except FileNotFoundError:
             if CRASH is not None:
                 CRASH.bridge_failed(args, "node was not found", summary)
@@ -1945,13 +1951,20 @@ class CSVModel:
             CRASH.log_write("written  " + summary)
         return parsed
 
+    def _state_attrs(self):
+        """The attributes a load replaces: a failed load puts them back."""
+        out = ["db_path", "pb_pending", "load_serial", "missing_tables", "pssk_stored", "team_col", "max_map"]
+        for _code, rows_attr, headers_attr, path_attr in DB_TABLE_ATTRS:
+            out += [rows_attr, headers_attr, path_attr]
+        return out
+
     def load_all_from_db(self, db_path):
-        """Export all tables from the .db save file straight into memory (no manual CSV steps)."""
+        """Export all tables from the .db save file straight into memory (no manual CSV steps). A save that cannot be loaded (no export, no players) leaves the model as it was: the open save,
+        its unsaved playbook edits and its tables."""
         if not db_path or not os.path.isfile(db_path):
             raise ValueError("Select a valid .db / USR-DATA save file.")
 
-        self.pb_pending = {}   # unsaved playbook edits belong to the file being replaced
-        self.load_serial += 1  # lets the Playbooks tab notice a reload even when the file's mtime is unchanged
+        before = {a: getattr(self, a) for a in self._state_attrs()}
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_load_")
         try:
             self.run_bridge(["export", "--db", db_path, "--out", tmp_dir])
@@ -1963,6 +1976,13 @@ class CSVModel:
             self.missing_tables = [code for code, _r, _h, path_attr in DB_TABLE_ATTRS if not os.path.isfile(getattr(self, path_attr))]
 
             self._finish_load()
+            self.pb_pending = {}   # unsaved playbook edits belong to the file that was replaced
+            self.load_serial += 1  # lets the Playbooks tab notice a reload even when the file's mtime is unchanged
+        except BaseException:
+            for a, v in before.items():
+                setattr(self, a, v)
+            self._pos_index_cache = {}
+            raise
         finally:
             # _finish_load() reads every CSV into memory before returning, so
             # nothing downstream ever touches this directory again - clean it
@@ -1988,8 +2008,7 @@ class CSVModel:
             for table, rows in pending.items():
                 self._write_csv(os.path.join(tmp_dir, table.lower() + ".csv"), rows, PLAYBOOK_TABLE_HEADERS[table])
 
-            backup_path = save_backup_path(self.db_path)
-            shutil.copy2(self.db_path, backup_path)
+            backup_path = backup_save(self.db_path)
 
             # No --out: save in place. (Passing --out equal to --db would hit a
             # clone-to-self race in HC09Helper.save() and corrupt the file.)
@@ -2004,7 +2023,7 @@ class CSVModel:
                     result = self.run_bridge(args)
                 except Exception as e:
                     # The import may have died partway through writing the file.
-                    shutil.copy2(backup_path, self.db_path)
+                    restore_backup(backup_path, self.db_path, e)
                     raise RuntimeError(
                         "The playbook and special skill edits could not be saved, so your save was "
                         f"restored from its backup. Details: {e}") from e
@@ -2013,9 +2032,14 @@ class CSVModel:
             else:
                 try:
                     result = self.run_bridge(args)
-                except Exception:
-                    shutil.copy2(backup_path, self.db_path)           # the bridge writes the save only after the new one checks out; this also covers a failure inside that last copy
+                except Exception as e:
+                    restore_backup(backup_path, self.db_path, e)       # the bridge writes the save only after the new one checks out; this also covers a failure inside that last copy
                     raise
+            misplaced = misplaced_rows(result, exempt=set(grown) | set(pending))
+            if misplaced:                                           # rows written onto other people's records: put the save back rather than keep that
+                restore_backup(backup_path, self.db_path, RuntimeError("; ".join(misplaced[:2])))
+                raise RuntimeError("The save was not written: some rows would have landed on other records (the table changed since it was read), so your save was restored from its backup. "
+                                   "Open the save again and redo the change. Details: " + "; ".join(misplaced[:2]))
             self.save_warnings = import_warnings(result)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -2040,7 +2064,7 @@ class CSVModel:
                 # A file the checker can't even open or parse is not a file to keep.
                 problems = [f"the structure check could not run ({e})"]
         if problems:
-            shutil.copy2(backup_path, self.db_path)
+            restore_backup(backup_path, self.db_path, "; ".join(str(p) for p in problems[:2]))
             raise RuntimeError(
                 "The playbook edits could not be saved safely, so your save was restored from its backup. "
                 "Details: " + "; ".join(str(p) for p in problems[:4]))
@@ -2055,16 +2079,6 @@ class CSVModel:
     def load_csv(self, path):
         if not path or not os.path.isfile(path):
             return [], []
-        raw = open(path, "rb").read()
-        has_bom = raw.startswith(b"\xef\xbb\xbf")
-        if b"\r\n" in raw:
-            lineterminator = "\r\n"
-        else:
-            lineterminator = "\n"
-        self.csv_formats[path] = {
-            "encoding": "utf-8-sig" if has_bom else "utf-8",
-            "lineterminator": lineterminator,
-        }
         with open(path, "r", newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             raw_headers = reader.fieldnames or []
@@ -2078,33 +2092,6 @@ class CSVModel:
                 rows.append(cleaned)
         return rows, headers
 
-    def save_csv(self, rows, headers, original_file):
-        if not original_file:
-            raise ValueError("No original file path to save.")
-        base, ext = os.path.splitext(original_file)
-        out = f"{base}_modified{ext}"
-        n = 1
-        while os.path.exists(out):
-            out = f"{base}_modified_{n}{ext}"
-            n += 1
-        fmt = self.csv_formats.get(original_file, {"encoding": "utf-8-sig", "lineterminator": "\n"})
-        with open(out, "w", newline="", encoding=fmt["encoding"]) as f:
-            w = csv.DictWriter(f, fieldnames=headers, lineterminator=fmt["lineterminator"])
-            w.writeheader()
-            for r in rows:
-                w.writerow(r)
-        return out
-
-    def load_all(self, play_path, drpk_path="", slri_path="", trainer_path="", coach_path="", gm_path=""):
-        self.play_path = play_path or ""
-        self.drpk_path = drpk_path or ""
-        self.slri_path = slri_path or ""
-        self.trainer_path = trainer_path or ""
-        self.coach_path = coach_path or ""
-        self.gm_path = gm_path or ""
-
-        self._finish_load()
-
     def _finish_load(self):
         for _code, rows_attr, headers_attr, path_attr in DB_TABLE_ATTRS:
             path = getattr(self, path_attr, "")
@@ -2112,19 +2099,14 @@ class CSVModel:
             setattr(self, rows_attr, rows)
             setattr(self, headers_attr, headers)
         self.pssk_stored = len(self.pssk)
+        self._pos_index_cache = {}
 
         if not self.players:
-            raise ValueError("play.csv loaded 0 players/rows.")
+            raise ValueError("This save has no players (it is a profile or a roster save, not a career), so there is nothing to edit here.")
 
-        # Ensure coach extra fields exist in headers and set defaults
+        # An existing coach's blank extra field gets the default 1
         coach_extra = ["CSPC", "SKPC", "SKPA", "SKPF", "CHEM"]
-        if self.coach_headers is None:
-            self.coach_headers = []
         coach_header_set = set(self.coach_headers)
-        for f in coach_extra:
-            if f not in coach_header_set:
-                continue
-        # Ensure each existing coach numeric field has a default
         for r in self.coaches:
             for f in coach_extra:
                 if f not in coach_header_set:
@@ -2199,7 +2181,8 @@ class CSVModel:
         if cache is None:
             cache = self._pos_index_cache = {}
         key = id(table_rows)
-        index = cache.get(key)
+        held = cache.get(key)
+        index = held[2] if held is not None and held[0] is table_rows and held[1] == len(table_rows) else None      # an id can be reused by a new list once the old one is gone
         if index is None:
             index = {}
             for r in table_rows:
@@ -2209,7 +2192,7 @@ class CSVModel:
                 bucket = PPGR_TO_POSITION.get((r.get("PPGR", "") or "").strip())
                 if bucket:
                     index.setdefault(row_pnid, {})[bucket] = r
-            cache[key] = index
+            cache[key] = (table_rows, len(table_rows), index)
         return index.get(str(pnid), {})
 
     def get_gm_potential_eval_rows(self, pnid):
@@ -2249,19 +2232,6 @@ class CSVModel:
         cur = safe_int(row.get(TEAM_SALARY_CAP_FIELD, "0")) or 0
         row[TEAM_SALARY_CAP_FIELD] = str(max(0, min(TEAM_SALARY_CAP_MAX_VALUE, cur + delta_units)))
         return True
-
-    def get_current_season_year(self):
-        """UNRELIABLE - see CINF_SEASON_YEAR_OFFSET. Disproven as a live
-        "current season" indicator (two saves independently confirmed as
-        different in-game years both have the same raw SEYR value). Not
-        called anywhere; kept only in case cINF's real meaning is solved
-        later."""
-        if not self.cinf:
-            return None
-        seyr = safe_int(self.cinf[0].get("SEYR", ""))
-        if seyr is None:
-            return None
-        return seyr + CINF_SEASON_YEAR_OFFSET
 
 class TeamAutocompleteCombo:
     """A ttk.Combobox with type-to-filter team selection, backed by a custom
@@ -3132,11 +3102,7 @@ def load_ui_prefs():
     return {"mode": "light", "facelift_enabled": True}
 
 def save_ui_prefs(prefs):
-    try:
-        with open(UI_PREFS_PATH, "w", encoding="utf-8") as f:
-            json.dump(prefs, f, indent=2)
-    except Exception:
-        pass
+    write_json_atomic(UI_PREFS_PATH, prefs, indent=2)
 
 # -----------------------------
 # Portrait support (qkl_fe2ig.ast player/coach headshots)
@@ -4109,6 +4075,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
 # -----------------------------
 PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
+PROFILE_RETRY_SECONDS = 120              # a profile save that could not be read is not tried again for this long (unless the file changes)
 PLAYBOOK_PLAYNAMES_FILE = "pppn.csv"     # the names each playbook gives its plays (PPPN); optional: without it the master names are shown
 PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM"]
 PLAYBOOK_LINK_TABLES = ("PGPL", "PGSL", "PGSS", "PGFM")        # what puts plays and formations into a career's playbooks: without them the Playbooks tab has nothing to list
@@ -4159,21 +4126,7 @@ PLAYBOOK_CREATED_FORMATIONS = {"8190", "8191"}   # the per-save "Created Plays" 
 PLAYBOOK_SPECIAL_FORMATIONS = {"kickoff", "safety punt", "special teams", "kick return", "safety kick return", "special"}
 
 
-def cut_at_control(text):
-    """A string out of the game's database as it should read: the pool the strings sit in runs on past the text, so everything from the first control character on is dropped."""
-    for i, ch in enumerate(text or ""):
-        if ord(ch) < 32:
-            return text[:i].strip()
-    return (text or "").strip()
-
-
-def read_csv_dicts(path):
-    """Plain CSV -> list of dicts (no model state touched, so it's safe on a worker thread)."""
-    try:
-        with open(path, newline="", encoding="utf-8-sig") as f:
-            return list(csv.DictReader(f))
-    except OSError:
-        return []
+from hc09_plays import cut_at_control, read_csv as read_csv_dicts       # noqa: E402  (one copy of each, shared with the other modules)
 
 
 def team_nickname(tid):
@@ -4824,12 +4777,8 @@ PERSONNEL_DEFENSE_EDITABLE = tuple(range(10, 19))  # every defensive position
 
 
 def rpcs3_running():
-    """True if rpcs3.exe is running (the game files cannot be written reliably then)."""
-    try:
-        out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW).stdout
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return "rpcs3" in out.lower()
+    """True if something that plays the game is running (RPCS3, Xenia, a PC version): the game files cannot be written reliably then. The one check of the editor: App._rpcs3_running."""
+    return App._rpcs3_running()
 
 
 def personnel_side(epos_list):
@@ -5087,14 +5036,80 @@ def load_personnel_data(model, archives, backup_dir=None, cache_dir=None):
     return data
 
 
+MISPLACED_WARNING = "doesn't match the record currently at that position"          # the bridge's words for a row whose id is not the id of the record it would be written onto
+
+
+IDENTITY_COLUMNS = ("PGID", "PNid", "TGID")          # columns that name WHO a row is: a different one at the same position means the row would be written onto another person's record
+
+
+def _warning_column(w):
+    m = re.match(r"row \d+: (\S+) in the CSV", w)
+    return m.group(1) if m else None
+
+
 def import_warnings(result):
-    """The values an import did not write, from its answer: [text] (the bridge skips a value that is not a number or is out of range for its field, and a row that has no record)."""
+    """Everything an import warned about, from its answer: [text] (a value that is not a number or is out of range for its field and was skipped, a row that has no record, a row whose person or
+    team id is not the one of the record at that position: its edits would land on another record). The bridge compares the first column whose name ends in 'id', which can also be a field
+    the person just edited (a coach's playbook ids): such a difference is not a sign of a misplaced row and is not reported."""
     out = []
     for r in (result or {}).get("results", []):
         for w in r.get("warnings") or []:
-            if "skipped" in w or "no matching record" in w:
-                out.append(f"{r.get('table')}: {w}")
+            if MISPLACED_WARNING in w and _warning_column(w) not in IDENTITY_COLUMNS:
+                continue
+            out.append(f"{r.get('table')}: {w}")
     return out
+
+
+def misplaced_rows(result, exempt=()):
+    """The 'wrong record' warnings of an import, except for the tables in `exempt` (tables that were grown or rewritten whole, where rows legitimately move): [text]."""
+    return [w for w in import_warnings(result) if MISPLACED_WARNING in w and w.split(":", 1)[0] not in exempt]
+
+
+def restore_backup(bak, db_path, cause=None):
+    """Put the copy made before a write back over the save after the write failed. If that fails as well the person is told so, with where the copy is (the first error stays the cause);
+    otherwise this returns and the caller re-raises the first error."""
+    try:
+        shutil.copy2(bak, db_path)
+    except Exception as e:
+        raise RuntimeError(f"The save could not be written ({cause}) and the copy made before could not be put back ({e}). The save may be half written: your copy is {bak} (copy it over the save by hand).") from (cause if isinstance(cause, BaseException) else None)
+
+
+_OPENED_COPIES = set()
+
+
+def backup_save(db_path):
+    """Copy a save before the editor writes it (to the place save_backup_path says) and return the copy's path. The FIRST write of a save in a run of the editor also keeps the file as it was when
+    the editor first wrote it, as <name>.opened.bak next to that copy: the copy itself is replaced by every later write, so it only goes back one write."""
+    bak = save_backup_path(db_path)
+    key = os.path.normcase(os.path.abspath(db_path))
+    if key not in _OPENED_COPIES:
+        shutil.copy2(db_path, bak[:-len(".bak")] + ".opened.bak" if bak.endswith(".bak") else bak + ".opened")
+        _OPENED_COPIES.add(key)
+    shutil.copy2(db_path, bak)
+    return bak
+
+
+def write_tables_in_save(model, db_path, out_dir, tables, allow_append=(), allow_shrink=(), backup=True, wrote="the tables", after="the tables"):
+    """Import the CSV files of out_dir into a save, check the answer and the structure of the result, and put the copy made first back if anything is wrong: the one sequence the writers of
+    links, CPU rows and play names use. `wrote` and `after` complete the error messages ('did not write <wrote>', 'does not check out after <after> were written'). Raises RuntimeError."""
+    bak = backup_save(db_path) if backup else None
+    args = ["import", "--db", db_path, "--in", out_dir, "--tables", ",".join(tables)]
+    if allow_append:
+        args += ["--allow-append", ",".join(allow_append)]
+    if allow_shrink:
+        args += ["--allow-shrink", ",".join(allow_shrink)]
+    try:
+        res = model.run_bridge(args)
+        bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
+        if bad:
+            raise RuntimeError(f"The bridge did not write {wrote}: " + str(bad)[:300])
+        check = model.run_bridge(["verify-db", "--db", db_path])
+        if not check.get("ok"):
+            raise RuntimeError(f"The save does not check out after {after} were written: " + str(check)[:300])
+    except Exception as first:
+        if bak:
+            restore_backup(bak, db_path, first)
+        raise
 
 
 def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=()):
@@ -5134,20 +5149,7 @@ def link_plays_in_save(model, db_path, links=None, remove_plays=(), keep_plays=(
                     w.writerow([r[c] for c in AP.LINK_TABLES[t]])
         if not changed:
             return 0, 0
-        bak = save_backup_path(db_path)
-        shutil.copy2(db_path, bak)
-        try:
-            names = ",".join(changed)
-            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", names, "--allow-append", names, "--allow-shrink", names])
-            bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
-            if bad:
-                raise RuntimeError("The bridge did not write the playbook links: " + str(bad)[:300])
-            check = model.run_bridge(["verify-db", "--db", db_path])
-            if not check.get("ok"):
-                raise RuntimeError("The save does not check out after the links were written: " + str(check)[:300])
-        except Exception:
-            shutil.copy2(bak, db_path)
-            raise
+        write_tables_in_save(model, db_path, out, changed, allow_append=changed, allow_shrink=changed, wrote="the playbook links", after="the links")
         return added, removed
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -5170,8 +5172,13 @@ def save_backup_path(db_path):
     name = os.path.basename(db_path)
     old = db_path + ".bak"
     if os.path.isfile(old):
+        target = os.path.join(folder, name + ".earlier.bak")
+        n = 1
+        while os.path.exists(target):                    # an earlier one that was moved here before is kept, this one gets a free name
+            n += 1
+            target = os.path.join(folder, f"{name}.earlier-{n}.bak")
         try:
-            os.replace(old, os.path.join(folder, name + ".earlier.bak"))
+            os.replace(old, target)
         except OSError as e:
             raise RuntimeError(f"The old backup {old} beside the save could not be moved into the {os.path.basename(folder)} folder ({e}). Xenia reads every file beside the saves as a damaged save, so move or "
                                "delete it yourself (is something using it?), then try again; nothing was written.") from e
@@ -5204,21 +5211,7 @@ def add_cpu_rows_in_save(model, db_path, profile_path=None, stock_pbai=(), backu
             w.writerow(headers)
             for r in rd("pbai") + rows:
                 w.writerow([r[h] for h in headers])
-        bak = save_backup_path(db_path) if backup else None
-        if bak:
-            shutil.copy2(db_path, bak)
-        try:
-            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", "PBAI", "--allow-append", "PBAI"])
-            bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
-            if bad:
-                raise RuntimeError("The bridge did not write the CPU rows: " + str(bad)[:300])
-            check = model.run_bridge(["verify-db", "--db", db_path])
-            if not check.get("ok"):
-                raise RuntimeError("The save does not check out after the CPU rows were written: " + str(check)[:300])
-        except Exception:
-            if bak:
-                shutil.copy2(bak, db_path)
-            raise
+        write_tables_in_save(model, db_path, out, ["PBAI"], allow_append=["PBAI"], backup=backup, wrote="the CPU rows", after="the CPU rows")
         return len(rows), skipped
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -5245,24 +5238,18 @@ def rename_plays_in_save(model, db_path, renames, expect=None, backup=True):
             w.writerow(headers)
             for r in rows:
                 w.writerow([r[h] for h in headers])
-        bak = save_backup_path(db_path) if backup else None
-        if bak:
-            shutil.copy2(db_path, bak)
-        try:
-            res = model.run_bridge(["import", "--db", db_path, "--in", out, "--tables", "PBPL"])
-            bad = [r for r in res.get("results", []) if r.get("status") != "ok" or r.get("warnings")]
-            if bad:
-                raise RuntimeError("The bridge did not write the names: " + str(bad)[:300])
-            check = model.run_bridge(["verify-db", "--db", db_path])
-            if not check.get("ok"):
-                raise RuntimeError("The save does not check out after the names were written: " + str(check)[:300])
-        except Exception:
-            if bak:
-                shutil.copy2(bak, db_path)
-            raise
+        write_tables_in_save(model, db_path, out, ["PBPL"], backup=backup, wrote="the names", after="the names")
         return renamed, skipped
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _bridge_config(config):
+    """The JSON file the bridge's entry-patch reads its targets from: a temporary file of its own name (two calls never share one), which the caller removes."""
+    handle, path = tempfile.mkstemp(prefix="hc09_personnel_", suffix=".json")
+    with os.fdopen(handle, "w", encoding="utf-8") as f:
+        json.dump(config, f)
+    return path
 
 
 def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
@@ -5270,9 +5257,7 @@ def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
     case nothing was written (every entry is checked before the first write)."""
     if not targets:
         return {"results": []}
-    cfg = os.path.join(tempfile.gettempdir(), f"hc09_personnel_{os.getpid()}.json")
-    with open(cfg, "w", encoding="utf-8") as f:
-        json.dump({"backupDir": backup_dir or PERSONNEL_BACKUP_DIR, "targets": targets}, f)
+    cfg = _bridge_config({"backupDir": backup_dir or PERSONNEL_BACKUP_DIR, "targets": targets})
     try:
         return model.run_bridge(["entry-patch", mode, "--config", cfg])
     finally:
@@ -5288,10 +5273,8 @@ def restore_personnel_files(model, data, backup_dir=None):
     for ast in sorted({c["ast"] for c in data.copies}):
         if os.path.basename(ast).lower() == "qkl_boot.ast":
             model.run_bridge(["add-play-restore", "--ast", ast, "--backup-dir", backup_dir or PERSONNEL_BACKUP_DIR])
-    cfg = os.path.join(tempfile.gettempdir(), f"hc09_personnel_restore_{os.getpid()}.json")
     targets = [{"ast": c["ast"], "index": c["index"], "start": c["start"], "size": c["size"], "edits": []} for c in data.copies]
-    with open(cfg, "w", encoding="utf-8") as f:
-        json.dump({"backupDir": backup_dir or PERSONNEL_BACKUP_DIR, "targets": targets}, f)
+    cfg = _bridge_config({"backupDir": backup_dir or PERSONNEL_BACKUP_DIR, "targets": targets})
     try:
         return model.run_bridge(["entry-patch", "restore", "--config", cfg])
     finally:
@@ -9678,8 +9661,11 @@ class PlaybookCopyDialog(tk.Toplevel):
 
     def _update_target_label(self):
         d = self.data
-        users = [f"offense: {', '.join(d.offense_used_by[self.target])}" for _ in [0] if d.offense_used_by.get(self.target)]
-        users += [f"defense: {', '.join(d.defense_used_by[self.target])}" for _ in [0] if d.defense_used_by.get(self.target)]
+        users = []
+        if d.offense_used_by.get(self.target):
+            users.append(f"offense: {', '.join(d.offense_used_by[self.target])}")
+        if d.defense_used_by.get(self.target):
+            users.append(f"defense: {', '.join(d.defense_used_by[self.target])}")
         shared = len(d.offense_used_by.get(self.target, [])) + len(d.defense_used_by.get(self.target, []))
         names = d.book_names.get(self.target, [])
         extra = []
@@ -10264,7 +10250,7 @@ class PlaybookData:
                 plan["skipped_custom"] = True
             if not plays:
                 return
-            for f in self.set_formations.get((src, setl), []):
+            for f in ([only_formation] if only_formation is not None else self.set_formations.get((src, setl), [])):
                 if f not in PLAYBOOK_CREATED_FORMATIONS and self.is_custom(None, None, f, self.formation_srfm.get((src, f), "")) and into_formation is None and setl not in self.book_sets.get(tgt, set()):
                     plan["notes"].append(f'"{self.set_label(setl)}" sits under a custom formation in the source, so it was skipped.')
                     plan["skipped_custom"] = True
@@ -10448,7 +10434,7 @@ class PlaybookData:
             tid = (c.get("TGID") or "").strip()
             pos = (c.get("COPS") or "").strip()
             if tid in real and pos in ("0", "1", "2"):
-                held[(tid, pos)] = c
+                held.setdefault((tid, pos), c)                       # the first row, as team_book takes it (the 'used by' lists and the buttons must name the same playbook)
         for tid in real:
             nick = team_nickname(tid)
             for side, field, coord_pos, bucket, tag in (("1", "CPID", "1", self.offense_used_by, "OC"),
@@ -10545,7 +10531,7 @@ class PlaybookData:
         out = []
         for st in sets:
             for plyl, pltp in self.set_plays.get((bokl, st), []):
-                out.append((f"{st}:{plyl}", self.play_label(st, plyl), self.set_label(st), pltp, st, plyl))
+                out.append((f"{st}:{plyl}", self.play_label(st, plyl, bokl), self.set_label(st), pltp, st, plyl))
         return out
 
     def search(self, text):
@@ -10559,8 +10545,14 @@ class PlaybookData:
         hits = []
         for st, plyl in keys:
             name = self.play_label(st, plyl)
-            if text in norm(name) or text in norm(self.set_label(st)):
-                books = sorted(self.play_books.get((st, plyl), []), key=lambda b: int(b) if b.isdigit() else 0)
+            books = sorted(self.play_books.get((st, plyl), []), key=lambda b: int(b) if b.isdigit() else 0)
+            hit = text in norm(name) or text in norm(self.set_label(st))
+            if not hit:                                              # a playbook may call the play something else (Rename in playbooks): that name finds it too
+                for b in books:
+                    if text in norm(self.book_play_name.get((b, plyl)) or ""):
+                        name, hit = self.play_label(st, plyl, b), True
+                        break
+            if hit:
                 pltp = self.play_info.get((st, plyl), ("", ""))[1]
                 hits.append((f"{st}:{plyl}", name, self.set_label(st), pltp, st, plyl, len(books), books))
         hits.sort(key=lambda h: (h[1].lower(), h[2].lower()))
@@ -11676,6 +11668,7 @@ class App(tk.Tk):
         self._playbook_flagged = []     # custom playbooks whose name is marked * (the career's plays differ from the profile's)
         self._playbook_problems = []    # why a profile could not be read, if it could not
         self._profile_cache = {}        # profile path -> (mtime, names): not re-read while unchanged, and a fallback
+        self._profile_failed = {}       # profile path -> (mtime, when, error) of a read that failed: not tried again at once while the file is unchanged
         self._pb_team_manual = False   # True once the tab's Team box was changed by hand
         self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
 
@@ -11832,8 +11825,14 @@ class App(tk.Tk):
         stamp = self._playbook_stamp_now()
         if not force and self._playbook_data is not None and stamp == self._playbook_stamp:
             return
-        if force and self.model.pb_pending and not messagebox.askyesno(
-                "Playbooks", "You have playbook changes that aren't saved yet. Reloading discards them. Reload anyway?"):
+        if force:
+            self._profile_failed.clear()                       # a refresh the person asked for tries a profile that failed before again
+        if self.model.pb_pending and not messagebox.askyesno(
+                "Playbooks", ("You have playbook changes that aren't saved yet. Reloading discards them. Reload anyway?" if force else
+                              "The save file changed since the playbooks were read (the emulator or the game rewrote it, or the game files changed). Reloading discards the playbook changes "
+                              "you have not saved yet. Reload anyway?")):
+            if not force:
+                self._playbook_stamp = stamp                       # asked once for this change of the file
             return
 
         boot_ast = ""
@@ -11875,7 +11874,9 @@ class App(tk.Tk):
         """PLAB / SETL / PBPL rows (names of custom playbooks, sets and plays) from a profile save, plus its
         PGPL to verify them; None if the file has no such rows (so it is not a profile with custom content).
         Read-only, worker thread. A read that fails (say the emulator has the file open for a moment) is
-        retried before the error is raised."""
+        retried before the error is raised. A career save is not a profile (None)."""
+        if hc09_detect is not None and hc09_detect.classify_save(profile_path)[0] == "career":
+            return None
         error = None
         for attempt in range(3):
             tmp = tempfile.mkdtemp(prefix="hc09_profile_")
@@ -11912,9 +11913,15 @@ class App(tk.Tk):
             cached = self._profile_cache.get(path)
             if cached and cached[0] == mtime:
                 return cached[1]
+            failed = self._profile_failed.get(path)
+            if failed and failed[0] == mtime and time.time() - failed[1] < PROFILE_RETRY_SECONDS:      # the same file failed a moment ago: not another 5 seconds of retries at every refresh
+                problems.append(f"could not read {recent_file_display(path)}" + (" - using the last read of it" if cached else "") + f" ({failed[2][:70]})")
+                return cached[1] if cached else None
             try:
                 names = self._read_profile_names(path)
+                self._profile_failed.pop(path, None)
             except Exception as e:
+                self._profile_failed[path] = (mtime, time.time(), str(e))
                 problems.append(f"could not read {recent_file_display(path)}" + (" - using the last read of it" if cached else "") + f" ({str(e)[:70]})")
                 return cached[1] if cached else None
             if names:
@@ -11931,7 +11938,10 @@ class App(tk.Tk):
             if not names:
                 continue
             score = len(used & {(key(r, "SETL"), key(r, "PLYL")) for r in names["pbpl"]})
-            newer = best_path and os.path.getmtime(path) > os.path.getmtime(best_path)
+            try:
+                newer = best_path and os.path.getmtime(path) > os.path.getmtime(best_path)
+            except OSError:
+                newer = False                                    # one of them went away since it was listed
             if score > best_score or (score == best_score and newer):
                 best_path, best_names, best_score = path, names, score
         if best_names is None:
@@ -12198,7 +12208,7 @@ class App(tk.Tk):
         timestamp - so edits are never built on discarded data."""
         if self._playbook_data is not None and self._playbook_stamp != self._playbook_stamp_now():
             self.refresh_playbooks()
-            self.lbl_playbook_status.configure(text="The save was reloaded, so the playbook data was refreshed. Choose the playbook and try again.")
+            self.lbl_playbook_status.configure(text="The save changed on disk or was reloaded, so the playbook data was refreshed. Choose the playbook and try again.")
             return True
         return False
 
@@ -14161,6 +14171,7 @@ class App(tk.Tk):
         if not targets:
             raise RuntimeError("The game files already have these values.")
         apply_personnel_targets(self.model, targets, self._personnel_backup_dir(), mode=mode)
+        self._forget_playbook_names()
         if changes["name"]:
             self.reload_book_play_names(archives[0])
         return targets, report
@@ -14212,6 +14223,7 @@ class App(tk.Tk):
         if not targets:
             raise RuntimeError("Those playbooks already call the play that." + (f" ({len(missing)} playbook(s) have no name row for the play.)" if missing else ""))
         apply_personnel_targets(self.model, targets, self._personnel_backup_dir())
+        self._forget_playbook_names()                              # the Playbooks tab's data holds the old names: it reads them again at its next use
         return targets, report, missing, self.reload_book_play_names(archives[0])
 
     def game_file_restore(self, archives):
@@ -14249,11 +14261,14 @@ class App(tk.Tk):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def _forget_playbook_names(self):
-        """The cached copy of the playbook names is out of date (renamed, or put back): the next use reads it again from the game files."""
-        try:
-            os.remove(os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv"))
-        except OSError:
-            pass
+        """The cached copy of the playbook names, sets, formations and plays is out of date (the game files were written: a rename, an added play, a changed play, put back): the Playbooks tab
+        reads all of it again from the game files at its next use."""
+        for name in PLAYBOOK_NAME_FILES + (PLAYBOOK_PLAYNAMES_FILE,):
+            try:
+                os.remove(os.path.join(PLAYBOOK_CACHE_DIR, name))
+            except OSError:
+                pass
+        self._playbook_data = None
 
     def rename_playbooks_apply(self, boot_ast, renames):
         """Write {(BGID, BOFF): new name} into the game's PLAB (bridge entry-patch: the entry is checked before it is written and backed up the first time). Returns (playbooks renamed, the PLAB rows read
@@ -14335,12 +14350,16 @@ class App(tk.Tk):
         untouched originals; an empty list puts it all back. Every entry is checked before anything is written. Returns the bridge's report."""
         self._refuse_write_to_iso_copy(boot_ast)
         if not plays:
-            return self.model.run_bridge(["add-play-restore", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
-        spec = os.path.join(tempfile.gettempdir(), f"hc09_addplay_{os.getpid()}.json")
-        with open(spec, "w", encoding="utf-8") as f:
+            res = self.model.run_bridge(["add-play-restore", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
+            self._forget_playbook_names()
+            return res
+        handle, spec = tempfile.mkstemp(prefix="hc09_addplay_", suffix=".json")
+        with os.fdopen(handle, "w", encoding="utf-8") as f:
             json.dump(AP.merge(plays), f)
         try:
-            return self.model.run_bridge(["add-play", "--ast", boot_ast, "--spec", spec, "--backup-dir", self._personnel_backup_dir()])
+            res = self.model.run_bridge(["add-play", "--ast", boot_ast, "--spec", spec, "--backup-dir", self._personnel_backup_dir()])
+            self._forget_playbook_names()                  # the plays, sets and formations it added are not in the cached name tables
+            return res
         finally:
             try:
                 os.remove(spec)
