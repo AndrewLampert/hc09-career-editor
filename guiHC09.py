@@ -3096,10 +3096,13 @@ def load_ui_prefs():
             if isinstance(data, dict):
                 data.setdefault("mode", "light")
                 data.setdefault("facelift_enabled", True)
+                data.setdefault("runtime", "xenia")
+                if data.get("runtime") not in ("xenia", "rpcs3", "recomp"):
+                    data["runtime"] = "xenia"
                 return data
     except Exception:
         pass
-    return {"mode": "light", "facelift_enabled": True}
+    return {"mode": "light", "facelift_enabled": True, "runtime": "xenia"}
 
 def save_ui_prefs(prefs):
     write_json_atomic(UI_PREFS_PATH, prefs, indent=2)
@@ -11047,6 +11050,8 @@ class App(tk.Tk):
         self._options_dark_chk = chk_dark
 
         ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=(10, 8))
+        ttk.Label(inner, text=f"Current runtime: {self.ui_prefs.get('runtime', 'xenia').upper()}").pack(anchor="w")
+        ttk.Button(inner, text="Change runtime...", command=self._show_runtime_picker).pack(anchor="w", pady=(4, 0))
         self.reopen_last_var = tk.BooleanVar(value=self.ui_prefs.get("reopen_last", False))
         ttk.Checkbutton(inner, text="Reopen my last save when the editor starts", variable=self.reopen_last_var,
                         command=self.on_toggle_reopen_last).pack(anchor="w")
@@ -11256,6 +11261,75 @@ class App(tk.Tk):
         self.destroy()
 
     # ---------- UI layout ----------
+    def _set_runtime(self, runtime):
+        """Persist the selected game runtime and invalidate game-data caches when its source changes."""
+        if runtime not in ("xenia", "rpcs3", "recomp"):
+            raise ValueError("Unknown runtime: " + str(runtime))
+        previous = self.ui_prefs.get("runtime", "xenia")
+        if previous == runtime:
+            return
+        self.ui_prefs["runtime"] = runtime
+        boot = self.ui_prefs.get("boot_ast_path") or ""
+        # A cached AST extracted from a recomp ISO is read-only and must never
+        # be reused as the writable game archive for Xenia or RPCS3.
+        if runtime != "recomp" and self._is_iso_copy_path(boot):
+            self.ui_prefs["boot_ast_path"] = ""
+        self._clear_game_data_caches()
+        save_ui_prefs(self.ui_prefs)
+        if getattr(self, "_runtime_btn", None) is not None:
+            self._runtime_btn.configure(text=f"Runtime: {runtime.upper()}")
+        self.lbl_status.configure(text=f"Runtime set to {runtime.upper()}. Load or locate the matching game's files.")
+
+    def _show_runtime_picker(self, on_done=None):
+        """Show the runtime chooser at startup and on demand from the toolbar/Options."""
+        existing = getattr(self, "_runtime_dlg", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            return
+        dlg = tk.Toplevel(self)
+        self._runtime_dlg = dlg
+        dlg.title("Choose game runtime")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        p = self._ui_palette
+        if p:
+            dlg.configure(background=p["bg"])
+        inner = ttk.Frame(dlg, padding=18)
+        inner.pack(fill="both", expand=True)
+        ttk.Label(inner, text="How are you running NFL Head Coach?", font=("", 12, "bold")).pack(anchor="w")
+        ttk.Label(inner, text="Choose the runtime for the game files this editor should use.", wraplength=420).pack(anchor="w", pady=(4, 12))
+        choice = tk.StringVar(value=self.ui_prefs.get("runtime", "xenia"))
+        options = (
+            ("xenia", "Xenia", "Xbox 360 game files (loose files beside default.xex)."),
+            ("rpcs3", "RPCS3", "PS3 game files from your RPCS3 installation."),
+            ("recomp", "Static Recomp", "Game data read from the original disc image."),
+        )
+        for value, title, detail in options:
+            line = ttk.Frame(inner)
+            line.pack(fill="x", pady=4)
+            ttk.Radiobutton(line, text=title, value=value, variable=choice).pack(anchor="w")
+            ttk.Label(line, text=detail, padding=(24, 0, 0, 0), wraplength=390).pack(anchor="w")
+        ttk.Label(
+            inner,
+            text="Note: Recomp mode currently reads game archives from the ISO. Writing edited game archives back into a recomp-compatible image is not implemented yet; save-file editing remains separate.",
+            wraplength=420, justify="left"
+        ).pack(anchor="w", pady=(12, 8))
+        buttons = ttk.Frame(inner)
+        buttons.pack(fill="x", pady=(6, 0))
+        def apply():
+            self._set_runtime(choice.get())
+            dlg.destroy()
+            if on_done:
+                on_done()
+        ttk.Button(buttons, text="Continue", style="Accent.TButton", command=apply).pack(side="right")
+        dlg.protocol("WM_DELETE_WINDOW", apply)
+        dlg.update_idletasks()
+        x = self.winfo_rootx() + max(20, (self.winfo_width() - dlg.winfo_reqwidth()) // 2)
+        y = self.winfo_rooty() + max(20, (self.winfo_height() - dlg.winfo_reqheight()) // 2)
+        dlg.geometry(f"+{x}+{y}")
+        dlg.grab_set()
+        dlg.focus_set()
+
     def _build_ui(self):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=12, pady=10)
@@ -11296,6 +11370,8 @@ class App(tk.Tk):
         # Windows renders tk.Menu via the OS menu system, which ignores Tk's
         # color options entirely, so a real dropdown menu here would always
         # look like a plain light Windows menu regardless of Dark Mode.
+        self._runtime_btn = ttk.Button(top, text=f"Runtime: {self.ui_prefs.get('runtime', 'xenia').upper()}", command=self._show_runtime_picker)
+        self._runtime_btn.pack(side="right", padx=(8, 0))
         self._options_btn = ttk.Button(top, text="Options...", command=self._open_options_dialog)
         self._options_btn.pack(side="right", padx=(8, 0))
         ttk.Separator(top, orient="vertical").pack(side="right", fill="y", padx=12)
@@ -14474,13 +14550,19 @@ class App(tk.Tk):
         return ref
 
     def _find_boot_ast(self, feature="Player Type Fit", what="team philosophies and their weights"):
-        # A remembered ISO extraction belongs to the recompiled PC install, not
-        # necessarily to the save that is open now. When the open career is an
-        # RPCS3 save, resolve qkl_boot.ast from that RPCS3 installation first;
-        # otherwise every play-editing operation can be incorrectly blocked as
-        # an attempted write to the read-only ISO cache.
+        runtime = self.ui_prefs.get("runtime", "xenia")
+        # Recomp reads from its disc image. Do not accidentally reuse a loose
+        # archive remembered from a previous Xenia/RPCS3 session.
+        if runtime == "recomp":
+            iso = self._recomp_disc_image()
+            if iso:
+                boot = self._boot_from_iso(iso)
+                if boot:
+                    return boot
+        # When RPCS3 is selected, resolve its own installed archive first.
+        # This avoids writing into a stale ISO extraction from a previous run.
         db = getattr(getattr(self, "model", None), "db_path", None) or ""
-        if db and hc09_detect is not None and hc09_detect.rpcs3_dir_of(db):
+        if runtime == "rpcs3":
             found = self._detected_game_file(BOOT_AST_FILENAME)
             if found:
                 previous = self.ui_prefs.get("boot_ast_path") or ""
@@ -14491,8 +14573,8 @@ class App(tk.Tk):
                 return found
 
         saved = self.ui_prefs.get("boot_ast_path") or ""
-        if saved and os.path.isfile(saved):
-            return self._fresh_iso_copy(saved) if self._boot_is_from_iso() else saved
+        if runtime != "recomp" and saved and os.path.isfile(saved) and not self._is_iso_copy_path(saved):
+            return saved
         fe2ig = self.get_game_ast_path()
         if fe2ig:
             sibling = os.path.join(os.path.dirname(fe2ig), BOOT_AST_FILENAME)
@@ -14503,7 +14585,7 @@ class App(tk.Tk):
             self.ui_prefs["boot_ast_path"] = found
             save_ui_prefs(self.ui_prefs)
             return found
-        iso = self._recomp_disc_image()
+        iso = self._recomp_disc_image() if runtime == "recomp" else ""
         if iso:                                  # a recompiled PC version plays from a disc image: read the file out of it
             boot = self._boot_from_iso(iso)
             if boot:
@@ -16212,6 +16294,6 @@ if __name__ == "__main__":
     attach_crash_reporting(app)
     if CRASH is not None and CRASH._state.get("previous"):
         app.after(1500, lambda: CrashReportDialog(app, CRASH._state["previous"], "The editor closed without warning the last time it ran.", title="Problem report saved"))
-    app.after(400, app.reopen_last_save)          # after the window is up; never from __init__
+    app.after(100, lambda: app._show_runtime_picker(on_done=lambda: app.after(300, app.reopen_last_save)))
     app.after(2500, app.start_update_check)       # after the window is up; never from __init__, so tests make no network calls
     app.mainloop()
