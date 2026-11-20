@@ -11455,6 +11455,7 @@ class App(tk.Tk):
         ttk.Button(top, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
         ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Player Type Fit...", command=self.on_open_player_type_fit).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Game reference...", command=self.on_open_game_reference).pack(side="left", padx=(8, 0))
 
         # Packed before the status label (both docking to the right) so it
         # always claims its space regardless of how long the status text
@@ -11477,7 +11478,6 @@ class App(tk.Tk):
         self._fullscreen_btn = ttk.Button(top, text="Full Screen", command=self.toggle_fullscreen)
         self._fullscreen_btn.pack(side="right", padx=(8, 0))
         ttk.Separator(top, orient="vertical").pack(side="right", fill="y", padx=12)
-        ttk.Button(top, text="Game Reference...", command=self.on_open_game_reference).pack(side="right", padx=(8, 0))
 
         self.lbl_status = ttk.Label(top, text="Load a save to begin (Saves... lists the ones found).", style="Status.TLabel", width=40, anchor="w")
         self.lbl_status.pack(side="left", fill="x", expand=True, padx=14)
