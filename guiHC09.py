@@ -14670,10 +14670,13 @@ class App(tk.Tk):
                 boot = self._boot_from_iso(iso)
                 if boot:
                     return boot
-        # When RPCS3 is selected, resolve its own installed archive first.
-        # This avoids writing into a stale ISO extraction from a previous run.
+        # When RPCS3 is selected and no usable archive is remembered (nothing saved, the file is gone, or it is a copy read out of a disc image), resolve RPCS3's own installed archive.
+        # This avoids writing into a stale ISO extraction from a previous run. A remembered archive that is a real file outside the image cache is kept: it was chosen on purpose
+        # (a second install, a test copy), and it is never replaced by the detected one or written over in the settings.
         db = getattr(getattr(self, "model", None), "db_path", None) or ""
-        if runtime == "rpcs3":
+        remembered = self.ui_prefs.get("boot_ast_path") or ""
+        keep_remembered = bool(remembered) and os.path.isfile(remembered) and not self._is_iso_copy_path(remembered)
+        if runtime == "rpcs3" and not keep_remembered:
             found = self._detected_game_file(BOOT_AST_FILENAME)
             if found:
                 previous = self.ui_prefs.get("boot_ast_path") or ""
@@ -14895,9 +14898,9 @@ class App(tk.Tk):
         return copy if what == "ok" else self._boot_from_iso(iso)
 
     def _is_iso_copy_path(self, path):
-        """Is this file inside the editor's cache of files read out of disc images?"""
+        """Is this file inside the editor's cache of files read out of disc images? Symbolic links are resolved first (a link outside the cache that points into it is a cache file)."""
         try:
-            return bool(path) and os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(self.ISO_CACHE_DIR)) + os.sep)
+            return bool(path) and os.path.normcase(os.path.realpath(path)).startswith(os.path.normcase(os.path.realpath(self.ISO_CACHE_DIR)) + os.sep)
         except (OSError, ValueError, TypeError):
             return False
 
