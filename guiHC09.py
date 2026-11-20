@@ -1620,7 +1620,10 @@ def philosophy_grades(row, model, ppos=None):
     "intangibles", "learning", "durability", "potential", "size", "overall"}; a grade that can't be worked out is
     None and is left out of the overall. Athletic, intangibles, learning and potential are the game's exact formulas,
     durability is close, size is the game's lookup and production is counted as 0 (see the comment above
-    PHILOSOPHY_CACHE_DIR). None if the player has neither skill nor athletic ratings."""
+    PHILOSOPHY_CACHE_DIR). None if the player has neither skill nor athletic ratings.
+    ppos: the position the preset is for, when it is not the player's own (a player who can switch position). It is used for the Size grade (the lookup of that position's height and weight groups);
+    the Durability grade is looked up for the player's OWN position and hand (_durability_grade takes no position). Whether the game does the same for a player off his position has not been
+    checked against a reading (docs/hc09_position_presets.md lists the readings there are), so the editor says so in the Player Type Fit help text rather than change a formula without evidence."""
     f = model["factors"]
     athletic = _floor_grade(_weighted_rating_average(row, model["athletic"]))
     intangibles = _floor_grade(_weighted_rating_average(row, model["skill"]))
@@ -3930,7 +3933,10 @@ class PlayerTypeFitDialog(tk.Toplevel):
                  "Durability is close, Size is the game's own height and weight lookup, and Production is counted as 0. Against 55 "
                  "readings taken from the game (cornerbacks, safeties and defensive tackles) it was exact for 30, within 1 point for 53 "
                  "and never more than 3 off; an unusual build could be a little further out. Other positions use the same formulas but "
-                 "haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that "
+                 "haven't been checked in the game. For a player listed under another position (the 'positions that can switch' box), "
+                 "Size uses the height and weight lookup of the position of the preset, while Durability still weighs the body parts "
+                 "for the player's own position; whether the game does the same hasn't been checked, so read those rows as estimates. "
+                 "Saved OVR is the overall stored in the save. Team's pick is the preset that "
                  "player's team has now. Edit weights... changes the weights this window uses, and can save them as a preset of your "
                  "own; both are kept in the editor only (the game, your saves and your game files are not touched). The "
                  "positions listed with 'include players of positions that can switch' are the ones that can really switch "
