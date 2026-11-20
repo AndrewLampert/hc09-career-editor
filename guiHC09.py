@@ -14305,7 +14305,7 @@ class App(tk.Tk):
                         put_back.append(name)
                     except Exception:
                         pass
-                raise RuntimeError(f"The files could not be put into your game ({e}). " + (f"The {' and '.join(put_back)} that were already replaced were put back. " if put_back else "") +
+                raise RuntimeError(f"The files could not be put into your game ({e}). " + (f"What was already replaced ({' and '.join(put_back)}) was put back. " if put_back else "") +
                                    f"Your own files are saved in {dest}; nothing is lost.") from e
         finally:
             for _name, tmp, _old in staged:
