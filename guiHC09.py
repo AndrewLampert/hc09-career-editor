@@ -5071,7 +5071,7 @@ def restore_backup(bak, db_path, cause=None):
     try:
         shutil.copy2(bak, db_path)
     except Exception as e:
-        raise RuntimeError(f"The save could not be written ({cause}) and the copy made before could not be put back ({e}). The save may be half written: your copy is {bak} (copy it over the save by hand).") from cause
+        raise RuntimeError(f"The save could not be written ({cause}) and the copy made before could not be put back ({e}). The save may be half written: your copy is {bak} (copy it over the save by hand).") from (cause if isinstance(cause, BaseException) else None)
 
 
 _OPENED_COPIES = set()
@@ -14223,6 +14223,7 @@ class App(tk.Tk):
         if not targets:
             raise RuntimeError("Those playbooks already call the play that." + (f" ({len(missing)} playbook(s) have no name row for the play.)" if missing else ""))
         apply_personnel_targets(self.model, targets, self._personnel_backup_dir())
+        self._forget_playbook_names()                              # the Playbooks tab's data holds the old names: it reads them again at its next use
         return targets, report, missing, self.reload_book_play_names(archives[0])
 
     def game_file_restore(self, archives):
