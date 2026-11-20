@@ -2238,6 +2238,22 @@ class CSVModel:
         row[TEAM_SALARY_CAP_FIELD] = str(max(0, min(TEAM_SALARY_CAP_MAX_VALUE, cur + delta_units)))
         return True
 
+def combo_tid(cmb):
+    """The team id of a team combo box whose entries read '<id>: <name>' (what is typed or picked; text without a colon is taken as the id)."""
+    v = cmb.get()
+    return v.split(":", 1)[0].strip() if ":" in v else v.strip()
+
+
+def set_combo_to_tid(cmb, tid):
+    """Select the entry of a team combo box whose text starts '<tid>:' (the first entry when there is none)."""
+    for i, label in enumerate(cmb["values"]):
+        if str(label).startswith(str(tid) + ":"):
+            cmb.current(i)
+            return
+    if cmb["values"]:
+        cmb.current(0)
+
+
 class TeamAutocompleteCombo:
     """A ttk.Combobox with type-to-filter team selection, backed by a custom
     floating suggestion popup instead of the native ttk dropdown - opening the
@@ -2313,12 +2329,7 @@ class TeamAutocompleteCombo:
         return f"'{typed}' doesn't match any team."
 
     def set_tid(self, tid):
-        for i, label in enumerate(self.combo["values"]):
-            if str(label).startswith(str(tid) + ":"):
-                self.combo.current(i)
-                return
-        if self.combo["values"]:
-            self.combo.current(0)
+        set_combo_to_tid(self.combo, tid)
 
     def destroy_popup(self):
         """Call from the owning window's destroy()/close handler - the popup
@@ -2595,18 +2606,10 @@ class SwapTradeDialog(tk.Toplevel):
         self._refresh_roster(2)
 
     def _set_combo_to_tid(self, cmb, tid):
-        for i, label in enumerate(cmb["values"]):
-            if str(label).startswith(str(tid) + ":"):
-                cmb.current(i)
-                return
-        if cmb["values"]:
-            cmb.current(0)
+        set_combo_to_tid(cmb, tid)
 
     def _combo_tid(self, cmb):
-        v = cmb.get()
-        if ":" in v:
-            return v.split(":", 1)[0].strip()
-        return v.strip()
+        return combo_tid(cmb)
 
     def _refresh_roster(self, which):
         tid = self._combo_tid(self.cmb_t1 if which == 1 else self.cmb_t2)
@@ -2848,16 +2851,10 @@ class SignFreeAgentDialog(tk.Toplevel):
         super().destroy()
 
     def _combo_tid(self, cmb):
-        v = cmb.get()
-        return v.split(":", 1)[0].strip() if ":" in v else v.strip()
+        return combo_tid(cmb)
 
     def _set_combo_to_tid(self, cmb, tid):
-        for i, label in enumerate(cmb["values"]):
-            if str(label).startswith(str(tid) + ":"):
-                cmb.current(i)
-                return
-        if cmb["values"]:
-            cmb.current(0)
+        set_combo_to_tid(cmb, tid)
 
     def _rebuild_year_rows(self, keep=False):
         """Rebuild the per-year salary/bonus entry rows to match the current
@@ -6423,6 +6420,23 @@ class WriteGuard:
             self._writing = False
         return started
 
+    def _put_back(self, title, prompt, work, done, busy_text="Putting the game files back...", find_archives=True):
+        """The first half every 'Put ... back' button of these windows shares: the emulator must be closed, the game files must be known (find_archives), the person confirms `prompt`; then the write
+        starts (_start_write). work(archives) runs in the background (archives is None when find_archives is False), done(result) on the Tk thread. Returns True when the write was started."""
+        app = self.app
+        if app._rpcs3_running():
+            messagebox.showerror(title, "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return False
+        archives = None
+        if find_archives:
+            archives = app._personnel_archives()
+            if not archives:
+                return False
+        if not messagebox.askyesno(title, prompt, parent=self):
+            return False
+        self._start_write(busy_text, lambda: work(archives), done, title)
+        return True
+
     def destroy(self):
         if self._writing:
             return
@@ -8514,26 +8528,13 @@ class GameFilesDialog(WriteGuard, tk.Toplevel):
         self._start_write("Changing the game files...", work, done, "Change in game files")
 
     def _restore(self):
-        app = self.app
-        if app._rpcs3_running():
-            messagebox.showerror("Put the game files back", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
-            return
-        archives = self._archives()
-        if not archives:
-            return
-        if not messagebox.askyesno("Put the game files back", "Put every play database entry that the editor changed (plays, Set personnel) back as it was before the first change?\n\nThe backups are in "
-                                   "Documents\\hc09-game-file-backup.", parent=self):
-            return
-
-        def work():
-            return app.game_file_restore(archives)
-
         def done(result):
             self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}.")
             messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
             self.designer.refresh_from_game_files(reselect=True)
 
-        self._start_write("Putting the game files back...", work, done, "Put the game files back")
+        self._put_back("Put the game files back", "Put every play database entry that the editor changed (plays, Set personnel) back as it was before the first change?\n\nThe backups are in "
+                       "Documents\\hc09-game-file-backup.", lambda archives: self.app.game_file_restore(archives), done)
 
 
 class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
@@ -8710,14 +8711,6 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
 
     def _restore(self):
         app = self.app
-        if app._rpcs3_running():
-            messagebox.showerror("Put the names back", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
-            return
-        if not messagebox.askyesno("Put the names back", "Put the playbook names back as they were before the first rename?\n\nThe backup is in Documents\\hc09-game-file-backup.", parent=self):
-            return
-
-        def work():
-            return app.rename_playbooks_restore(self.boot)
 
         def done(result):
             restored, rows = result
@@ -8734,7 +8727,8 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             except Exception:
                 pass
 
-        self._start_write("Putting the playbook names back...", work, done, "Put the names back")
+        self._put_back("Put the names back", "Put the playbook names back as they were before the first rename?\n\nThe backup is in Documents\\hc09-game-file-backup.",
+                       lambda _archives: app.rename_playbooks_restore(self.boot), done, busy_text="Putting the playbook names back...", find_archives=False)
 
 
 def plain_bridge_error(e):
@@ -8876,20 +8870,6 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         self._start_write("Renaming the play...", work, done, "Rename in playbooks")
 
     def _restore(self):
-        app = self.app
-        if app._rpcs3_running():
-            messagebox.showerror("Put the game files back", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
-            return
-        archives = app._personnel_archives()
-        if not archives:
-            return
-        if not messagebox.askyesno("Put the game files back", "Put every play database entry that the editor changed (plays, names, Set personnel) back as it was before the first change?\n\nThe backups are in "
-                                   "Documents\\hc09-game-file-backup.", parent=self):
-            return
-
-        def work():
-            return app.game_file_restore(archives)
-
         def done(result):
             messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
             designer = self.designer
@@ -8897,10 +8877,135 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             if designer.winfo_exists():
                 designer.refresh_from_game_files(reselect=True)
 
-        self._start_write("Putting the game files back...", work, done, "Put the game files back")
+        self._put_back("Put the game files back", "Put every play database entry that the editor changed (plays, names, Set personnel) back as it was before the first change?\n\nThe backups are in "
+                       "Documents\\hc09-game-file-backup.", lambda archives: self.app.game_file_restore(archives), done)
 
 
-class AddPlayDialog(WriteGuard, tk.Toplevel):
+class GameFilesAddBase(WriteGuard, tk.Toplevel):
+    """What Add a play and Convert my plays share: the game files to write (_archives), the list of plays added so far (_fill_added, Take the selected play out, Put the game files back) and the saves the
+    plays are linked in (_fill_saves, _selected_saves, _link, _taken_set_ids). Each dialog builds its own form and has its own _populate and _apply; they set self.app, self.designer, self.boot,
+    self.added, self.lbl_result, self.lst_added, self.save_vars and self._saves."""
+
+    def _archives(self):
+        return self.app._personnel_archives()
+
+    def _fill_saves(self):
+        app = self.app
+        self._saves = []
+        db = getattr(app.model, "db_path", None)
+        if db and os.path.isfile(db):
+            self._saves.append((f"the open save: {os.path.basename(os.path.dirname(db))}" + ("  (a career: not tried in the game)" if "-PROFILE-" not in db.upper() else ""), db, "-PROFILE-" in db.upper()))
+            for pth in find_profile_saves(db):
+                if os.path.abspath(pth) != os.path.abspath(db):
+                    self._saves.append((f"your profile: {os.path.basename(os.path.dirname(pth))}", pth, True))
+        for label, path, default in self._saves:
+            v = tk.BooleanVar(value=default)
+            self.save_vars.append(v)
+            ttk.Checkbutton(self.saves_frame, text=label, variable=v).pack(anchor="w", padx=8)
+        if not self._saves:
+            ttk.Label(self.saves_frame, text="No save is open: open your profile in the editor to link the play there (a play is only in a new career's playbook when the profile has its links).",
+                      wraplength=780, foreground="gray").pack(anchor="w", padx=8, pady=2)
+
+    def _taken_set_ids(self):
+        """The set ids the plays added so far use, and those ANY save of the list holds, ticked or not: its own sets, slots and groups (a custom play's ids must not be ids the game's own data has) and the
+        sets its playbook links name (PGPL, PGSL, PGSS). A play taken out while a save is unticked leaves its links there, and the id must not be given to the next play: the link insertion would take
+        the stale row for the new play's and leave it under the old formation."""
+        taken = AP.taken_ids(self.added)
+        for label, path, _d in self._saves:
+            for tables, columns in (("SETL,SETP,SGFF", (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_"))),
+                                    ("PGPL,PGSL,PGSS", (("pgpl", "SETL", "SETL"), ("pgsl", "SETL", "SETL"), ("pgss", "SETL", "SETL")))):
+                tmpd = tempfile.mkdtemp(prefix="hc09_ids_")
+                try:
+                    self.app.model.run_bridge(["export", "--db", path, "--out", tmpd, "--tables", tables])
+                    for t, col, key in columns:
+                        fn = os.path.join(tmpd, t + ".csv")
+                        if os.path.isfile(fn):
+                            taken[key] = list(taken[key]) + [int(r[col]) for r in read_csv_dicts(fn) if (r.get(col) or "").strip().isdigit()]
+                except Exception as e:                          # a save without these tables is no problem (the export skips them); one that cannot be read is
+                    raise ValueError(f"{label} could not be read ({str(e).strip()[:120]}), so the editor cannot tell which ids it already uses. Close whatever has it open and try again; nothing was written.") from e
+                finally:
+                    shutil.rmtree(tmpd, ignore_errors=True)
+        return taken
+
+    def _fill_added(self):
+        self.lst_added.delete(0, "end")
+        for p in self.added:
+            self.lst_added.insert("end", f"{p['name']}  (play {p['plyl']}, made from play {p['base']}, in {len(p['books'])} playbook{'s' if len(p['books']) != 1 else ''})")
+
+    def _selected_saves(self):
+        return [(label, path) for (label, path, _d), v in zip(self._saves, self.save_vars) if v.get()]
+
+    def _differs_note(self, lib):
+        """A warning for the confirmation when the game files are not the stock game the editor was tried on (hc09_addplay.game_differs): the Xbox 360 game, an update or a game that was edited
+        before. Empty for the stock PS3 game."""
+        try:
+            diff = AP.game_differs(lib, self.added)
+        except Exception:
+            return ""
+        if not diff:
+            return ""
+        return ("These game files are not the stock game the editor was tried on:\n  " + "\n  ".join(diff) + "\nThe added plays were only tried in the PS3 game (RPCS3). Another version may "
+                "crash on the day before the first game, so use a copy of the game files and keep Put the game files back at hand.\n\n")
+
+    def _link(self, links=None, remove=(), keep=()):
+        out = []
+        for label, path in self._selected_saves():
+            try:
+                a, r = link_plays_in_save(self.app.model, path, links, remove, keep)
+                out.append(f"{label}: {a} link{'s' if a != 1 else ''} added, {r} taken out")
+            except Exception as e:
+                out.append(f"{label}: NOT changed ({e})")
+        db = getattr(self.app.model, "db_path", None)
+        if db and any(path == db for _l, path in self._selected_saves()):
+            try:
+                self.app.model.load_all_from_db(db)           # the open save was changed on disk: read it again
+                self.app._on_load_db_path_success(db)
+            except Exception:
+                pass
+        return out
+
+    def _take_out(self):
+        sel = self.lst_added.curselection()
+        if not sel or self.boot is None:
+            return
+        app = self.app
+        if app._rpcs3_running():
+            messagebox.showerror("Add a play", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        gone = self.added[sel[0]]
+        plays = [p for p in self.added if p["plyl"] != gone["plyl"]]
+        if not messagebox.askyesno("Add a play", f"Take {gone['name']} (play {gone['plyl']}) out of the game files?\n\nIts links are taken out of the ticked saves too.", parent=self):
+            return
+
+        def work():
+            return app.add_play_write(self.boot, plays)
+
+        def done(rep):
+            self.added = plays
+            self._fill_added()
+            lines = self._link(remove=[gone], keep=plays) if self._selected_saves() else []
+            self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
+            self.designer.refresh_from_game_files(reselect=False)
+
+        self._start_write("Taking the play out...", work, done, "Add a play")
+
+    def _restore(self):
+        gone = list(self.added)
+
+        def done(result):
+            self.added = []
+            self._fill_added()
+            lines = self._link(remove=gone) if gone and self._selected_saves() else []
+            self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}. " + "; ".join(lines))
+            messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
+            self.designer.refresh_from_game_files(reselect=True)            # the files are back as they were before the FIRST change, a Make a game play edit of the play shown included: show the play as they have it
+
+        self._put_back("Put the game files back", "Put every play database entry that the editor changed back as it was before the first change: the plays added here come out (qkl_boot.ast is cut "
+                       "back to its original length) and the Set personnel and Make a game play changes are undone.\n\nThe links of the added plays are taken out of the ticked saves.",
+                       lambda archives: self.app.game_file_restore(archives, allow_added=True), done)
+
+
+class AddPlayDialog(GameFilesAddBase):
     """Add a play: the play shown in the designer, with the changes made there, added to the game's own play database as a NEW play (a normal play for the game: it can be flipped and hot-routed,
     the quarterback adjusts; the computer does not call it: the game's play list holds only the stock plays), in the playbooks you pick. The game has no free rows, so the bridge writes bigger copies of the entries it changes at the end of qkl_boot.ast
     (see hc09_addplay.py); Put the game files back restores the file byte for byte. The play's links also go into your profile, which is what a NEW career copies its playbooks from."""
@@ -8980,9 +9085,6 @@ class AddPlayDialog(WriteGuard, tk.Toplevel):
     def _args(self):
         d = self.designer
         return dict(overrides=dict(d.overrides), plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
-
-    def _archives(self):
-        return self.app._personnel_archives()
 
     def _populate(self):
         app = self.app
@@ -9065,81 +9167,6 @@ class AddPlayDialog(WriteGuard, tk.Toplevel):
         except Exception as e:
             self.lbl_info.configure(text=f"The playbooks could not be worked out: {e}")
 
-    def _fill_saves(self):
-        app = self.app
-        self._saves = []
-        db = getattr(app.model, "db_path", None)
-        if db and os.path.isfile(db):
-            self._saves.append((f"the open save: {os.path.basename(os.path.dirname(db))}" + ("  (a career: not tried in the game)" if "-PROFILE-" not in db.upper() else ""), db, "-PROFILE-" in db.upper()))
-            for pth in find_profile_saves(db):
-                if os.path.abspath(pth) != os.path.abspath(db):
-                    self._saves.append((f"your profile: {os.path.basename(os.path.dirname(pth))}", pth, True))
-        for label, path, default in self._saves:
-            v = tk.BooleanVar(value=default)
-            self.save_vars.append(v)
-            ttk.Checkbutton(self.saves_frame, text=label, variable=v).pack(anchor="w", padx=8)
-        if not self._saves:
-            ttk.Label(self.saves_frame, text="No save is open: open your profile in the editor to link the play there (a play is only in a new career's playbook when the profile has its links).",
-                      wraplength=780, foreground="gray").pack(anchor="w", padx=8, pady=2)
-
-    def _taken_set_ids(self):
-        """The set ids the plays added so far use, and those ANY save of the list holds, ticked or not: its own sets, slots and groups (a custom play's ids must not be ids the game's own data has) and the
-        sets its playbook links name (PGPL, PGSL, PGSS). A play taken out while a save is unticked leaves its links there, and the id must not be given to the next play: the link insertion would take
-        the stale row for the new play's and leave it under the old formation."""
-        taken = AP.taken_ids(self.added)
-        for label, path, _d in self._saves:
-            for tables, columns in (("SETL,SETP,SGFF", (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_"))),
-                                    ("PGPL,PGSL,PGSS", (("pgpl", "SETL", "SETL"), ("pgsl", "SETL", "SETL"), ("pgss", "SETL", "SETL")))):
-                tmpd = tempfile.mkdtemp(prefix="hc09_ids_")
-                try:
-                    self.app.model.run_bridge(["export", "--db", path, "--out", tmpd, "--tables", tables])
-                    for t, col, key in columns:
-                        fn = os.path.join(tmpd, t + ".csv")
-                        if os.path.isfile(fn):
-                            taken[key] = list(taken[key]) + [int(r[col]) for r in read_csv_dicts(fn) if (r.get(col) or "").strip().isdigit()]
-                except Exception as e:                          # a save without these tables is no problem (the export skips them); one that cannot be read is
-                    raise ValueError(f"{label} could not be read ({str(e).strip()[:120]}), so the editor cannot tell which ids it already uses. Close whatever has it open and try again; nothing was written.") from e
-                finally:
-                    shutil.rmtree(tmpd, ignore_errors=True)
-        return taken
-
-    def _fill_added(self):
-        self.lst_added.delete(0, "end")
-        for p in self.added:
-            self.lst_added.insert("end", f"{p['name']}  (play {p['plyl']}, made from play {p['base']}, in {len(p['books'])} playbook{'s' if len(p['books']) != 1 else ''})")
-
-    def _selected_saves(self):
-        return [(label, path) for (label, path, _d), v in zip(self._saves, self.save_vars) if v.get()]
-
-    def _differs_note(self, lib):
-        """A warning for the confirmation when the game files are not the stock game the editor was tried on (hc09_addplay.game_differs): the Xbox 360 game, an update or a game that was edited
-        before. Empty for the stock PS3 game."""
-        try:
-            diff = AP.game_differs(lib, self.added)
-        except Exception:
-            return ""
-        if not diff:
-            return ""
-        return ("These game files are not the stock game the editor was tried on:\n  " + "\n  ".join(diff) + "\nThe added plays were only tried in the PS3 game (RPCS3). Another version may "
-                "crash on the day before the first game, so use a copy of the game files and keep Put the game files back at hand.\n\n")
-
-    def _link(self, links=None, remove=(), keep=()):
-        out = []
-        for label, path in self._selected_saves():
-            try:
-                a, r = link_plays_in_save(self.app.model, path, links, remove, keep)
-                out.append(f"{label}: {a} link{'s' if a != 1 else ''} added, {r} taken out")
-            except Exception as e:
-                out.append(f"{label}: NOT changed ({e})")
-        db = getattr(self.app.model, "db_path", None)
-        if db and any(path == db for _l, path in self._selected_saves()):
-            try:
-                self.app.model.load_all_from_db(db)           # the open save was changed on disk: read it again
-                self.app._on_load_db_path_success(db)
-            except Exception:
-                pass
-        return out
-
     def _apply(self):
         app = self.app
         if self.boot is None:
@@ -9217,67 +9244,15 @@ class AddPlayDialog(WriteGuard, tk.Toplevel):
 
         self._start_write("Adding the play to the game files...", work, done, "Add a play")
 
-    def _take_out(self):
-        sel = self.lst_added.curselection()
-        if not sel or self.boot is None:
-            return
-        app = self.app
-        if app._rpcs3_running():
-            messagebox.showerror("Add a play", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
-            return
-        gone = self.added[sel[0]]
-        plays = [p for p in self.added if p["plyl"] != gone["plyl"]]
-        if not messagebox.askyesno("Add a play", f"Take {gone['name']} (play {gone['plyl']}) out of the game files?\n\nIts links are taken out of the ticked saves too.", parent=self):
-            return
 
-        def work():
-            return app.add_play_write(self.boot, plays)
-
-        def done(rep):
-            self.added = plays
-            self._fill_added()
-            lines = self._link(remove=[gone], keep=plays) if self._selected_saves() else []
-            self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
-            self.designer.refresh_from_game_files(reselect=False)
-
-        self._start_write("Taking the play out...", work, done, "Add a play")
-
-    def _restore(self):
-        app = self.app
-        if app._rpcs3_running():
-            messagebox.showerror("Put the game files back", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
-            return
-        archives = self._archives()
-        if not archives:
-            return
-        if not messagebox.askyesno("Put the game files back", "Put every play database entry that the editor changed back as it was before the first change: the plays added here come out (qkl_boot.ast is cut "
-                                   "back to its original length) and the Set personnel and Make a game play changes are undone.\n\nThe links of the added plays are taken out of the ticked saves.",
-                                   parent=self):
-            return
-        gone = list(self.added)
-
-        def work():
-            return app.game_file_restore(archives, allow_added=True)
-
-        def done(result):
-            self.added = []
-            self._fill_added()
-            lines = self._link(remove=gone) if gone and self._selected_saves() else []
-            self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}. " + "; ".join(lines))
-            messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
-            self.designer.refresh_from_game_files(reselect=True)            # the files are back as they were before the FIRST change, a Make a game play edit of the play shown included: show the play as they have it
-
-        self._start_write("Putting the game files back...", work, done, "Put the game files back")
-
-
-class ConvertPlaysDialog(AddPlayDialog):
+class ConvertPlaysDialog(GameFilesAddBase):
     """Convert my plays: the custom plays of the profile ("Plays I made") added to the game's own play database as NORMAL plays, in the playbooks you pick: they can be flipped and hot-routed and the
     quarterback adjusts; the computer does not call them and they cannot be edited in the game (the game's play list holds only the stock plays). Each play's formation is a copy of the stock
     formation with the same players, with the places of the custom set; plays with the same lineup share one formation (the game has room for about 230). The list of added plays, Take out, Put the game
     files back and the links in the saves are those of the Add a play window."""
 
     def __init__(self, app, designer):
-        tk.Toplevel.__init__(self, designer)
+        super().__init__(designer)
         p = getattr(app, "_ui_palette", None)
         if p:
             self.configure(background=p["bg"])
@@ -14570,19 +14545,7 @@ class App(tk.Tk):
     def update_custom_play_files(self, lib, plyl, name, overrides, profile_path, career_path, out_dir, plan=None, reads=None, alignment=None):
         """Change one of the profile's custom plays in place, in COPIES of the profile save and the career save (see update_custom_play); the originals are only read. plyl is the
         play's mounted id (load_my_plays). Returns the same kind of result as make_custom_play_files, so install_custom_play puts the copies in place."""
-        if not profile_path or not os.path.isfile(profile_path):
-            raise RuntimeError("Pick the profile save.")
-        if not career_path or not os.path.isfile(career_path):
-            raise RuntimeError("Pick the career save.")
-        if not out_dir:
-            raise RuntimeError("Pick an output folder.")
-        out_profile, out_career = os.path.join(out_dir, "profile", "USR-DATA"), os.path.join(out_dir, "career", "USR-DATA")
-        if any(os.path.abspath(p_) in (os.path.abspath(profile_path), os.path.abspath(career_path)) for p_ in (out_profile, out_career)):
-            raise RuntimeError("The output folder would overwrite your own saves; pick another one.")
-        os.makedirs(os.path.dirname(out_profile), exist_ok=True)
-        os.makedirs(os.path.dirname(out_career), exist_ok=True)
-        shutil.copy2(profile_path, out_profile)
-        shutil.copy2(career_path, out_career)
+        out_profile, out_career = self._copy_saves_for_custom_play(profile_path, career_path, out_dir)
         names = list(CUSTOM_TABLES) + ["PGPL"]
         prof = self._export_tables(out_profile, names)
         try:
@@ -14615,22 +14578,52 @@ class App(tk.Tk):
         stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
         for p_ in (out_profile, out_career):                      # CPU rows for a play that has none (made before the editor wrote them), after the career's copy of the play is in place
             add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
-        for path in (out_profile, out_career):
-            ok = self.model.run_bridge(["verify-db", "--db", path])
-            if not ok.get("ok"):
-                raise RuntimeError(f"The structure check of {path} failed: {ok.get('issues')}")
+        self._verify_saves(out_profile, out_career)
         book = ", ".join(str(b) for b in sorted(bokls))
         summary.update({"profile": out_profile, "career": out_career, "bokl": book, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}, "career_linked": career_linked})
         summary["message"] = (f"Changed the custom play \"{name}\" (set {summary['setl']}, play {summary['plyl']}) in place; it is in custom playbook {book or '?'}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
-        if summary.get("left_out"):
-            summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
+        self._note_left_out(summary)
         if summary.get("career_linked") is False:
             summary["message"] += "\n\nNote: this career does not link the play in any playbook, so it will not show in this career (it was changed in the profile)."
+        self._write_play_readme(out_dir, summary)
+        return summary
+
+    def _copy_saves_for_custom_play(self, profile_path, career_path, out_dir):
+        """What make_custom_play_files and update_custom_play_files start with: the three checks (a profile save, a career save, an output folder that is not one of the saves), then COPIES of the two
+        saves into out_dir (the originals are only read). Returns (the profile copy, the career copy)."""
+        if not profile_path or not os.path.isfile(profile_path):
+            raise RuntimeError("Pick the profile save.")
+        if not career_path or not os.path.isfile(career_path):
+            raise RuntimeError("Pick the career save.")
+        if not out_dir:
+            raise RuntimeError("Pick an output folder.")
+        out_profile, out_career = os.path.join(out_dir, "profile", "USR-DATA"), os.path.join(out_dir, "career", "USR-DATA")
+        if any(os.path.abspath(p_) in (os.path.abspath(profile_path), os.path.abspath(career_path)) for p_ in (out_profile, out_career)):
+            raise RuntimeError("The output folder would overwrite your own saves; pick another one.")
+        os.makedirs(os.path.dirname(out_profile), exist_ok=True)
+        os.makedirs(os.path.dirname(out_career), exist_ok=True)
+        shutil.copy2(profile_path, out_profile)
+        shutil.copy2(career_path, out_career)
+        return out_profile, out_career
+
+    def _verify_saves(self, *paths):
+        """The bridge's structure check of each save file; raises when one fails."""
+        for path in paths:
+            ok = self.model.run_bridge(["verify-db", "--db", path])
+            if not ok.get("ok"):
+                raise RuntimeError(f"The structure check of {path} failed: {ok.get('issues')}")
+
+    @staticmethod
+    def _note_left_out(summary):
+        if summary.get("left_out"):
+            summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
+
+    @staticmethod
+    def _write_play_readme(out_dir, summary):
         with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
             f.write(summary["message"] + "\n")
-        return summary
 
     def _append_and_import(self, db_path, new_rows, tables_headers):
         """Append rows ({table: [row dicts]}) to the tables of a save file with the bridge's append import; raises unless every table was written."""
@@ -14660,19 +14653,7 @@ class App(tk.Tk):
     def make_custom_play_files(self, lib, base_plyl, name, overrides, profile_path, career_path, bokl, out_dir, plan=None, reads=None, alignment=None):
         """Make a custom play from a stock play in COPIES of a profile save and a career save (see build_custom_play and career_link_rows); returns {"message", ...}.
         The originals are only read."""
-        if not profile_path or not os.path.isfile(profile_path):
-            raise RuntimeError("Pick the profile save.")
-        if not career_path or not os.path.isfile(career_path):
-            raise RuntimeError("Pick the career save.")
-        if not out_dir:
-            raise RuntimeError("Pick an output folder.")
-        out_profile, out_career = os.path.join(out_dir, "profile", "USR-DATA"), os.path.join(out_dir, "career", "USR-DATA")
-        if any(os.path.abspath(p) in (os.path.abspath(profile_path), os.path.abspath(career_path)) for p in (out_profile, out_career)):
-            raise RuntimeError("The output folder would overwrite your own saves; pick another one.")
-        os.makedirs(os.path.dirname(out_profile), exist_ok=True)
-        os.makedirs(os.path.dirname(out_career), exist_ok=True)
-        shutil.copy2(profile_path, out_profile)
-        shutil.copy2(career_path, out_career)
+        out_profile, out_career = self._copy_saves_for_custom_play(profile_path, career_path, out_dir)
         ptables = ["PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM", "PGPL", "PGSS", "PGSL", "PGFM"]
         prof = self._export_tables(out_profile, ptables)
         held = self._export_tables(out_career, ["PBPL", "SETL", "SETP", "SGFF"])          # ids the career holds (its copies of plays that may be gone from the profile) are not reused either
@@ -14687,18 +14668,13 @@ class App(tk.Tk):
         stock_ai = getattr(lib, "tables", {}).get("PBAI", [])
         for p_ in (out_profile, out_career):                      # CPU rows for the new play (and any other custom play without), AFTER its definition is in the career: the game practices it like a play made in the game
             add_cpu_rows_in_save(self.model, p_, out_profile, stock_ai, backup=False)
-        for p in (out_profile, out_career):
-            ok = self.model.run_bridge(["verify-db", "--db", p])
-            if not ok.get("ok"):
-                raise RuntimeError(f"The structure check of {p} failed: {ok.get('issues')}")
+        self._verify_saves(out_profile, out_career)
         summary.update({"profile": out_profile, "career": out_career, "made_from": self._made_from_roots(profile_path, career_path, out_profile, out_career), "made_sources": {"profile": profile_path, "career": career_path}})
         summary["message"] = (f"Made the custom play \"{name}\" (from {summary['from']}, set {summary['setl']}, play {summary['plyl']}) in playbook {bokl}.\n\n"
                               f"Profile copy: {out_profile}\nCareer copy: {out_career}\n\nTo try it: close RPCS3, back up your whole BLUS30128-PROFILE-... folder (every career shares it) and the career, copy these two "
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
-        if summary.get("left_out"):
-            summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
-        with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
-            f.write(summary["message"] + "\n")
+        self._note_left_out(summary)
+        self._write_play_readme(out_dir, summary)
         return summary
 
     # ---- Set personnel (the positions in each set, edited in the game's own files; see PersonnelData)
@@ -15657,24 +15633,111 @@ class App(tk.Tk):
             self.tree_trainer.insert("", tk.END, iid=str(idx), values=vals)
         self._finish_tree_refresh(self.tree_trainer, prev_sel)
 
-    def _on_trainer_select(self):
-        sel = self.tree_trainer.selection()
+    # The SKPT box under the Trainer / Coach / GM tables: the same three actions (show the selected row's SKPT, Apply SKPT, Set to Max) on three tables. STAFF_TABS says which widgets, rows and extra
+    # pass each tab has; the nine public methods below (the names the buttons, the bindings and _wrap_mutating use) are one line each.
+    STAFF_TABS = {
+        "trainer": {"tree": "tree_trainer", "entry": "ent_trainer_skpt", "rows": "trainers", "refresh": "refresh_trainer", "noun": "trainer", "maxable": TRAINER_MAXABLE_SKILL_FIELDS, "tail": None},
+        "coach": {"tree": "tree_coach", "entry": "ent_coach_skpt", "rows": "coaches", "refresh": "refresh_coach", "noun": "coach", "maxable": COACH_MAXABLE_SKILL_FIELDS,
+                  "tail": ("_max_out_coach_development", "development")},
+        "gm": {"tree": "tree_gm", "entry": "ent_gm_skpt", "rows": "gms", "refresh": "refresh_gm", "noun": "GM", "maxable": GM_MAXABLE_SKILL_FIELDS,
+               "tail": ("_max_out_gm_potential_eval", "scouting")},
+    }
+
+    def _staff_tab(self, kind):
+        spec = self.STAFF_TABS[kind]
+        return spec, getattr(self, spec["tree"]), getattr(self, spec["entry"]), getattr(self.model, spec["rows"])
+
+    def _on_staff_select(self, kind):
+        """A row was selected: its SKPT goes into the box."""
+        _spec, tree, entry, rows = self._staff_tab(kind)
+        sel = tree.selection()
         if not sel:
             return
-        iid = sel[0]
         try:
-            idx = int(iid)
+            idx = int(sel[0])
         except Exception:
             return
-        # find SKPT value from model if present
         try:
-            row = self.model.trainers[idx]
+            row = rows[idx]
         except IndexError:
             return  # stale selection from before a reload shrank the list
         sk = row.get("SKPT") if row is not None else None
-        self.ent_trainer_skpt.delete(0, tk.END)
+        entry.delete(0, tk.END)
         if sk is not None:
-            self.ent_trainer_skpt.insert(0, str(sk))
+            entry.insert(0, str(sk))
+
+    def _apply_staff_skpt(self, kind):
+        """Apply SKPT: the number in the box, clamped to 0..STAFF_SKPT_MAX_VALUE (the clamped number is shown when it changed), into the selected row."""
+        spec, tree, entry, rows = self._staff_tab(kind)
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning("No selection", f"Select a {spec['noun']} row first.")
+            return
+        try:
+            idx = int(sel[0])
+        except Exception:
+            return
+        try:
+            v = safe_int(entry.get().strip())
+            if v is None:
+                raise ValueError("Invalid integer")
+            orig = v
+            v = max(0, min(STAFF_SKPT_MAX_VALUE, v))
+            rows[idx]["SKPT"] = str(v)
+            getattr(self, spec["refresh"])()
+            if orig != v:
+                messagebox.showinfo("SKPT", str(v))               # only the clamped number (no decimal)
+        except Exception as e:
+            messagebox.showerror("Invalid SKPT", str(e))
+
+    def _set_staff_skpt_to_max(self, kind):
+        """Set to Max: the box and the row get the maximum SKPT, the selected row's skills are maxed, and for a coach (development) or a GM (scouting) the extra values too."""
+        spec, tree, entry, rows = self._staff_tab(kind)
+        entry.delete(0, tk.END)
+        entry.insert(0, str(STAFF_SKPT_MAX_VALUE))
+        iid = self._max_out_staff_skills(tree, rows, spec["maxable"])
+        self._set_staff_skpt_max(rows, iid)                      # in the row: re-selecting it after the refresh refills the box from the row
+        tail = spec["tail"]
+        if tail:
+            sel = tree.selection()
+            if sel:
+                try:
+                    getattr(self, tail[0])(int(sel[0]))
+                except Exception as e:                           # a row without those rows is handled inside; anything else is said
+                    messagebox.showerror("Max out", f"The skills were maxed, but the {tail[1]} values could not be: {e}")
+        getattr(self, spec["refresh"])()
+        self._reselect(tree, iid)
+
+    def _on_trainer_select(self):
+        self._on_staff_select("trainer")
+
+    def _on_coach_select(self):
+        self._on_staff_select("coach")
+
+    def _on_gm_select(self):
+        self._on_staff_select("gm")
+
+    def _apply_trainer_skpt(self):
+        self._apply_staff_skpt("trainer")
+
+    def _apply_coach_skpt(self):
+        self._apply_staff_skpt("coach")
+
+    def _apply_gm_skpt(self):
+        self._apply_staff_skpt("gm")
+
+    def set_trainer_skpt_to_max(self):
+        """Auto-fill trainer SKPT entry field with maximum value (131071) and max out this trainer's skills."""
+        self._set_staff_skpt_to_max("trainer")
+
+    def set_coach_skpt_to_max(self):
+        """Auto-fill coach SKPT entry field with maximum value (131071) and max out this coach's skills (including Development, for whichever position buckets are populated)."""
+        self._set_staff_skpt_to_max("coach")
+
+    def set_gm_skpt_to_max(self):
+        """Auto-fill GM SKPT entry field with maximum value (131071) and max out this GM's skills (Trade/Contract Negotiation, plus Potential Evaluation and Rookie Scouting for all 10
+        position buckets if populated)."""
+        self._set_staff_skpt_to_max("gm")
 
     def _max_out_staff_skills(self, tree, staff_list, field_names):
         """Set the selected row's skill fields (e.g. Trade/Contract, Injury/Rehab/Fatigue) to their max.
@@ -15742,33 +15805,6 @@ class App(tk.Tk):
             tree.selection_set(iid)
             tree.see(iid)
 
-    def set_trainer_skpt_to_max(self):
-        """Auto-fill trainer SKPT entry field with maximum value (131071) and max out this trainer's skills."""
-        self.ent_trainer_skpt.delete(0, tk.END)
-        self.ent_trainer_skpt.insert(0, str(STAFF_SKPT_MAX_VALUE))
-        iid = self._max_out_staff_skills(self.tree_trainer, self.model.trainers, TRAINER_MAXABLE_SKILL_FIELDS)
-        self._set_staff_skpt_max(self.model.trainers, iid)     # in the row: re-selecting it after the refresh refills the box from the row
-        self.refresh_trainer()
-        self._reselect(self.tree_trainer, iid)
-
-    def set_coach_skpt_to_max(self):
-        """Auto-fill coach SKPT entry field with maximum value (131071) and max out this
-        coach's skills (including Development, for whichever position buckets are populated)."""
-        self.ent_coach_skpt.delete(0, tk.END)
-        self.ent_coach_skpt.insert(0, str(STAFF_SKPT_MAX_VALUE))
-        iid = self._max_out_staff_skills(self.tree_coach, self.model.coaches, COACH_MAXABLE_SKILL_FIELDS)
-        self._set_staff_skpt_max(self.model.coaches, iid)
-
-        sel = self.tree_coach.selection()
-        if sel:
-            try:
-                self._max_out_coach_development(int(sel[0]))
-            except Exception as e:                         # a coach without development rows is handled inside; anything else is said
-                messagebox.showerror("Max out", f"The skills were maxed, but the development values could not be: {e}")
-
-        self.refresh_coach()
-        self._reselect(self.tree_coach, iid)
-
     def _max_out_gm_potential_eval(self, gm_idx):
         """Max out the selected GM's Potential Evaluation AND Rookie Scouting for
         all 10 position buckets, if populated (confirmed via in-game testing,
@@ -15797,25 +15833,6 @@ class App(tk.Tk):
             for cur_field, max_field, _name in COACH_DEV_CATEGORIES.values():
                 dev_row[cur_field] = str(COACH_DEV_MAX_VALUE)
                 dev_row[max_field] = str(COACH_DEV_MAX_VALUE)
-
-    def set_gm_skpt_to_max(self):
-        """Auto-fill GM SKPT entry field with maximum value (131071) and max out this GM's skills
-        (Trade/Contract Negotiation, plus Potential Evaluation and Rookie Scouting for all 10
-        position buckets if populated)."""
-        self.ent_gm_skpt.delete(0, tk.END)
-        self.ent_gm_skpt.insert(0, str(STAFF_SKPT_MAX_VALUE))
-        iid = self._max_out_staff_skills(self.tree_gm, self.model.gms, GM_MAXABLE_SKILL_FIELDS)
-        self._set_staff_skpt_max(self.model.gms, iid)
-
-        sel = self.tree_gm.selection()
-        if sel:
-            try:
-                self._max_out_gm_potential_eval(int(sel[0]))
-            except Exception as e:                         # a GM without scouting rows is handled inside; anything else is said
-                messagebox.showerror("Max out", f"The skills were maxed, but the scouting values could not be: {e}")
-
-        self.refresh_gm()
-        self._reselect(self.tree_gm, iid)
 
     def _ensure_tree_selection(self, tree):
         """If nothing is selected, auto-select the first visible row instead
@@ -15868,32 +15885,6 @@ class App(tk.Tk):
         self._max_out_coach_development(int(sel[0]))
         self.refresh_coach()
         self._reselect(self.tree_coach, iid)
-
-    def _apply_trainer_skpt(self):
-        sel = self.tree_trainer.selection()
-        if not sel:
-            messagebox.showwarning("No selection", "Select a trainer row first.")
-            return
-        iid = sel[0]
-        try:
-            idx = int(iid)
-        except Exception:
-            return
-        val = self.ent_trainer_skpt.get().strip()
-        try:
-            v = safe_int(val)
-            if v is None:
-                raise ValueError("Invalid integer")
-            orig = v
-            # Clamp to allowed range
-            v = max(0, min(131071, v))
-            self.model.trainers[idx]["SKPT"] = str(v)
-            self.refresh_trainer()
-            if orig != v:
-                # show only the clamped numeric value (no decimal)
-                messagebox.showinfo("SKPT", str(v))
-        except Exception as e:
-            messagebox.showerror("Invalid SKPT", str(e))
 
     def refresh_coach(self):
         # Shown columns: TGID/name/SKPT plus all 5 confirmed skill fields
@@ -15971,24 +15962,6 @@ class App(tk.Tk):
                     vals.append((r.get(h, "") or ""))
             self.tree_coach.insert("", tk.END, iid=str(idx), values=vals)
         self._finish_tree_refresh(self.tree_coach, prev_sel)
-
-    def _on_coach_select(self):
-        sel = self.tree_coach.selection()
-        if not sel:
-            return
-        iid = sel[0]
-        try:
-            idx = int(iid)
-        except Exception:
-            return
-        try:
-            row = self.model.coaches[idx]
-        except IndexError:
-            return  # stale selection from before a reload shrank the list
-        sk = row.get("SKPT") if row is not None else None
-        self.ent_coach_skpt.delete(0, tk.END)
-        if sk is not None:
-            self.ent_coach_skpt.insert(0, str(sk))
 
     def on_open_coach_personality_editor(self):
         sel = self.tree_coach.selection()
@@ -16108,31 +16081,6 @@ class App(tk.Tk):
                  "its data; the GM and staff, roster minimum, health and fatigue tabs are matched from that data and not "
                  "yet checked in the game - try changes on a copy of your save.")
 
-    def _apply_coach_skpt(self):
-        sel = self.tree_coach.selection()
-        if not sel:
-            messagebox.showwarning("No selection", "Select a coach row first.")
-            return
-        iid = sel[0]
-        try:
-            idx = int(iid)
-        except Exception:
-            return
-        val = self.ent_coach_skpt.get().strip()
-        try:
-            v = safe_int(val)
-            if v is None:
-                raise ValueError("Invalid integer")
-            orig = v
-            # Clamp to allowed range
-            v = max(0, min(131071, v))
-            self.model.coaches[idx]["SKPT"] = str(v)
-            self.refresh_coach()
-            if orig != v:
-                messagebox.showinfo("SKPT", str(v))
-        except Exception as e:
-            messagebox.showerror("Invalid SKPT", str(e))
-
     def refresh_gm(self):
         # Show TGID, SKPT, and confirmed skill fields (Trade/Contract Negotiation).
         # GM_SCOUTING_FIELDS (CBMP/FBMP/etc., the GM's roster-minimum philosophies by the game's own names) deliberately NOT shown by default -
@@ -16195,46 +16143,6 @@ class App(tk.Tk):
                     vals.append((r.get(h, "") or ""))
             self.tree_gm.insert("", tk.END, iid=str(idx), values=vals)
         self._finish_tree_refresh(self.tree_gm, prev_sel)
-
-    def _on_gm_select(self):
-        sel = self.tree_gm.selection()
-        if not sel:
-            return
-        iid = sel[0]
-        try:
-            idx = int(iid)
-        except Exception:
-            return
-        row = self.model.gms[idx]
-        sk = row.get("SKPT") if row is not None else None
-        self.ent_gm_skpt.delete(0, tk.END)
-        if sk is not None:
-            self.ent_gm_skpt.insert(0, str(sk))
-
-    def _apply_gm_skpt(self):
-        sel = self.tree_gm.selection()
-        if not sel:
-            messagebox.showwarning("No selection", "Select a GM row first.")
-            return
-        iid = sel[0]
-        try:
-            idx = int(iid)
-        except Exception:
-            return
-        val = self.ent_gm_skpt.get().strip()
-        try:
-            v = safe_int(val)
-            if v is None:
-                raise ValueError("Invalid integer")
-            orig = v
-            # Clamp to allowed range
-            v = max(0, min(131071, v))
-            self.model.gms[idx]["SKPT"] = str(v)
-            self.refresh_gm()
-            if orig != v:
-                messagebox.showinfo("SKPT", str(v))
-        except Exception as e:
-            messagebox.showerror("Invalid SKPT", str(e))
 
     def _sort_tree(self, tree, col):
         """Click-to-sort for a table's column heading: first click sorts
