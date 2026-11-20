@@ -159,6 +159,11 @@ def summarize_bridge(args):
     return writes, " ".join(parts)
 
 
+def previous_report():
+    """The report that was written when the editor was last found to have closed without warning (the path), or None."""
+    return _state.get("previous")
+
+
 def log_write(text):
     """Something the editor wrote to the game files or to a save (and how it went): kept in memory and, once install() has run, in the write log file next to the reports."""
     text = " ".join(str(text).split())                       # one line per record, whatever the text holds (an error message with line breaks)
