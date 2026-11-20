@@ -116,7 +116,7 @@ BRIDGE_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hc09-bridg
 # Recent-files list (QoL). Save files are always literally named "USR-DATA",
 # so the useful distinguishing part to show is the parent save folder name
 # (e.g. "BLUS30128-CAREER-TEST"), not the filename itself.
-RECENT_FILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_recent_files.json")
+RECENT_FILES_PATH = os.environ.get("HC09_RECENT_FILES") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_recent_files.json")      # (the test runner points both files at scratch copies)
 RECENT_FILES_MAX = 6
 
 def load_recent_files():
@@ -3118,7 +3118,7 @@ UI_PALETTE_DARK = {
     "success": "#66c99a", "warning": "#e7bd69",
 }
 
-UI_PREFS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_ui_prefs.json")
+UI_PREFS_PATH = os.environ.get("HC09_UI_PREFS") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_ui_prefs.json")      # (the test runner points it at an empty scratch file: the tests must not use the person's own game paths)
 
 def load_ui_prefs():
     try:
