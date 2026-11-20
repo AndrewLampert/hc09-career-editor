@@ -231,7 +231,7 @@ def replace_file(source_iso, name, replacement_path, destination_iso, progress=N
                     done += len(block)
                     if progress:
                         progress(done, size)
-            out.seek(off + parent_sector * SECTOR + entry_pos + 6)
+            out.seek(off + parent_sector * SECTOR + entry_pos + 4)
             out.write(struct.pack("<II", new_sector, size))
             out.flush()
             os.fsync(out.fileno())
