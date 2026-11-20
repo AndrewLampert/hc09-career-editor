@@ -6403,7 +6403,11 @@ class WriteGuard:
 
     def _start_write(self, busy_text, work, done, error_title):
         self._writing = True
-        started = self.app.run_game_write(busy_text, work, done, error_title=error_title, on_finish=lambda: setattr(self, "_writing", False))
+
+        def finished(value):
+            self._writing = False                          # the write is over: the handler may close this window (destroy() is refused only WHILE the write runs)
+            return done(value)
+        started = self.app.run_game_write(busy_text, work, finished, error_title=error_title, on_finish=lambda: setattr(self, "_writing", False))
         if not started:
             self._writing = False
         return started
@@ -6809,6 +6813,13 @@ class PlayDesignerDialog(tk.Toplevel):
                     self.detail = self.lib.detail(current)  # the same play from the new library; the changes made to it here stay
                     self._show()
         finally:
+            if self._keep_state:                           # selection_set only QUEUES the <<TreeviewSelect>> event: keep ignoring it until the queue is empty (idle), not just until this handler returns
+                self._keep_token = getattr(self, "_keep_token", 0) + 1
+                token = self._keep_token
+                self.after_idle(lambda: self._release_keep_state(token))
+
+    def _release_keep_state(self, token):
+        if token == getattr(self, "_keep_token", 0):
             self._keep_state = False
 
     def _clear_play(self):
@@ -6906,10 +6917,10 @@ class PlayDesignerDialog(tk.Toplevel):
 
     # ---- one play
     def _select(self):
-        if getattr(self, "_keep_state", False):          # the list was filled again and the same play selected again: nothing of the play shown changes (refresh_from_game_files)
-            return
         sel = self.tree.selection()
         if not sel:
+            return
+        if getattr(self, "_keep_state", False) and sel[0] == str(self.plyl):   # the list was filled again and the same play selected again: nothing of the play shown changes (refresh_from_game_files); a click on ANOTHER play still loads it
             return
         self._load_play(int(sel[0]))
 
@@ -8786,11 +8797,12 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         # cannot rename the custom book. Custom-playbook play names live in the save's
         # PBPL definitions, not in this game-file table.
         available = set(lib.books_of_play.get(self.plyl, ()))
-        self._books = sorted((b for b in available if int(b) not in range(1, 11) and b in d.books),
-                             key=lambda b: d.books[b][0].lower())
+        def book_name(b):                                  # a book the names table does not have (no PLAB entry, or no names cache yet) is still listed, as 'playbook N' like everywhere else
+            return d.books.get(b, (f"playbook {b}", ""))[0]
+        self._books = sorted((b for b in available if int(b) not in range(1, 11)), key=lambda b: book_name(b).lower())
         self.lst.delete(0, "end")
         for b in self._books:
-            self.lst.insert("end", f"{d.books[b][0]}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
+            self.lst.insert("end", f"{book_name(b)}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
         for i, b in enumerate(self._books):
             if b in keep:
                 self.lst.selection_set(i)
