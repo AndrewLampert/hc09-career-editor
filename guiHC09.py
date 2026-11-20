@@ -14903,9 +14903,9 @@ class App(tk.Tk):
         return copy if what == "ok" else self._boot_from_iso(iso)
 
     def _is_iso_copy_path(self, path):
-        """Is this file inside the editor's cache of files read out of disc images?"""
+        """Is this file inside the editor's cache of files read out of disc images? Symbolic links are resolved first (a link outside the cache that points into it is a cache file)."""
         try:
-            return bool(path) and os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(self.ISO_CACHE_DIR)) + os.sep)
+            return bool(path) and os.path.normcase(os.path.realpath(path)).startswith(os.path.normcase(os.path.realpath(self.ISO_CACHE_DIR)) + os.sep)
         except (OSError, ValueError, TypeError):
             return False
 
