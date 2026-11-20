@@ -11316,7 +11316,7 @@ class App(tk.Tk):
             ttk.Label(line, text=detail, padding=(24, 0, 0, 0), wraplength=390).pack(anchor="w")
         ttk.Label(
             inner,
-            text="Note: Recomp mode currently reads game archives from the ISO. Writing edited game archives back into a recomp-compatible image is not implemented yet; save-file editing remains separate.",
+            text="Recomp reads qkl_boot.ast from its disc image. You can edit supported game data in the editor, then use Build Recomp ISO... to create a separate image; the original ISO is never overwritten. Career saves remain separate.",
             wraplength=420, justify="left"
         ).pack(anchor="w", pady=(12, 8))
         buttons = ttk.Frame(inner)
