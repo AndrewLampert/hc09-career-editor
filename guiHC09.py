@@ -3077,14 +3077,16 @@ BASE_TITLE = "HC09 CSV Editor (GUI) - Safe Trades"
 UI_FONT_FAMILY = "Segoe UI"
 
 UI_PALETTE_LIGHT = {
-    "bg": "#f4f6fb", "surface": "#ffffff", "text": "#1c2430", "subtle": "#68707d",
-    "border": "#d7dbe3", "accent": "#2f6fed", "accent_hover": "#255ed1",
-    "accent_text": "#ffffff", "header_bg": "#eef1f7",
+    "bg": "#f3f5f9", "surface": "#ffffff", "text": "#172033", "subtle": "#667085",
+    "border": "#d9e0ea", "accent": "#2459c4", "accent_hover": "#1c49a6",
+    "accent_text": "#ffffff", "header_bg": "#e9eef6", "selected_bg": "#dce8ff",
+    "success": "#16794b", "warning": "#9a6700",
 }
 UI_PALETTE_DARK = {
-    "bg": "#191c20", "surface": "#23262c", "text": "#f2f4f8", "subtle": "#aab0bb",
-    "border": "#42474f", "accent": "#5b9bff", "accent_hover": "#7cadff",
-    "accent_text": "#0b0e12", "header_bg": "#2c3038",
+    "bg": "#171b23", "surface": "#222936", "text": "#edf2fa", "subtle": "#a4afc0",
+    "border": "#394557", "accent": "#79a8ff", "accent_hover": "#9bbcff",
+    "accent_text": "#101827", "header_bg": "#2b3545", "selected_bg": "#344d73",
+    "success": "#66c99a", "warning": "#e7bd69",
 }
 
 UI_PREFS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_ui_prefs.json")
@@ -10908,20 +10910,13 @@ class App(tk.Tk):
 
     # ---------- Visual theme ----------
     def _apply_theme(self, mode=None):
-        """Cosmetic-only pass: consistent colors/fonts/spacing across every
-        tab, no behavior change. Safe to skip (falls back to Tk defaults) if
-        anything here isn't supported on a given platform. Call again with a
-        different mode ("light"/"dark") to live-switch - existing ttk widgets
-        re-render automatically; raw tk widgets need _retheme_raw_widgets."""
+        """Apply a cohesive application-wide theme without changing widget
+        commands, data handling, or editor behavior."""
         if mode is None:
             mode = getattr(self, "ui_mode", "light")
         self.ui_mode = mode
 
         if not self.ui_prefs.get("facelift_enabled", True):
-            # Classic mode: leave Tk/ttk at their plain platform defaults.
-            # self._ui_palette stays None - every dialog/widget that checks
-            # it (contract editor, team picker, canvas theming, etc.) already
-            # guards on that and just skips its custom colors when it's unset.
             self._ui_palette = None
             return
 
@@ -10930,35 +10925,46 @@ class App(tk.Tk):
 
         try:
             self.configure(bg=p["bg"])
-
             import tkinter.font as tkfont
-            for font_name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+            for font_name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont"):
                 try:
                     tkfont.nametofont(font_name).configure(family=UI_FONT_FAMILY, size=9)
                 except Exception:
                     pass
 
-            # Plain tk widgets (Listbox/Text) aren't ttk-themeable, so set
-            # their look via the option database instead. This only affects
-            # widgets created AFTER this call - already-built ones need
-            # _retheme_raw_widgets() to pick up a mode change live.
-            self.option_add("*Listbox.background", p["surface"])
-            self.option_add("*Listbox.foreground", p["text"])
-            self.option_add("*Listbox.selectBackground", p["accent"])
-            self.option_add("*Listbox.selectForeground", p["accent_text"])
-            self.option_add("*Listbox.relief", "flat")
-            self.option_add("*Listbox.borderWidth", 1)
-            self.option_add("*Listbox.highlightThickness", 1)
-            self.option_add("*Listbox.highlightBackground", p["border"])
-            self.option_add("*Listbox.highlightColor", p["accent"])
-            self.option_add("*Text.background", p["surface"])
-            self.option_add("*Text.foreground", p["text"])
-            self.option_add("*Text.relief", "flat")
-            self.option_add("*Text.borderWidth", 1)
-            self.option_add("*Text.highlightThickness", 1)
-            self.option_add("*Text.highlightBackground", p["border"])
-            self.option_add("*Label.background", p["bg"])
-            self.option_add("*Label.foreground", p["text"])
+            # Native Tk widgets are used alongside ttk throughout the editor.
+            # Keep their colors, selection, focus rings and typography aligned.
+            for pattern, value in (
+                ("*Listbox.background", p["surface"]),
+                ("*Listbox.foreground", p["text"]),
+                ("*Listbox.selectBackground", p["accent"]),
+                ("*Listbox.selectForeground", p["accent_text"]),
+                ("*Listbox.relief", "flat"),
+                ("*Listbox.borderWidth", 1),
+                ("*Listbox.highlightThickness", 1),
+                ("*Listbox.highlightBackground", p["border"]),
+                ("*Listbox.highlightColor", p["accent"]),
+                ("*Listbox.font", (UI_FONT_FAMILY, 9)),
+                ("*Text.background", p["surface"]),
+                ("*Text.foreground", p["text"]),
+                ("*Text.insertBackground", p["text"]),
+                ("*Text.selectBackground", p["accent"]),
+                ("*Text.selectForeground", p["accent_text"]),
+                ("*Text.relief", "flat"),
+                ("*Text.borderWidth", 1),
+                ("*Text.highlightThickness", 1),
+                ("*Text.highlightBackground", p["border"]),
+                ("*Text.highlightColor", p["accent"]),
+                ("*Text.font", (UI_FONT_FAMILY, 9)),
+                ("*Entry.background", p["surface"]),
+                ("*Entry.foreground", p["text"]),
+                ("*Entry.insertBackground", p["text"]),
+                ("*Entry.selectBackground", p["accent"]),
+                ("*Entry.selectForeground", p["accent_text"]),
+                ("*Label.background", p["bg"]),
+                ("*Label.foreground", p["text"]),
+            ):
+                self.option_add(pattern, value)
 
             style = ttk.Style(self)
             try:
@@ -10966,57 +10972,94 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-            style.configure(".", background=p["bg"], foreground=p["text"], font=(UI_FONT_FAMILY, 9))
+            # Base surfaces and typography.
+            style.configure(".", background=p["bg"], foreground=p["text"],
+                            font=(UI_FONT_FAMILY, 9), focuscolor=p["accent"])
             style.configure("TFrame", background=p["bg"])
             style.configure("TLabel", background=p["bg"], foreground=p["text"])
-            style.configure("TCheckbutton", background=p["bg"], foreground=p["text"])
-            style.configure("TLabelframe", background=p["bg"], foreground=p["text"], bordercolor=p["border"])
-            style.configure("TLabelframe.Label", background=p["bg"], foreground=p["text"], font=(UI_FONT_FAMILY, 9, "bold"))
-
-            style.configure("TButton", padding=(10, 5), background=p["surface"], foreground=p["text"], bordercolor=p["border"])
-            style.map(
-                "TButton",
-                background=[("active", p["header_bg"]), ("pressed", p["header_bg"]), ("disabled", p["bg"])],
-                foreground=[("disabled", p["subtle"])],
-            )
-            # Reserved for the primary actions in the top toolbar (Load/Save).
-            style.configure("Accent.TButton", padding=(12, 6), background=p["accent"], foreground=p["accent_text"],
-                             bordercolor=p["accent"], font=(UI_FONT_FAMILY, 9, "bold"))
-            style.map(
-                "Accent.TButton",
-                background=[("active", p["accent_hover"]), ("pressed", p["accent_hover"])],
-                foreground=[("disabled", p["subtle"])],
-            )
-
-            style.configure("TEntry", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
-            style.configure("TCombobox", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
-            style.map("TCombobox", fieldbackground=[("readonly", p["surface"])])
-            style.configure("TSpinbox", fieldbackground=p["surface"], foreground=p["text"], bordercolor=p["border"], padding=4)
-
-            style.configure("TNotebook", background=p["bg"], bordercolor=p["border"], tabmargins=(6, 6, 6, 0))
-            style.configure("TNotebook.Tab", padding=(16, 8), background=p["bg"], foreground=p["subtle"], font=(UI_FONT_FAMILY, 9, "bold"))
-            style.map(
-                "TNotebook.Tab",
-                background=[("selected", p["surface"])],
-                foreground=[("selected", p["accent"])],
-            )
-
-            style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"], foreground=p["text"],
-                             rowheight=24, bordercolor=p["border"], borderwidth=0)
-            style.configure("Treeview.Heading", background=p["header_bg"], foreground=p["text"],
-                             font=(UI_FONT_FAMILY, 9, "bold"), relief="flat")
-            style.map(
-                "Treeview",
-                background=[("selected", p["accent"])],
-                foreground=[("selected", p["accent_text"])],
-            )
-
-            style.configure("TSeparator", background=p["border"])
-            style.configure("TPanedwindow", background=p["bg"])
+            style.configure("Heading.TLabel", background=p["bg"], foreground=p["text"],
+                            font=(UI_FONT_FAMILY, 11, "bold"))
+            style.configure("Subtle.TLabel", background=p["bg"], foreground=p["subtle"])
             style.configure("Status.TLabel", background=p["bg"], foreground=p["subtle"])
-            style.configure("TScrollbar", background=p["surface"], bordercolor=p["border"], arrowcolor=p["subtle"], troughcolor=p["bg"])
+            style.configure("TCheckbutton", background=p["bg"], foreground=p["text"], padding=(3, 3))
+            style.map("TCheckbutton", foreground=[("disabled", p["subtle"])])
+            style.configure("TRadiobutton", background=p["bg"], foreground=p["text"], padding=(3, 3))
+            style.configure("TLabelframe", background=p["bg"], bordercolor=p["border"],
+                            relief="solid", borderwidth=1)
+            style.configure("TLabelframe.Label", background=p["bg"], foreground=p["text"],
+                            font=(UI_FONT_FAMILY, 9, "bold"), padding=(3, 0))
+
+            # Buttons: clear hierarchy, larger hit targets and consistent hover/focus.
+            style.configure("TButton", padding=(11, 6), background=p["surface"],
+                            foreground=p["text"], bordercolor=p["border"],
+                            lightcolor=p["border"], darkcolor=p["border"], relief="flat")
+            style.map("TButton",
+                      background=[("pressed", p["header_bg"]), ("active", p["header_bg"]),
+                                  ("disabled", p["bg"])],
+                      foreground=[("disabled", p["subtle"])],
+                      bordercolor=[("focus", p["accent"]), ("active", p["accent"])])
+            style.configure("Accent.TButton", padding=(13, 7), background=p["accent"],
+                            foreground=p["accent_text"], bordercolor=p["accent"],
+                            font=(UI_FONT_FAMILY, 9, "bold"), relief="flat")
+            style.map("Accent.TButton",
+                      background=[("pressed", p["accent_hover"]), ("active", p["accent_hover"])],
+                      foreground=[("disabled", p["subtle"])])
+            style.configure("Toolbutton", padding=(8, 5), background=p["bg"], foreground=p["text"])
+            style.map("Toolbutton", background=[("selected", p["selected_bg"]), ("active", p["header_bg"])])
+
+            # Input controls.
+            style.configure("TEntry", fieldbackground=p["surface"], foreground=p["text"],
+                            bordercolor=p["border"], lightcolor=p["border"], darkcolor=p["border"],
+                            insertcolor=p["text"], padding=(7, 5))
+            style.map("TEntry", bordercolor=[("focus", p["accent"])],
+                      lightcolor=[("focus", p["accent"])], darkcolor=[("focus", p["accent"])])
+            style.configure("TCombobox", fieldbackground=p["surface"], background=p["surface"],
+                            foreground=p["text"], bordercolor=p["border"], arrowcolor=p["subtle"],
+                            padding=(7, 5))
+            style.map("TCombobox", fieldbackground=[("readonly", p["surface"])],
+                      foreground=[("readonly", p["text"])],
+                      selectbackground=[("readonly", p["surface"])],
+                      selectforeground=[("readonly", p["text"])],
+                      bordercolor=[("focus", p["accent"])])
+            style.configure("TSpinbox", fieldbackground=p["surface"], foreground=p["text"],
+                            bordercolor=p["border"], padding=(7, 5), arrowsize=12)
+            style.configure("TScrollbar", background=p["header_bg"], bordercolor=p["bg"],
+                            arrowcolor=p["subtle"], troughcolor=p["bg"], gripcount=0)
+            style.configure("Horizontal.TProgressbar", troughcolor=p["header_bg"],
+                            background=p["accent"], bordercolor=p["border"])
+
+            # Tabs and data grids.
+            style.configure("TNotebook", background=p["bg"], bordercolor=p["bg"],
+                            tabmargins=(3, 5, 3, 0))
+            style.configure("TNotebook.Tab", padding=(15, 9), background=p["header_bg"],
+                            foreground=p["subtle"], bordercolor=p["border"],
+                            font=(UI_FONT_FAMILY, 9, "bold"))
+            style.map("TNotebook.Tab",
+                      background=[("selected", p["surface"]), ("active", p["selected_bg"])],
+                      foreground=[("selected", p["accent"]), ("active", p["text"])],
+                      expand=[("selected", (0, 0, 0, 2))])
+            style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"],
+                            foreground=p["text"], rowheight=27, bordercolor=p["border"],
+                            borderwidth=1, relief="flat", font=(UI_FONT_FAMILY, 9))
+            style.configure("Treeview.Heading", background=p["header_bg"], foreground=p["text"],
+                            font=(UI_FONT_FAMILY, 9, "bold"), relief="flat",
+                            padding=(8, 7), bordercolor=p["border"])
+            style.map("Treeview",
+                      background=[("selected", p["accent"])],
+                      foreground=[("selected", p["accent_text"])])
+            style.map("Treeview.Heading", background=[("active", p["selected_bg"])])
+            style.configure("TPanedwindow", background=p["bg"])
+            style.configure("TSeparator", background=p["border"])
+
+            # Menus and popups created by Tk use the same palette.
+            self.option_add("*Menu.background", p["surface"])
+            self.option_add("*Menu.foreground", p["text"])
+            self.option_add("*Menu.activeBackground", p["accent"])
+            self.option_add("*Menu.activeForeground", p["accent_text"])
+            self.option_add("*Menu.relief", "flat")
+            self.option_add("*Menu.borderWidth", 1)
         except Exception:
-            pass  # cosmetics only - never block the app over a styling error
+            pass  # styling must never prevent the editor from starting
 
     def _retheme_raw_widgets(self):
         """Live-updates plain tk (non-ttk) widgets that already existed before
