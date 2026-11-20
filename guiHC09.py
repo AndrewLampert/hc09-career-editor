@@ -116,7 +116,7 @@ BRIDGE_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hc09-bridg
 # Recent-files list (QoL). Save files are always literally named "USR-DATA",
 # so the useful distinguishing part to show is the parent save folder name
 # (e.g. "BLUS30128-CAREER-TEST"), not the filename itself.
-RECENT_FILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_recent_files.json")
+RECENT_FILES_PATH = os.environ.get("HC09_RECENT_FILES") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_recent_files.json")      # (the test runner points both files at scratch copies)
 RECENT_FILES_MAX = 6
 
 def load_recent_files():
@@ -445,11 +445,12 @@ PREFERRED_TEAM_COLS = ["TID", "TEAM", "TMID", "TGID"]  # TGID last as fallback
 #   it's not a pick number at all (see refresh_picks's comment). DPYO = year
 #   offset (0 = current year, matching PPGR-style small-int-offset fields
 #   elsewhere in this file).
-#   CONFIRMED UNSAFE, per the same Discord thread's own caution ("might mess
-#   up the game later since the trade details are in [a separate] list") and
-#   directly reproduced: writing DPID alone crashed the user's game on
-#   day-advance. See the investigation log above _build_picks_tab for the
-#   full writeup - pick reassignment was removed, the tab is view-only.
+#   An EARLIER test (writing DPID alone) crashed the user's game on
+#   day-advance, and the Discord thread cautioned that the trade details are
+#   in a separate list. That was SUPERSEDED: later tests on two independent
+#   saves and games of play found the Assign button (on_assign_picks, which
+#   writes DPID) working, so the Draft Picks tab ships Assign. See the
+#   investigation log above _build_picks_tab for the full writeup.
 #   DPOD (see DRAFT_PICK_ORIGINAL_TEAM) is display-only, never written.
 DRAFT_PICK_ID = "DPID"
 DRAFT_PICK_ORIGINAL_TEAM = "DPOD"
@@ -1108,6 +1109,10 @@ PHILOSOPHY_VALUES = {
     "CBMP": {0: "4", 1: "5", 2: "6"}, "FSMP": {0: "1", 1: "2", 2: "3"}, "SSMP": {0: "1", 1: "2", 2: "3"},
     "KKMP": {0: "1", 1: "2"}, "KPMP": {0: "0", 1: "1", 2: "2"},
 }
+for _f in GM_SCOUTING_FIELDS:                         # the ranges of the GM roster-minimum fields: their choices (K 0-1, most 0-2, GM spending 0-3), not 0-5
+    if PHILOSOPHY_VALUES.get(_f):
+        STAFF_NUMERIC_FIELDS[_f] = (min(PHILOSOPHY_VALUES[_f]), max(PHILOSOPHY_VALUES[_f]))
+del _f
 # practice and game health / fatigue, one field per position group (QB HB FB WR TE OL DL LB DB K/P)
 for _suffix, _values in (
     ("PH", {0: "Practice at moderate health", 1: "Practice at low health"}),
@@ -2292,10 +2297,20 @@ class TeamAutocompleteCombo:
         if any(tid == exact for tid, _name in self.options):
             return exact
         typed_lower = typed.lower()
-        for tid, name in self.options:
-            if typed_lower in name.lower():
-                return tid
+        found = [(tid, name) for tid, name in self.options if typed_lower in name.lower()]
+        self.ambiguous = [name for _tid, name in found] if len(found) > 1 else []
+        if len(found) == 1:                                # 'los angeles' (Chargers, Rams) or 'new york' (Giants, Jets) is not guessed
+            return found[0][0]
         return None
+
+    ambiguous = []
+
+    def unknown_message(self):
+        """What to tell the person when get_tid() found no team."""
+        typed = self.combo.get()
+        if self.ambiguous:
+            return f"'{typed}' matches more than one team ({', '.join(self.ambiguous)}). Pick one from the list."
+        return f"'{typed}' doesn't match any team."
 
     def set_tid(self, tid):
         for i, label in enumerate(self.combo["values"]):
@@ -2654,10 +2669,19 @@ class SwapTradeDialog(tk.Toplevel):
         n1 = self.model.player_name(p1)
         n2 = self.model.player_name(p2)
 
+        cap1, cap2 = safe_int(p1.get("PCSA", "")), safe_int(p2.get("PCSA", ""))
+        team1, team2 = self.model.player_team_id(p1), self.model.player_team_id(p2)
         swap_players_safe(p1, p2, IMMUTABLE_KEYS)
+        cap_note = ""
+        if cap1 is not None and cap2 is not None and team1 != team2:       # each row keeps its team and now holds the other's contract: the team totals (TMSA) move by the difference
+            both = self.model.get_team_row(team1) is not None and self.model.get_team_row(team2) is not None     # both TEAM rows first: one adjusted and the other not would leave the totals out of step (and the clamp at 0 makes a roll-back inexact)
+            done = both and self.model.adjust_team_salary_cap(team1, cap2 - cap1) and self.model.adjust_team_salary_cap(team2, cap1 - cap2)
+            cap_note = "\n\nThe two teams' salary cap totals were adjusted by the difference of the two cap hits." if done else "\n\n(Team cap totals not found/updated - load a save with the TEAM table.)"
         self.parent.mark_dirty()
 
-        messagebox.showinfo("Trade complete", f"✅ TRADE COMPLETED (Safe Swap)\n\n{n1}  ⇄  {n2}")
+        messagebox.showinfo("Trade complete", f"✅ TRADE COMPLETED (Safe Swap)\n\n{n1}  ⇄  {n2}{cap_note}")
+        self._refresh_roster(1)                            # the two lists show the players now in those rows
+        self._refresh_roster(2)
 
         # Refresh the parent's views
         self.parent.refresh_players_for_team()
@@ -2790,10 +2814,10 @@ class SignFreeAgentDialog(tk.Toplevel):
         self.years_var = tk.StringVar(value="4")
         self.spn_years = ttk.Spinbox(
             row2, from_=1, to=7, width=4, textvariable=self.years_var,
-            state="readonly", command=self._rebuild_year_rows,
+            state="readonly", command=lambda: self._rebuild_year_rows(keep=True),
         )
         self.spn_years.pack(side="left", padx=(6, 16))
-        ttk.Button(row2, text="Reset", command=self._rebuild_year_rows).pack(side="left")
+        ttk.Button(row2, text="Reset", command=lambda: self._rebuild_year_rows(keep=False)).pack(side="left")
 
         ttk.Label(
             contract,
@@ -2835,11 +2859,12 @@ class SignFreeAgentDialog(tk.Toplevel):
         if cmb["values"]:
             cmb.current(0)
 
-    def _rebuild_year_rows(self):
+    def _rebuild_year_rows(self, keep=False):
         """Rebuild the per-year salary/bonus entry rows to match the current
         'Contract years' spinner value, each with a live-updating formatted
         dollar amount so it's unambiguous whether a number means $10K, $100K,
-        $1M, etc."""
+        $1M, etc. keep=True: rows that still exist keep what was typed in them."""
+        typed = [(e["salary_var"].get(), e["bonus_var"].get()) for e in getattr(self, "year_rows", [])] if keep else []
         for child in self.years_frame.winfo_children():
             child.destroy()
         self.year_rows = []
@@ -2860,16 +2885,17 @@ class SignFreeAgentDialog(tk.Toplevel):
             r = y + 1
             ttk.Label(self.years_frame, text=f"{y + 1}").grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
 
-            salary_var = tk.StringVar(value="40")
+            have = typed[y] if y < len(typed) else ("40", "0")
+            salary_var = tk.StringVar(value=have[0])
             salary_ent = ttk.Entry(self.years_frame, width=8, textvariable=salary_var)
             salary_ent.grid(row=r, column=1, sticky="w", pady=2)
-            salary_lbl = ttk.Label(self.years_frame, text=format_cap_dollars(40), width=14)
+            salary_lbl = ttk.Label(self.years_frame, text=format_cap_dollars(safe_int(have[0]) or 0), width=14)
             salary_lbl.grid(row=r, column=2, sticky="w", padx=(6, 0), pady=2)
 
-            bonus_var = tk.StringVar(value="0")
+            bonus_var = tk.StringVar(value=have[1])
             bonus_ent = ttk.Entry(self.years_frame, width=8, textvariable=bonus_var)
             bonus_ent.grid(row=r, column=3, sticky="w", padx=(16, 0), pady=2)
-            bonus_lbl = ttk.Label(self.years_frame, text=format_cap_dollars(0), width=14)
+            bonus_lbl = ttk.Label(self.years_frame, text=format_cap_dollars(safe_int(have[1]) or 0), width=14)
             bonus_lbl.grid(row=r, column=4, sticky="w", padx=(6, 0), pady=2)
 
             entry = {"salary_var": salary_var, "bonus_var": bonus_var, "salary_lbl": salary_lbl, "bonus_lbl": bonus_lbl}
@@ -2973,7 +2999,7 @@ class SignFreeAgentDialog(tk.Toplevel):
         src_tid_pool = self._combo_tid(self.cmb_src)
         dest_tid = self.dest_combo.get_tid()
         if not dest_tid:
-            messagebox.showerror("Unknown team", f"'{self.dest_combo.combo.get()}' doesn't match any team.")
+            messagebox.showerror("Unknown team", self.dest_combo.unknown_message())
             return
 
         years = len(self.year_rows)
@@ -3003,10 +3029,13 @@ class SignFreeAgentDialog(tk.Toplevel):
             src_tid = self.model.player_team_id(row)
             signed_names.append(self.model.player_name(row))
 
+            have_cols = set(self.model.player_headers or [])
             for i, col in enumerate(PLAYER_CONTRACT_COLS):
-                row[col] = str(salaries[i]) if i < years else "0"
+                if col in have_cols:
+                    row[col] = str(salaries[i]) if i < years else "0"
             for i, col in enumerate(PLAYER_BONUS_COLS):
-                row[col] = str(bonuses[i]) if i < years else "0"
+                if col in have_cols:
+                    row[col] = str(bonuses[i]) if i < years else "0"
 
             # PCSA/PTSA/PVSB formulas found by decoding a real mid-contract
             # player (Keith Brooking, Falcons LB, PCON=7/PCYL=2: PCSA=649
@@ -3027,16 +3056,17 @@ class SignFreeAgentDialog(tk.Toplevel):
                     f"{self.model.player_name(row)}'s contract was updated, but the team column "
                     "wasn't detected for this save, so they weren't actually moved to the new team."
                 )
-            row["PCON"] = str(years)
-            row["PCYL"] = str(years)
+            for col in ("PCON", "PCYL"):
+                if col in have_cols:
+                    row[col] = str(years)
             # PCSA/PTSA/PVSB are sums of already-validated per-year values, but
             # their own fields are narrower than what those sums can reach -
             # clamp to each field's real max instead of letting it silently
             # overflow/wrap on write (see PLAYER_PCSA_MAX_VALUE etc. above).
-            row["PCSA"] = str(min(year1_cap_hit, PLAYER_PCSA_MAX_VALUE))
-            row["PTSA"] = str(min(total_salary + total_bonus, PLAYER_PTSA_MAX_VALUE))
-            row["PVSB"] = str(min(total_bonus, PLAYER_PVSB_MAX_VALUE))
-            row["PPTI"] = str(src_tid)
+            for col, value in (("PCSA", min(year1_cap_hit, PLAYER_PCSA_MAX_VALUE)), ("PTSA", min(total_salary + total_bonus, PLAYER_PTSA_MAX_VALUE)),
+                               ("PVSB", min(total_bonus, PLAYER_PVSB_MAX_VALUE)), ("PPTI", src_tid)):
+                if col in have_cols:                       # a column this save does not have is not written (the save would refuse the row)
+                    row[col] = str(value)
             total_cap_hit += year1_cap_hit
 
         # Team-wide "Team Salary Cap" (TMSA) is a separately stored total, NOT
@@ -3089,7 +3119,7 @@ UI_PALETTE_DARK = {
     "success": "#66c99a", "warning": "#e7bd69",
 }
 
-UI_PREFS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_ui_prefs.json")
+UI_PREFS_PATH = os.environ.get("HC09_UI_PREFS") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_ui_prefs.json")      # (the test runner points it at an empty scratch file: the tests must not use the person's own game paths)
 
 def load_ui_prefs():
     try:
@@ -3149,7 +3179,7 @@ class PlayerContractDialog(tk.Toplevel):
         self.resizable(False, False)
         self.minsize(420, 460)
         self.transient(parent)
-        self.grab_set()
+        make_modal(self)
 
         self.parent = parent
         self.model = model
@@ -3245,34 +3275,64 @@ class PlayerContractDialog(tk.Toplevel):
         # 1 (the lowest non-zero unit, $10,000/yr) rather than 0 - some
         # in-game behavior around a literal $0 salary is untested/unclear,
         # so defaulting to the lowest non-zero value avoids the risk.
-        for entry in self.rows:
-            entry["salary_var"].set("1")
+        years = safe_int(self.model.players[self.player_index].get("PCON", ""))
+        for y, entry in enumerate(self.rows):
+            if years is None or years <= 0 or y < years:   # the years past the contract stay as they are (zero)
+                entry["salary_var"].set("1")
 
     def _set_bonus_min(self):
         for entry in self.rows:
             entry["bonus_var"].set("0")
 
+    @staticmethod
+    def _units(text):
+        """A whole number of units from text ('12', '12.0', '12.5' -> 12), or None."""
+        text = (text or "0").strip()
+        try:
+            return int(text)
+        except ValueError:
+            try:
+                return int(float(text))
+            except ValueError:
+                return None
+
     def _on_apply(self):
         row = self.model.players[self.player_index]
         headers = set(self.model.player_headers or [])
+        new = {}                                           # all fourteen values are read and clamped first: a bad one changes nothing
+        for y, entry in enumerate(self.rows):
+            for kind, var, col, hi in (("salary", entry["salary_var"], entry["salary_col"], PLAYER_SALARY_MAX_VALUE), ("bonus", entry["bonus_var"], entry["bonus_col"], PLAYER_BONUS_MAX_VALUE)):
+                if col in headers:
+                    n = self._units(var.get())
+                    if n is None:
+                        messagebox.showerror("Contract Error", f"Year {y}: the {kind} '{var.get()}' is not a whole number. Nothing was changed.")
+                        return
+                    new[col] = max(0, min(hi, n))
         try:
-            updates = 0
-            for entry in self.rows:
-                salary_col, bonus_col = entry["salary_col"], entry["bonus_col"]
-                if salary_col in headers:
-                    salary_val = max(0, min(PLAYER_SALARY_MAX_VALUE, int(entry["salary_var"].get() or "0")))
-                    row[salary_col] = str(salary_val)
-                    updates += 1
-                if bonus_col in headers:
-                    bonus_val = max(0, min(PLAYER_BONUS_MAX_VALUE, int(entry["bonus_var"].get() or "0")))
-                    row[bonus_col] = str(bonus_val)
-                    updates += 1
+            old_cap = safe_int(row.get("PCSA", ""))
+            for col, v in new.items():
+                row[col] = str(v)
+            # PCSA is the CURRENT year's salary + bonus (year PCON - PCYL), PTSA the whole contract, PVSB the bonus total: the derived fields the Sign dialog keeps in step
+            salaries = [safe_int(row.get(c, "")) or 0 for c in PLAYER_CONTRACT_COLS]
+            bonuses = [safe_int(row.get(c, "")) or 0 for c in PLAYER_BONUS_COLS]
+            pcon, pcyl = safe_int(row.get("PCON", "")), safe_int(row.get("PCYL", ""))
+            cur = max(0, min(len(salaries) - 1, pcon - pcyl)) if pcon is not None and pcyl is not None else 0
+            derived = (("PCSA", min(salaries[cur] + bonuses[cur], PLAYER_PCSA_MAX_VALUE)), ("PTSA", min(sum(salaries) + sum(bonuses), PLAYER_PTSA_MAX_VALUE)), ("PVSB", min(sum(bonuses), PLAYER_PVSB_MAX_VALUE)))
+            for col, value in derived:
+                if col in headers:
+                    row[col] = str(value)
+            cap_note = ""
+            new_cap = safe_int(row.get("PCSA", ""))
+            if old_cap is not None and new_cap is not None and new_cap != old_cap:
+                tid = self.model.player_team_id(row)
+                cap_note = "\n\nThe team's salary cap total was adjusted too." if tid and self.model.adjust_team_salary_cap(tid, new_cap - old_cap) else "\n\n(Team cap total not found/updated - load a save with the TEAM table.)"
             self.parent.mark_dirty()
             self.parent.refresh_players_for_team(preselect_model_idx=self.player_index)
             self.parent.refresh_stats_for_player()
-            messagebox.showinfo("Contract updated", f"Updated {updates} field(s) across all 7 years.")
+            messagebox.showinfo("Contract updated", f"Updated {len(new)} field(s) across all 7 years.{cap_note}")
             self.destroy()
         except Exception as e:
+            self.parent.mark_dirty()                       # part of the edit may be in the model: the save is changed
             messagebox.showerror("Contract Error", str(e))
 
 
@@ -3291,7 +3351,7 @@ class PersonalityDialog(tk.Toplevel):
         self.minsize(460, 520)
         self.resizable(True, True)
         self.transient(parent)
-        self.grab_set()
+        make_modal(self)
 
         self.parent = parent
         self.rows_list = rows_list
@@ -3478,11 +3538,7 @@ class PersonalityDialog(tk.Toplevel):
     def _sort_compare_table(self, col):
         reverse = self._compare_sort_state.get(col, False)
         rows = [(self.compare_tree.set(iid, col), iid) for iid in self.compare_tree.get_children()]
-        try:
-            rows.sort(key=lambda r: float(r[0]), reverse=reverse)
-        except ValueError:
-            rows.sort(key=lambda r: r[0], reverse=reverse)
-        for index, (_, iid) in enumerate(rows):
+        for index, iid in enumerate(sort_table_cells(rows, reverse)):
             self.compare_tree.move(iid, "", index)
         self._compare_sort_state[col] = not reverse
 
@@ -3599,7 +3655,7 @@ class StaffSkillsDialog(tk.Toplevel):
         self._describe(None)
         self._layout()
         self.bind("<Escape>", lambda e: self.destroy())
-        self.grab_set()
+        make_modal(self)
 
     def _layout(self):
         """Show the skills the role is offered (or all of them), in the game's order, in as many columns as they need."""
@@ -3653,7 +3709,7 @@ class AssignPortraitDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Assign Existing Photo")
         self.transient(parent)
-        self.grab_set()
+        make_modal(self)
         self.resizable(False, False)
 
         self.parent = parent
@@ -3667,7 +3723,7 @@ class AssignPortraitDialog(tk.Toplevel):
         img_kwargs = {}
         if p:
             img_kwargs["background"] = p["surface"]
-        self.img_label = tk.Label(self, text="Loading archive index...", width=256, height=256, **img_kwargs)
+        self.img_label = portrait_label(self, "Loading archive index...", **img_kwargs)
         self.img_label.pack(padx=12, pady=8)
 
         nav = ttk.Frame(self)
@@ -3710,9 +3766,16 @@ class AssignPortraitDialog(tk.Toplevel):
             shortids = result.get("shortIds", [])
             current = safe_int(self.row.get(PLAYER_PORTRAIT_CODE, ""))
             start_idx = shortids.index(current) if current in shortids else 0
-            self.after(0, lambda: self._on_index_loaded(shortids, start_idx))
+            self._later(lambda: self._on_index_loaded(shortids, start_idx))
         except Exception as e:
-            self.after(0, lambda: self.lbl_status.configure(text=f"Couldn't load portrait archive: {e}"))
+            self._later(lambda: self.lbl_status.configure(text=f"Couldn't load portrait archive: {e}"))
+
+    def _later(self, fn):
+        """Run fn on the window's thread, but only if the window is still there (a result that arrives after Cancel must not touch destroyed widgets)."""
+        try:
+            self.after(0, lambda: fn() if self.winfo_exists() else None)
+        except (tk.TclError, RuntimeError):
+            pass
 
     def _on_index_loaded(self, shortids, start_idx):
         self.shortids = shortids
@@ -3752,7 +3815,7 @@ class AssignPortraitDialog(tk.Toplevel):
         self.shortid_var.set(str(shortid))
         self._req_id += 1
         req_id = self._req_id
-        self.img_label.configure(image="", text="Loading...")
+        portrait_text(self.img_label, "Loading...")
 
         def worker():
             try:
@@ -3761,7 +3824,7 @@ class AssignPortraitDialog(tk.Toplevel):
             except Exception as e:
                 pil_image = None
                 error = str(e)
-            self.after(0, lambda: self._on_loaded(req_id, pil_image, error))
+            self._later(lambda: self._on_loaded(req_id, pil_image, error))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3769,7 +3832,7 @@ class AssignPortraitDialog(tk.Toplevel):
         if req_id != self._req_id:
             return
         if error or pil_image is None:
-            self.img_label.configure(image="", text="Error" if error else "No image")
+            portrait_text(self.img_label, "Error" if error else "No image")
             return
         photo = ImageTk.PhotoImage(pil_image)
         self._photo_ref = photo  # keep alive
@@ -4040,11 +4103,7 @@ class PlayerTypeFitDialog(tk.Toplevel):
     def _sort_by(self, col, default_reverse=None):
         reverse = self._sort_state.get(col, False) if default_reverse is None else default_reverse
         rows = [(self.tree.set(iid, col), iid) for iid in self.tree.get_children()]
-        try:
-            rows.sort(key=lambda r: float(r[0]), reverse=reverse)
-        except ValueError:
-            rows.sort(key=lambda r: r[0], reverse=reverse)
-        for index, (_, iid) in enumerate(rows):
+        for index, iid in enumerate(sort_table_cells(rows, reverse)):
             self.tree.move(iid, "", index)
         self._sort_state[col] = not reverse
 
@@ -4627,7 +4686,7 @@ class PhilosophyWeightsDialog(tk.Toplevel):
 
     def _read(self, table, col):
         text = self.vars[(table, col)].get().strip()
-        if not text.isdigit() or int(text) > PHILOSOPHY_WEIGHT_MAX:
+        if not (text.isascii() and text.isdigit()) or int(text) > PHILOSOPHY_WEIGHT_MAX:
             return None
         return int(text)
 
@@ -4868,13 +4927,15 @@ class PersonnelData:
         """The set's slots from the copy it is shown from, ordered by slot: [{poso, epos, dpos, x, y, sgt}]."""
         k = self.primary[setl]
         src = (self.stock_rows if stock else self.rows)[k]
-        out = []
-        for (s, poso), r in sorted(src.items(), key=lambda kv: kv[0][1]):
-            if s != setl:
-                continue
-            out.append({"poso": poso, "epos": r["EPos"], "dpos": r["DPos"], "x": r.get("fmtx", r.get("x___")), "y": r.get("fmty", r.get("y___")),
-                        "sgt": r.get("SGT_")})
-        return out
+        cache = self.__dict__.setdefault("_slot_index", {})
+        held = cache.get((k, stock))
+        if held is None or held[0] is not src or held[1] != len(src):          # built once per copy (every list and preview asks for the slots of every set)
+            index = {}
+            for (s, poso), r in sorted(src.items(), key=lambda kv: kv[0][1]):
+                index.setdefault(s, []).append({"poso": poso, "epos": r["EPos"], "dpos": r["DPos"], "x": r.get("fmtx", r.get("x___")), "y": r.get("fmty", r.get("y___")),
+                                                "sgt": r.get("SGT_")})
+            held = cache[(k, stock)] = (src, len(src), index)
+        return [dict(x) for x in held[2].get(setl, [])]
 
     def side(self, setl):
         return personnel_side([s["epos"] for s in self.slots(setl)])
@@ -5272,11 +5333,19 @@ def apply_personnel_targets(model, targets, backup_dir=None, mode="apply"):
             pass
 
 
-def restore_personnel_files(model, data, backup_dir=None):
+def restore_personnel_files(model, data, backup_dir=None, allow_added=False):
     """Write every backed-up entry back (all sets to stock). Returns the bridge's result. The plays Add a play put into the game files come out first (the table of contents and the length of the
     archive go back), so that the entries are where their own backups expect them."""
     for ast in sorted({c["ast"] for c in data.copies}):
         if os.path.basename(ast).lower() == "qkl_boot.ast":
+            if not allow_added:                            # only the Add a play window also takes the links of the plays out of the saves
+                try:
+                    state = model.run_bridge(["add-play-state", "--ast", ast, "--backup-dir", backup_dir or PERSONNEL_BACKUP_DIR])
+                except Exception:
+                    state = {}
+                if state.get("active") and state.get("plays"):
+                    raise RuntimeError("Plays added with Add a play are in the game files. Putting the game files back would take them out of the game but leave their links in your profile and career, "
+                                       "and a new career would then point at plays that are no longer there. Use Put the game files back in the Add a play window instead: it takes the links out of your saves too. Nothing was changed.")
             model.run_bridge(["add-play-restore", "--ast", ast, "--backup-dir", backup_dir or PERSONNEL_BACKUP_DIR])
     targets = [{"ast": c["ast"], "index": c["index"], "start": c["start"], "size": c["size"], "edits": []} for c in data.copies]
     cfg = _bridge_config({"backupDir": backup_dir or PERSONNEL_BACKUP_DIR, "targets": targets})
@@ -5614,22 +5683,27 @@ class PersonnelDialog(tk.Toplevel):
             return False
         if not self._check_closed():
             return False
-        n_rows = sum(len(t["edits"]) for t in targets)
-        names = ", ".join(sorted({f"{os.path.basename(t['ast'])} #{t['index']}" for t in targets}))
-        if not messagebox.askyesno(what, f"This writes {n_rows} slot rows into {len(targets)} database copies ({names}) in the game's files. "
-                                          "The original of each is backed up first (once). The game and the emulator are closed?"):
+        if not self.app.begin_game_write():                # a rename or another writer of the game files is still running: not at the same time
             return False
-        self.config(cursor="watch")
-        self.update_idletasks()
         try:
-            self.app._refuse_write_to_iso_copy(*[t["ast"] for t in targets])
-            apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
-        except Exception as e:
-            messagebox.showerror(what, str(e))
-            return False
+            n_rows = sum(len(t["edits"]) for t in targets)
+            names = ", ".join(sorted({f"{os.path.basename(t['ast'])} #{t['index']}" for t in targets}))
+            if not messagebox.askyesno(what, f"This writes {n_rows} slot rows into {len(targets)} database copies ({names}) in the game's files. "
+                                              "The original of each is backed up first (once). The game and the emulator are closed?"):
+                return False
+            self.config(cursor="watch")
+            self.update_idletasks()
+            try:
+                self.app._refuse_write_to_iso_copy(*[t["ast"] for t in targets])
+                apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
+            except Exception as e:
+                messagebox.showerror(what, str(e))
+                return False
+            finally:
+                self.config(cursor="")
+            return True
         finally:
-            self.config(cursor="")
-        return True
+            self.app.end_game_write()
 
     def _reload(self, keep=None):
         try:
@@ -5658,19 +5732,24 @@ class PersonnelDialog(tk.Toplevel):
     def _restore_all(self):
         if not self._check_closed():
             return
-        if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
-                                                          "The game and the emulator are closed?"):
+        if not self.app.begin_game_write():                # not while another window is writing the game files
             return
-        self.config(cursor="watch")
-        self.update_idletasks()
         try:
-            self.app._refuse_write_to_iso_copy(*[c["ast"] for c in getattr(self.data, "copies", [])])
-            res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
-        except Exception as e:
-            messagebox.showerror("Restore all", str(e))
-            return
+            if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
+                                                              "The game and the emulator are closed?"):
+                return
+            self.config(cursor="watch")
+            self.update_idletasks()
+            try:
+                self.app._refuse_write_to_iso_copy(*[c["ast"] for c in getattr(self.data, "copies", [])])
+                res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
+            except Exception as e:
+                messagebox.showerror("Restore all", str(e))
+                return
+            finally:
+                self.config(cursor="")
         finally:
-            self.config(cursor="")
+            self.app.end_game_write()
         done = [r for r in res.get("results", []) if r.get("restored")]
         messagebox.showinfo("Restored", f"{len(done)} database copies restored from the backups.")
         self._reload(keep=self.setl)
@@ -5710,15 +5789,15 @@ class PersonnelBulkDialog(tk.Toplevel):
         self.vars = {"from": tk.StringVar(value="WR" if side == "offense" else "LOLB"), "to": tk.StringVar(value="TE" if side == "offense" else "CB"),
                      "min": tk.StringVar(value="4" if side == "offense" else "1"), "max": tk.StringVar(value="0"), "n": tk.StringVar(value="1")}
         ttk.Label(form, text="In sets with at least").pack(side="left")
-        ttk.Spinbox(form, from_=0, to=11, width=3, textvariable=self.vars["min"], command=self._preview).pack(side="left", padx=4)
+        ttk.Spinbox(form, from_=0, to=11, width=3, textvariable=self.vars["min"]).pack(side="left", padx=4)
         cb = ttk.Combobox(form, state="readonly", width=6, textvariable=self.vars["from"], values=names)
         cb.pack(side="left")
         ttk.Label(form, text="and at most").pack(side="left", padx=(8, 0))
-        ttk.Spinbox(form, from_=0, to=11, width=3, textvariable=self.vars["max"], command=self._preview).pack(side="left", padx=4)
+        ttk.Spinbox(form, from_=0, to=11, width=3, textvariable=self.vars["max"]).pack(side="left", padx=4)
         cb2 = ttk.Combobox(form, state="readonly", width=6, textvariable=self.vars["to"], values=names)
         cb2.pack(side="left")
         ttk.Label(form, text=", change").pack(side="left")
-        ttk.Spinbox(form, from_=1, to=5, width=3, textvariable=self.vars["n"], command=self._preview).pack(side="left", padx=4)
+        ttk.Spinbox(form, from_=1, to=5, width=3, textvariable=self.vars["n"]).pack(side="left", padx=4)
         ttk.Label(form, text="slot(s) of the first to the second").pack(side="left")
         for v in self.vars.values():
             v.trace_add("write", lambda *_a: self._preview())
@@ -5856,6 +5935,10 @@ class SavesDialog(tk.Toplevel):
         self._shelf_dlg = ShelfDialog(self.app, on_change=self._refresh)
 
     def _refresh(self, search=False):
+        if not self.winfo_exists():                        # the shelf window calls this after every action, and it can outlive the Saves window
+            return
+        if search and getattr(self, "_searching", False):  # a search is running: a second one would only compete with it
+            return
         self._refresh_serial = getattr(self, "_refresh_serial", 0) + 1
         serial = self._refresh_serial
         if not search:
@@ -5870,12 +5953,14 @@ class SavesDialog(tk.Toplevel):
         # Search this computer can take most of half a minute (it looks for RPCS3, Xenia and the PC versions wherever they were put): on a background thread, so the window stays alive
         self.lbl_note.configure(text="Searching this computer for RPCS3, Xenia, and HC09 / HC27 for PC. This can take up to half a minute; the list is filled in when it is done.")
         self.config(cursor="watch")
+        self._searching = True
 
         def worker():
             try:
                 saves, error = self.app.detected_saves(search=True), None
             except Exception as e:
                 saves, error = None, e
+            self._searching = False
             try:
                 self.after(0, lambda: self._search_done(serial, saves, error))
             except (tk.TclError, RuntimeError):
@@ -6145,7 +6230,7 @@ class ShelfDialog(tk.Toplevel):
             try:
                 self.shelf.put_away(sv, folder_rel=folder, label=label, copy=copy)
                 done.append(sv["name"])
-            except SHELF.ShelfError as e:
+            except (SHELF.ShelfError, OSError) as e:
                 problems.append(f"{sv['name']}: {e}")
         self._refresh()
         self._say(("Shelved " + (", ".join(done) + ". ") if done else "") + (" ".join(problems) if problems else ""))
@@ -6184,7 +6269,7 @@ class ShelfDialog(tk.Toplevel):
                 return
         try:
             self.shelf.bring_back(entry, target_root=target, copy=copy, replace=replace, game_save=game_save)
-        except SHELF.ShelfError as e:
+        except (SHELF.ShelfError, OSError) as e:
             messagebox.showerror("Save shelf", str(e), parent=self)
             self._say(str(e))
             return
@@ -6198,7 +6283,7 @@ class ShelfDialog(tk.Toplevel):
             return
         try:
             self.shelf.new_folder(self._target_folder(), name)
-        except SHELF.ShelfError as e:
+        except (SHELF.ShelfError, OSError) as e:
             messagebox.showerror("Save shelf", str(e), parent=self)
             return
         self._refresh()
@@ -6215,7 +6300,7 @@ class ShelfDialog(tk.Toplevel):
             return
         try:
             self.shelf.rename(pick[1], name)
-        except SHELF.ShelfError as e:
+        except (SHELF.ShelfError, OSError) as e:
             messagebox.showerror("Save shelf", str(e), parent=self)
             return
         self._refresh()
@@ -6251,13 +6336,13 @@ class ShelfDialog(tk.Toplevel):
         ttk.Button(row, text="Move", style="Accent.TButton", command=ok).pack(side="right")
         ttk.Button(row, text="Cancel", command=dlg.destroy).pack(side="right", padx=(0, 6))
         box.bind("<Double-1>", lambda e: ok())
-        dlg.grab_set()
+        make_modal(dlg)
         self.wait_window(dlg)
         if not chosen:
             return
         try:
             self.shelf.move_within(pick[1], chosen[0])
-        except SHELF.ShelfError as e:
+        except (SHELF.ShelfError, OSError) as e:
             messagebox.showerror("Save shelf", str(e), parent=self)
             return
         self._refresh()
@@ -6298,6 +6383,50 @@ class ShelfDialog(tk.Toplevel):
 
 
 PLAY_ZONE_STYLE = {23: ("#4a90e2", 14, 5), 22: ("#d96ad0", 14, 6), 20: ("#d96ad0", 14, 6), 21: ("#e0c040", 12, 7)}   # zone step code (deep, curl, flat, hook) -> (colour, half width, half height)
+
+
+def make_modal(win):
+    """Make a dialog modal: the window behind it cannot be used until it is closed. grab_set fails on a window that is not shown yet (X11), so it is tried again a moment later."""
+    try:
+        win.grab_set()
+    except tk.TclError:
+        win.after(100, lambda: make_modal(win) if win.winfo_exists() else None)
+
+
+def portrait_label(parent, text, **kw):
+    """A label for a 256 x 256 pixel portrait. A tk.Label that shows text measures width and height in characters, so a 'width=256, height=256' label with text asks for about 1800 x 3800 pixels;
+    a blank 256 x 256 image holds the size and the text is drawn over it."""
+    label = tk.Label(parent, text=text, compound="center", **kw)
+    label._blank = tk.PhotoImage(master=label, width=256, height=256)
+    label.configure(image=label._blank)
+    return label
+
+
+def portrait_text(label, text):
+    """Show a word instead of a portrait, at the same size."""
+    label.configure(image=label._blank, text=text, compound="center")
+
+
+class WriteGuard:
+    """For a window that starts a write of the game files: it cannot be closed while the write runs (the handler that follows needs it: it links the saves, updates the library, refreshes the
+    designer), and only one such write runs at a time in the editor (App.run_game_write)."""
+    _writing = False
+
+    def _start_write(self, busy_text, work, done, error_title):
+        self._writing = True
+
+        def finished(value):
+            self._writing = False                          # the write is over: the handler may close this window (destroy() is refused only WHILE the write runs)
+            return done(value)
+        started = self.app.run_game_write(busy_text, work, finished, error_title=error_title, on_finish=lambda: setattr(self, "_writing", False))
+        if not started:
+            self._writing = False
+        return started
+
+    def destroy(self):
+        if self._writing:
+            return
+        super().destroy()
 
 
 class PlayCanvas(tk.Canvas):
@@ -6434,14 +6563,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.detail = None
         self.my_profile = None       # the profile save whose custom plays are mounted in the library ("Plays I made"), or None
         self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
-        self.books = {}
-        try:
-            for r in read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv")):
-                pbgi = safe_int(r.get("PBGI", ""))
-                if pbgi is not None:
-                    self.books[pbgi] = ((r.get("BNAM") or "").strip() or f"playbook {pbgi}", "offense" if (r.get("BOFF") or "").strip() == "1" else "defense")
-        except Exception:
-            pass
+        self.books = self._read_books()
 
         steps = ttk.Frame(self)
         steps.pack(fill="x", padx=12, pady=(10, 0))
@@ -6641,6 +6763,27 @@ class PlayDesignerDialog(tk.Toplevel):
 
         app.run_in_thread_with_busy("Reading the game's plays again...", work, lambda lib: self._use_library(lib, reselect), error_title="Play creator")
 
+    def _read_books(self):
+        """{PBGI: (playbook name, "offense" | "defense")} from the cache of the playbook names. The file is dropped when the game files are written or a playbook is renamed: it is read from the
+        archive again then (if the archive is known), so the lists do not fall back to 'playbook 252'."""
+        books = {}
+        path = os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv")
+        if not os.path.isfile(path):
+            boot = self.app.ui_prefs.get("boot_ast_path") or ""
+            if boot and os.path.isfile(boot):
+                try:
+                    self.app._extract_playbook_names(boot)
+                except Exception:
+                    pass
+        try:
+            for r in read_csv_dicts(path):
+                pbgi = safe_int(r.get("PBGI", ""))
+                if pbgi is not None:
+                    books[pbgi] = ((r.get("BNAM") or "").strip() or f"playbook {pbgi}", "offense" if (r.get("BOFF") or "").strip() == "1" else "defense")
+        except Exception:
+            pass
+        return books
+
     def _use_library(self, lib, reselect):
         """Show a library that was read again (refresh_from_game_files): the same side and playbook filter, the profile's custom plays mounted again, the play shown selected again."""
         if not self.winfo_exists():
@@ -6653,6 +6796,7 @@ class PlayDesignerDialog(tk.Toplevel):
         if JobCatalog is not None and self.types is not None and getattr(lib, "_job_catalog", None) is None:
             lib._job_catalog = JobCatalog(lib, self.types)
         self.catalog = getattr(lib, "_job_catalog", None)
+        self.books = self._read_books()
         if profile:                                        # the profile's custom plays were mounted in the old library (Plays I made, Convert my plays list them from it): mount them again
             try:
                 self.app.load_my_plays(lib, profile)
@@ -6672,7 +6816,7 @@ class PlayDesignerDialog(tk.Toplevel):
             if current is not None and self.tree.exists(str(current)):
                 self.tree.selection_set(str(current))
                 self.tree.see(str(current))
-                self.update()                              # the selection event is handled here, while _keep_state says whether it may reset the play shown
+                self._select()                             # the selection is handled here, while _keep_state says whether it may reset the play shown (update() would run every other pending event inside this handler)
             elif current is not None:                       # the play is in the files but the list hides it (the Find box still has its old name): no row to select, so read it from the new library here
                 if reselect:
                     self._load_play(current)
@@ -6680,6 +6824,13 @@ class PlayDesignerDialog(tk.Toplevel):
                     self.detail = self.lib.detail(current)  # the same play from the new library; the changes made to it here stay
                     self._show()
         finally:
+            if self._keep_state:                           # selection_set only QUEUES the <<TreeviewSelect>> event: keep ignoring it until the queue is empty (idle), not just until this handler returns
+                self._keep_token = getattr(self, "_keep_token", 0) + 1
+                token = self._keep_token
+                self.after_idle(lambda: self._release_keep_state(token))
+
+    def _release_keep_state(self, token):
+        if token == getattr(self, "_keep_token", 0):
             self._keep_state = False
 
     def _clear_play(self):
@@ -6777,10 +6928,10 @@ class PlayDesignerDialog(tk.Toplevel):
 
     # ---- one play
     def _select(self):
-        if getattr(self, "_keep_state", False):          # the list was filled again and the same play selected again: nothing of the play shown changes (refresh_from_game_files)
-            return
         sel = self.tree.selection()
         if not sel:
+            return
+        if getattr(self, "_keep_state", False) and sel[0] == str(self.plyl):   # the list was filled again and the same play selected again: nothing of the play shown changes (refresh_from_game_files); a click on ANOTHER play still loads it
             return
         self._load_play(int(sel[0]))
 
@@ -6916,7 +7067,13 @@ class PlayDesignerDialog(tk.Toplevel):
         out = self._slots_assigned(overrides)
         if align and self.detail["side"] == "offense":
             ymap = self.lib.yard_map()
-            out = [({**sl, "x": ymap.art(*align[sl["poso"]])[0], "y": ymap.art(*align[sl["poso"]])[1]} if sl["poso"] in align else sl) for sl in out]
+
+            def placed(sl):
+                if sl["poso"] not in align:
+                    return sl
+                ax, ay = ymap.art(*align[sl["poso"]])
+                return {**sl, "x": ax, "y": ay}
+            out = [placed(sl) for sl in out]
         return out
 
     def _slots_assigned(self, overrides):
@@ -6957,8 +7114,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self._set_books_text()
         self._refresh_make()
         self._refresh_kind()
-        self._slot_selected()
-        self._draw()
+        self._slot_selected()                              # draws the canvas itself
 
     def _refresh_make(self):
         """Make custom play is on for an offensive play; for anything else it is off and says why (only offense can be saved for now)."""
@@ -7144,18 +7300,20 @@ class PlayDesignerDialog(tk.Toplevel):
                                    "you do it. Go on?", parent=self):
             return
         lines, stock_ai = [], getattr(self.lib, "tables", {}).get("PBAI", [])
+        career_changed = False
         for s in saves:
             try:
                 n, skipped = add_cpu_rows_in_save(app.model, s, profile, stock_ai)
+                career_changed = career_changed or (n and s == db)
                 lines.append(f"{os.path.basename(os.path.dirname(s))}: " + (f"{n} CPU rows added" if n else "nothing to add (every play has CPU rows)") + (f"; not done: {len(skipped)} play(s) in no playbook the computer can use" if skipped else ""))
             except Exception as e:
                 lines.append(f"{os.path.basename(os.path.dirname(s))}: NOT changed ({e})")
-        if db and len(saves) > 1:
+        if db and len(saves) > 1 and career_changed:
             try:
                 app.model.load_all_from_db(db)
                 app._on_load_db_path_success(db)
-            except Exception:
-                pass
+            except Exception as e:
+                lines.append(f"The open career could not be read again ({e}): load it again from the file.")
         messagebox.showinfo("Fix my plays for practice", "\n".join(lines) + "\n\nStart a new career (or load this one) and practice one of your plays: its play knowledge now goes up.", parent=self)
 
     def _make_custom(self):
@@ -7217,7 +7375,7 @@ class AlignmentDialog(tk.Toplevel):
         self.sx = ttk.Spinbox(box, from_=-ALIGN_X, to=ALIGN_X, increment=0.25, width=8, textvariable=self.x_var, command=self._typed)
         self.sx.grid(row=0, column=1, padx=(6, 14))
         ttk.Label(box, text="Back:").grid(row=0, column=2, sticky="w")
-        self.sy = ttk.Spinbox(box, from_=ALIGN_Y[0], to=ALIGN_Y[1], increment=0.25, width=8, textvariable=self.y_var, command=self._typed)
+        self.sy = ttk.Spinbox(box, from_=-ALIGN_Y[1], to=-ALIGN_Y[0], increment=0.25, width=8, textvariable=self.y_var, command=self._typed)
         self.sy.grid(row=0, column=3, padx=(6, 0))
         for w in (self.sx, self.sy):
             w.bind("<Return>", lambda e: self._typed())
@@ -7230,16 +7388,17 @@ class AlignmentDialog(tk.Toplevel):
         self.lbl_note.pack(anchor="w")
         right = ttk.Frame(main)
         right.pack(side="left", padx=(16, 0))
-        self.canvas = PlayCanvas(right, art_dir=getattr(designer.lib, "_ui_art", None), on_pick=self._pick)
+        self.canvas = PlayCanvas(right, art_dir=getattr(designer.lib, "_ui_art", None), on_pick=self._pick, on_drag=self._drag)
         self.canvas.pack()
-        self.canvas.bind("<B1-Motion>", self._drag)
         bottom = ttk.Frame(self)
         bottom.pack(side="bottom", fill="x", padx=14, pady=(4, 12), before=main)
         ttk.Button(bottom, text="Cancel", command=self.destroy).pack(side="right")
         ttk.Button(bottom, text="Use these places", style="Accent.TButton", command=self._use).pack(side="right", padx=(0, 8))
         self.bind("<Escape>", lambda e: self.destroy())
         self._fill()
-        self.tree.selection_set(str(next(iter(self.labels))))
+        rows = self.tree.get_children()
+        if rows:                                           # the list holds the slots that have a place in the set's normal alignment, which may not include the play's first slot
+            self.tree.selection_set(rows[0])
 
     def _moved(self, poso):
         a, b = self.pos[poso], self.stock[poso]
@@ -7307,11 +7466,11 @@ class AlignmentDialog(tk.Toplevel):
         if self.tree.exists(str(poso)):
             self.tree.selection_set(str(poso))
 
-    def _drag(self, event):
-        poso = self._poso()
+    def _drag(self, poso, ax, ay):
+        """The player the mouse went down on is dragged (ax, ay in the diagram's units); a press on empty field moves nobody."""
         if poso is None or poso not in self.pos:
             return
-        x, y = self.ymap.yards((event.x - self.canvas.PAD) / self.canvas.SCALE, (event.y - self.canvas.PAD) / self.canvas.SCALE)
+        x, y = self.ymap.yards(ax, ay)
         if (x, y) != self.pos[poso]:
             self.pos[poso] = self._clamp(x, y)
             self._fill(keep=poso)
@@ -8045,6 +8204,7 @@ class CustomPlayDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Add to my game")
         self.transient(designer)
+        make_modal(self)                                   # it reads the designer's play when a button is pressed: that play must not change behind it
         self.geometry("760x560")
         self.app, self.designer = app, designer
         d = designer.detail
@@ -8220,7 +8380,8 @@ class CustomPlayDialog(tk.Toplevel):
 
     def _uninstall(self):
         answer = messagebox.askyesnocancel("Put my saves back", "RPCS3, Xenia and HC09 for PC must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
-                                           "No: put back your files from before the LAST install only.\nCancel: do nothing.", parent=self)
+                                           "No: put back your files from before the LAST install only.\nCancel: do nothing.\n\n"
+                                           "Whatever the game saved since (a season played, say) is replaced too. A copy of your current files is kept first.", parent=self)
         if answer is None:
             return
         try:
@@ -8228,10 +8389,10 @@ class CustomPlayDialog(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Put my saves back", str(e), parent=self)
             return
-        messagebox.showinfo("Put my saves back", f"Done: your profile and career are the ones saved in {info['folder']} again.", parent=self)
+        messagebox.showinfo("Put my saves back", f"Done: your profile and career are the ones saved in {info['folder']} again.\n\nThe files they replaced are kept in {info['safety']}.", parent=self)
 
 
-class GameFilesDialog(tk.Toplevel):
+class GameFilesDialog(WriteGuard, tk.Toplevel):
     """Change in game files: the play shown in the designer, with the changes made there, written into the game's own play database (qkl_boot.ast and qkl_fe2ig.ast), in place, over the
     play itself or over another play of the same set that is given up, with a new name, so that the game treats it as a normal play (flip, hot routes, adjustments, the CPU calls it). Every
     team playbook that has the play gets it. The first time, each file entry is backed up and Put the game files back restores them."""
@@ -8243,6 +8404,7 @@ class GameFilesDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Change in game files")
         self.transient(designer)
+        make_modal(self)                                   # it reads the designer's play when a button is pressed: that play must not change behind it
         self.geometry("820x640")
         self.app, self.designer = app, designer
         self.changes = None
@@ -8349,7 +8511,7 @@ class GameFilesDialog(tk.Toplevel):
             messagebox.showinfo("Change in game files", "Done. Start the game and look at the play (Play Now, a playbook that has it).\n\nPut the game files back (this window) restores the files as they were.", parent=self)
             self.designer.refresh_from_game_files(reselect=True)
 
-        app.run_in_thread_with_busy("Changing the game files...", work, done, error_title="Change in game files")
+        self._start_write("Changing the game files...", work, done, "Change in game files")
 
     def _restore(self):
         app = self.app
@@ -8371,10 +8533,10 @@ class GameFilesDialog(tk.Toplevel):
             messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
             self.designer.refresh_from_game_files(reselect=True)
 
-        app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
+        self._start_write("Putting the game files back...", work, done, "Put the game files back")
 
 
-class RenamePlaybooksDialog(tk.Toplevel):
+class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
     """Rename playbooks: the game's default playbooks (89: 46 offense, 43 defense) listed with their names; give any of them a new name (21 characters), then write the names into the game's own file
     (qkl_boot.ast, table PLAB). The first time, the changed file entry is backed up and Put the names back restores it. The Playbooks tab shows the new names after a refresh."""
 
@@ -8542,12 +8704,9 @@ class RenamePlaybooksDialog(tk.Toplevel):
             self._fill()
             self.lbl_result.configure(text=f"Done: {count} playbook name{'s' if count != 1 else ''} written. Start the game and look at the playbook screen; the Playbooks tab shows them after Load / Refresh.")
             messagebox.showinfo("Rename playbooks", f"Done: {count} playbook name{'s' if count != 1 else ''} written to the game files.\n\nPut the names back (this window) restores the file as it was.", parent=self)
-            try:
-                app.refresh_playbooks(force=True)
-            except Exception:
-                pass
+            app._apply_book_renames(renames)
 
-        app.run_in_thread_with_busy("Writing the playbook names...", work, done, error_title="Rename playbooks")
+        self._start_write("Writing the playbook names...", work, done, "Rename playbooks")
 
     def _restore(self):
         app = self.app
@@ -8575,7 +8734,7 @@ class RenamePlaybooksDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        app.run_in_thread_with_busy("Putting the playbook names back...", work, done, error_title="Put the names back")
+        self._start_write("Putting the playbook names back...", work, done, "Put the names back")
 
 
 def plain_bridge_error(e):
@@ -8586,7 +8745,7 @@ def plain_bridge_error(e):
     return re.sub(r"^ERROR:\s*(Error:\s*)?", "", why)
 
 
-class RenameInBooksDialog(tk.Toplevel):
+class RenameInBooksDialog(WriteGuard, tk.Toplevel):
     """Rename in playbooks: the name a play has in the game's playbooks (the play-call screen shows each playbook's own name for a play), changed in the playbooks picked here only, or everywhere (the
     play's own name and the name in every playbook that has it). Written into the game's own files (qkl_boot.ast, in place); the first time the changed entries are backed up and Put the game files
     back restores them."""
@@ -8649,11 +8808,12 @@ class RenameInBooksDialog(tk.Toplevel):
         # cannot rename the custom book. Custom-playbook play names live in the save's
         # PBPL definitions, not in this game-file table.
         available = set(lib.books_of_play.get(self.plyl, ()))
-        self._books = sorted((b for b in available if int(b) not in range(1, 11) and b in d.books),
-                             key=lambda b: d.books[b][0].lower())
+        def book_name(b):                                  # a book the names table does not have (no PLAB entry, or no names cache yet) is still listed, as 'playbook N' like everywhere else
+            return d.books.get(b, (f"playbook {b}", ""))[0]
+        self._books = sorted((b for b in available if int(b) not in range(1, 11)), key=lambda b: book_name(b).lower())
         self.lst.delete(0, "end")
         for b in self._books:
-            self.lst.insert("end", f"{d.books[b][0]}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
+            self.lst.insert("end", f"{book_name(b)}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
         for i, b in enumerate(self._books):
             if b in keep:
                 self.lst.selection_set(i)
@@ -8713,7 +8873,7 @@ class RenameInBooksDialog(tk.Toplevel):
                                            "Put the game files back restores the names." + (f" {len(missing)} playbook(s) had no name row for the play." if missing else ""))
             messagebox.showinfo("Rename in playbooks", f"Done. {name} is the play's name {where}.\n\nPut the game files back (this window) restores the names as they were.", parent=self)
 
-        app.run_in_thread_with_busy("Renaming the play...", work, done, error_title="Rename in playbooks")
+        self._start_write("Renaming the play...", work, done, "Rename in playbooks")
 
     def _restore(self):
         app = self.app
@@ -8737,10 +8897,10 @@ class RenameInBooksDialog(tk.Toplevel):
             if designer.winfo_exists():
                 designer.refresh_from_game_files(reselect=True)
 
-        app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
+        self._start_write("Putting the game files back...", work, done, "Put the game files back")
 
 
-class AddPlayDialog(tk.Toplevel):
+class AddPlayDialog(WriteGuard, tk.Toplevel):
     """Add a play: the play shown in the designer, with the changes made there, added to the game's own play database as a NEW play (a normal play for the game: it can be flipped and hot-routed,
     the quarterback adjusts; the computer does not call it: the game's play list holds only the stock plays), in the playbooks you pick. The game has no free rows, so the bridge writes bigger copies of the entries it changes at the end of qkl_boot.ast
     (see hc09_addplay.py); Put the game files back restores the file byte for byte. The play's links also go into your profile, which is what a NEW career copies its playbooks from."""
@@ -8752,6 +8912,7 @@ class AddPlayDialog(tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Add a play")
         self.transient(designer)
+        make_modal(self)                                   # it reads the designer's play when a button is pressed: that play must not change behind it
         self.geometry("860x700")
         self.app, self.designer = app, designer
         d = designer.detail
@@ -8926,7 +9087,7 @@ class AddPlayDialog(tk.Toplevel):
         sets its playbook links name (PGPL, PGSL, PGSS). A play taken out while a save is unticked leaves its links there, and the id must not be given to the next play: the link insertion would take
         the stale row for the new play's and leave it under the old formation."""
         taken = AP.taken_ids(self.added)
-        for _label, path, _d in self._saves:
+        for label, path, _d in self._saves:
             for tables, columns in (("SETL,SETP,SGFF", (("setl", "SETL", "SETL"), ("setp", "SETP", "SETP"), ("sgff", "SGF_", "SGF_"))),
                                     ("PGPL,PGSL,PGSS", (("pgpl", "SETL", "SETL"), ("pgsl", "SETL", "SETL"), ("pgss", "SETL", "SETL")))):
                 tmpd = tempfile.mkdtemp(prefix="hc09_ids_")
@@ -8936,8 +9097,8 @@ class AddPlayDialog(tk.Toplevel):
                         fn = os.path.join(tmpd, t + ".csv")
                         if os.path.isfile(fn):
                             taken[key] = list(taken[key]) + [int(r[col]) for r in read_csv_dicts(fn) if (r.get(col) or "").strip().isdigit()]
-                except Exception:
-                    pass                                        # a save without these tables (or one that cannot be read) holds no ids to keep
+                except Exception as e:                          # a save without these tables is no problem (the export skips them); one that cannot be read is
+                    raise ValueError(f"{label} could not be read ({str(e).strip()[:120]}), so the editor cannot tell which ids it already uses. Close whatever has it open and try again; nothing was written.") from e
                 finally:
                     shutil.rmtree(tmpd, ignore_errors=True)
         return taken
@@ -9054,7 +9215,7 @@ class AddPlayDialog(tk.Toplevel):
             messagebox.showinfo("Add a play", f"{name} is in the game files (play {plyl}), {where}.\n" + "\n".join(lines) + "\n\nStart the game with a NEW career (or a career whose playbook links were written here) to find it." + ("\n\n" + note if note else "") + out_text, parent=self)
             self.designer.refresh_from_game_files(reselect=False)
 
-        app.run_in_thread_with_busy("Adding the play to the game files...", work, done, error_title="Add a play")
+        self._start_write("Adding the play to the game files...", work, done, "Add a play")
 
     def _take_out(self):
         sel = self.lst_added.curselection()
@@ -9079,7 +9240,7 @@ class AddPlayDialog(tk.Toplevel):
             self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
             self.designer.refresh_from_game_files(reselect=False)
 
-        app.run_in_thread_with_busy("Taking the play out...", work, done, error_title="Add a play")
+        self._start_write("Taking the play out...", work, done, "Add a play")
 
     def _restore(self):
         app = self.app
@@ -9096,7 +9257,7 @@ class AddPlayDialog(tk.Toplevel):
         gone = list(self.added)
 
         def work():
-            return app.game_file_restore(archives)
+            return app.game_file_restore(archives, allow_added=True)
 
         def done(result):
             self.added = []
@@ -9106,7 +9267,7 @@ class AddPlayDialog(tk.Toplevel):
             messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
             self.designer.refresh_from_game_files(reselect=True)            # the files are back as they were before the FIRST change, a Make a game play edit of the play shown included: show the play as they have it
 
-        app.run_in_thread_with_busy("Putting the game files back...", work, done, error_title="Put the game files back")
+        self._start_write("Putting the game files back...", work, done, "Put the game files back")
 
 
 class ConvertPlaysDialog(AddPlayDialog):
@@ -9122,6 +9283,7 @@ class ConvertPlaysDialog(AddPlayDialog):
             self.configure(background=p["bg"])
         self.title("Convert my plays")
         self.transient(designer)
+        make_modal(self)
         self.geometry("900x900")
         self.app, self.designer = app, designer
         self.boot = None
@@ -9274,7 +9436,7 @@ class ConvertPlaysDialog(AddPlayDialog):
                                 "were written here) to find them." + (f"\n\n{len(skipped)} play{'s' if len(skipped) != 1 else ''} could not be converted: see the list in the window." if skipped else ""), parent=self)
             self.designer.refresh_from_game_files(reselect=False)
 
-        app.run_in_thread_with_busy("Converting the plays...", work, done, error_title="Convert my plays")
+        self._start_write("Converting the plays...", work, done, "Convert my plays")
 
 
 class RenamePlaysDialog(tk.Toplevel):
@@ -9438,7 +9600,7 @@ class RenamePlaysDialog(tk.Toplevel):
 
         self._busy = True
         try:
-            self.grab_set()                                          # modal while the work runs: the Play creator and the editor cannot be used (a Save then would meet a model being read again)
+            make_modal(self)                                          # modal while the work runs: the Play creator and the editor cannot be used (a Save then would meet a model being read again)
         except tk.TclError:
             pass
         app.run_in_thread_with_busy("Renaming the play...", work, done, error_title="Rename my plays")
@@ -9489,9 +9651,11 @@ class TeamPhilosophyDialog(tk.Toplevel):
                     ttk.Label(box, text=label + ":", width=36, anchor="w").grid(row=i, column=0, sticky="w", padx=(8, 4), pady=3)
                     self._add_list_field(box, i, code)
         self.bind("<MouseWheel>", self._wheel)
+        self.bind("<Button-4>", self._wheel)
+        self.bind("<Button-5>", self._wheel)
         self.bind("<Escape>", lambda e: self.destroy())
         self._fit_to_screen(parent)
-        self.grab_set()
+        make_modal(self)
 
     def _scroll_tab(self, nb, title):
         """Add a tab whose content scrolls; returns the frame to put the fields in."""
@@ -9518,8 +9682,9 @@ class TeamPhilosophyDialog(tk.Toplevel):
             canvas = self._canvases[self._nb.index("current")]
         except (tk.TclError, IndexError):
             return "break"
+        delta = event.delta or (120 if getattr(event, "num", 0) == 4 else -120)       # X11 sends Button-4 / Button-5 and no delta
         if canvas.yview() != (0.0, 1.0):
-            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+            canvas.yview_scroll(-1 if delta > 0 else 1, "units")
         return "break"
 
     def _fit_to_screen(self, parent):
@@ -9552,6 +9717,8 @@ class TeamPhilosophyDialog(tk.Toplevel):
         cb = ttk.Combobox(box, state="readonly", width=24, textvariable=var, values=list(names))
         cb.grid(row=grid_row, column=1, sticky="w", pady=3)
         cb.bind("<MouseWheel>", self._wheel)
+        cb.bind("<Button-4>", self._wheel)
+        cb.bind("<Button-5>", self._wheel)
         self.vars[code] = var
 
     def _apply(self):
@@ -9675,7 +9842,7 @@ class PlaybookCopyDialog(tk.Toplevel):
         if preselect:
             self._select_play(preselect[1], preselect[2])
         self.bind("<Escape>", lambda e: self.destroy())
-        self.grab_set()
+        make_modal(self)
 
     def _update_target_label(self):
         d = self.data
@@ -9729,7 +9896,7 @@ class PlaybookCopyDialog(tk.Toplevel):
             rows = [(b, f"{name}  ({side.lower() if side else 'side unknown'})", b, "") for b, name, side, *_ in d.books()]
             dlg = PlaybookPickerDialog(self, "Add plays INTO which playbook?", rows, self.target)
             self.wait_window(dlg)
-            self.grab_set()
+            make_modal(self)
             if dlg.result:
                 self._set_target(dlg.result[2])
             else:
@@ -9911,7 +10078,7 @@ class PlaybookPickerDialog(tk.Toplevel):
         ent.focus_set()
         self.bind("<Return>", lambda e: self._ok())
         self.bind("<Escape>", lambda e: self.destroy())
-        self.grab_set()
+        make_modal(self)
 
     def _fill(self):
         q = " ".join(self.var.get().lower().split())
@@ -10498,6 +10665,20 @@ class PlaybookData:
         bgid, _name = self.team_book(coaches, tid, side, who)
         return self.bgid_book.get((side, bgid)) if bgid else None
 
+    def rename_books(self, renames):
+        """Give playbooks new names in place: renames = {(BGID, BOFF): name} as the Rename playbooks window writes them."""
+        for (bgid, boff), name in renames.items():
+            info = self.bgid_info.get((str(int(boff)), str(int(bgid))))
+            if not info:
+                continue
+            old, bokl = info["name"], info["bokl"]
+            info["name"] = name
+            names = self.book_names[bokl]
+            if old in names:
+                names[names.index(old)] = name
+            elif name not in names:
+                names.append(name)
+
     # ---- labels
     def book_label(self, bokl):
         names = self.book_names.get(bokl)
@@ -10643,6 +10824,7 @@ class App(tk.Tk):
 
     # ---------- Unsaved-changes tracking ----------
     def mark_dirty(self):
+        self._edit_serial = getattr(self, "_edit_serial", 0) + 1       # counts the edits, so a save can tell whether something was changed while it ran
         if not self.dirty:
             self.dirty = True
             self.title(BASE_TITLE + " *")
@@ -10698,6 +10880,9 @@ class App(tk.Tk):
         return None
 
     def on_close_request(self):
+        if getattr(self, "_busy_count", 0) > 0:
+            messagebox.showinfo("Still working", "The editor is still working (saving, loading or writing files). Wait until it is finished, then close it.")
+            return
         if self.dirty:
             choice = messagebox.askyesnocancel(
                 "Unsaved changes",
@@ -10711,16 +10896,26 @@ class App(tk.Tk):
                 except Exception as e:
                     messagebox.showerror("Save Error", str(e))
                     return  # don't close if the save failed
+                self._commit_pending_motivator_boosts()
+                skipped = list(getattr(self.model, "save_warnings", []) or [])
+                if skipped:
+                    messagebox.showwarning("Saved, but some values were not written", f"{len(skipped)} value(s) could not be written (not a number, or out of range for the field):\n" + "\n".join(skipped[:8]))
         self.destroy()
 
     # ---------- Loading feedback ----------
     def set_busy(self, text):
+        self._busy_count = getattr(self, "_busy_count", 0) + 1
+        self._busy_text = text
         self.lbl_status.configure(text=text)
         self.config(cursor="watch")
         self.update_idletasks()
 
     def clear_busy(self):
-        self.config(cursor="")
+        self._busy_count = max(0, getattr(self, "_busy_count", 0) - 1)
+        if self._busy_count == 0:
+            self.config(cursor="")
+            if self.lbl_status.cget("text") == getattr(self, "_busy_text", None):       # the busy text goes unless something else already replaced it
+                self.lbl_status.configure(text="")
 
     def run_in_thread_with_busy(self, busy_text, work_fn, on_success, error_title="Error"):
         """Runs work_fn() (e.g. a slow bridge.js export/import) on a background
@@ -10746,6 +10941,53 @@ class App(tk.Tk):
                 on_success(result_box.get("value"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _run_exclusive(self, flag, refuse_text, busy_text, work_fn, on_success, error_title="Error", on_finish=None):
+        """run_in_thread_with_busy for work that must not overlap with itself: while it runs, a second request is refused with `refuse_text` (returns False). `flag` is the name of the attribute
+        that says it is running. on_finish() is called on the main thread when it is over, whatever the outcome."""
+        if getattr(self, flag, False):
+            messagebox.showinfo(error_title, refuse_text)
+            return False
+        setattr(self, flag, True)
+
+        def release():
+            setattr(self, flag, False)
+            if on_finish:
+                on_finish()
+
+        def work():
+            try:
+                return work_fn()
+            except BaseException:
+                self.after(0, release)                     # the error is shown by run_in_thread_with_busy; the next request may start after it
+                raise
+
+        def done(value):
+            try:
+                on_success(value)
+            finally:
+                release()
+
+        self.run_in_thread_with_busy(busy_text, work, done, error_title=error_title)
+        return True
+
+    def run_game_write(self, busy_text, work_fn, on_success, error_title="Error", on_finish=None):
+        """run_in_thread_with_busy for the writers of the game files (qkl_boot.ast, and the saves they link): only ONE runs at a time (two bridge processes writing one archive can corrupt it).
+        Returns False, with a message, when another one is running."""
+        return self._run_exclusive("_game_write_running", "The game files are being written by another window. Wait until that is finished, then try again.",
+                                   busy_text, work_fn, on_success, error_title, on_finish)
+
+    def begin_game_write(self):
+        """The same one-at-a-time slot as run_game_write, for a writer that runs on the Tk thread itself (Set personnel): take it before writing, give it back with end_game_write() (in a
+        finally). Returns False, with a message, when a write started by another window is still running (two bridge processes writing qkl_boot.ast can corrupt it)."""
+        if getattr(self, "_game_write_running", False):
+            messagebox.showinfo("Game files", "The game files are being written by another window. Wait until that is finished, then try again.")
+            return False
+        self._game_write_running = True
+        return True
+
+    def end_game_write(self):
+        self._game_write_running = False
 
     # ---------- Portrait viewer (Player Editor tab) ----------
     # Read-only for now - writing a replacement portrait back into the game's
@@ -10802,7 +11044,7 @@ class App(tk.Tk):
             img_kwargs["background"] = self._ui_palette["surface"]
         # Native portrait size is 256x256 - shown full size (no thumbnail
         # downscale), so the placeholder box matches that.
-        img_label = tk.Label(frm, text="No player selected", width=256, height=256, **img_kwargs)
+        img_label = portrait_label(frm, "No player selected", **img_kwargs)
         img_label.pack(side="left", padx=8, pady=8)
 
         status_col = ttk.Frame(frm)
@@ -10840,21 +11082,21 @@ class App(tk.Tk):
         req_id = self._portrait_request_id
 
         if not PIL_AVAILABLE:
-            img_label.configure(image="", text="No image support")
+            portrait_text(img_label, "No image support")
             status_label.configure(text="Pillow (PIL) isn't installed - run: pip install Pillow")
             return
 
         if not self.get_game_ast_path():
-            img_label.configure(image="", text="No photo")
+            portrait_text(img_label, "No photo")
             status_label.configure(text="Locate your game files to view in-game portraits.")
             return
 
         if shortid is None:
-            img_label.configure(image="", text="No photo")
+            portrait_text(img_label, "No photo")
             status_label.configure(text="")
             return
 
-        img_label.configure(image="", text="Loading...")
+        portrait_text(img_label, "Loading...")
         status_label.configure(text="")
 
         def worker():
@@ -10908,11 +11150,11 @@ class App(tk.Tk):
             return
 
         if error:
-            img_label.configure(image="", text="Error")
+            portrait_text(img_label, "Error")
             status_label.configure(text=f"Couldn't load portrait: {error}")
             return
         if pil_image is None:
-            img_label.configure(image="", text="No photo\nfound")
+            portrait_text(img_label, "No photo\nfound")
             status_label.configure(text="No portrait entry matches this player's PSXP value in the archive.")
             return
 
@@ -10976,6 +11218,43 @@ class App(tk.Tk):
                 ("*Entry.selectForeground", p["accent_text"]),
                 ("*Label.background", p["bg"]),
                 ("*Label.foreground", p["text"]),
+                # Every other plain Tk widget a window can be made of takes the palette as its default too (a window or frame that sets no colour of its own was left in Windows' light grey/white
+                # in Dark Mode: windows that are a bare tk.Toplevel or hold tk.Frame / tk.Checkbutton / tk.Canvas ...). A widget that sets its own colour keeps it.
+                ("*Toplevel.background", p["bg"]),
+                ("*Frame.background", p["bg"]),
+                ("*Labelframe.background", p["bg"]),
+                ("*Labelframe.foreground", p["text"]),
+                ("*Canvas.background", p["bg"]),
+                ("*Message.background", p["bg"]),
+                ("*Message.foreground", p["text"]),
+                ("*Checkbutton.background", p["bg"]),
+                ("*Checkbutton.foreground", p["text"]),
+                ("*Checkbutton.activeBackground", p["bg"]),
+                ("*Checkbutton.activeForeground", p["text"]),
+                ("*Checkbutton.selectColor", p["surface"]),
+                ("*Checkbutton.highlightBackground", p["bg"]),
+                ("*Radiobutton.background", p["bg"]),
+                ("*Radiobutton.foreground", p["text"]),
+                ("*Radiobutton.activeBackground", p["bg"]),
+                ("*Radiobutton.activeForeground", p["text"]),
+                ("*Radiobutton.selectColor", p["surface"]),
+                ("*Radiobutton.highlightBackground", p["bg"]),
+                ("*Button.background", p["surface"]),
+                ("*Button.foreground", p["text"]),
+                ("*Button.activeBackground", p["accent"]),
+                ("*Button.activeForeground", p["accent_text"]),
+                ("*Button.highlightBackground", p["bg"]),
+                ("*Scale.background", p["bg"]),
+                ("*Scale.foreground", p["text"]),
+                ("*Scale.troughColor", p["surface"]),
+                ("*Scale.highlightBackground", p["bg"]),
+                ("*Scrollbar.background", p["surface"]),
+                ("*Scrollbar.troughColor", p["bg"]),
+                ("*Spinbox.background", p["surface"]),
+                ("*Spinbox.foreground", p["text"]),
+                ("*Spinbox.insertBackground", p["text"]),
+                ("*Spinbox.selectBackground", p["accent"]),
+                ("*Spinbox.selectForeground", p["accent_text"]),
             ):
                 self.option_add(pattern, value)
 
@@ -11095,6 +11374,12 @@ class App(tk.Tk):
             lbl.configure(background=p["bg"], foreground=p["subtle"])
         for canvas in getattr(self, "_themed_canvases", []):
             canvas.configure(background=p["bg"])
+        for win in self.winfo_children():                  # windows that are open now (Swap, Sign, the dialogs...) take the new background too; their widgets pick the colours up the next time the window is opened
+            if isinstance(win, tk.Toplevel):
+                try:
+                    win.configure(background=p["bg"])
+                except tk.TclError:
+                    pass
 
     def on_toggle_dark_mode(self):
         mode = "dark" if self.dark_mode_var.get() else "light"
@@ -11193,9 +11478,20 @@ class App(tk.Tk):
                 out[label] = f"(not known: {type(e).__name__})"
         path = self.model.db_path
         if path:
-            put("save", lambda: "{}, {} tables".format(*hc09_detect.classify_save(path)))
+            def classified():
+                try:
+                    stamp = (path, os.path.getmtime(path))
+                except OSError:
+                    stamp = None
+                held = getattr(self, "_crash_save_cache", None)
+                if stamp is not None and held and held[0] == stamp:
+                    return held[1]
+                value = ("{}, {} tables".format(*hc09_detect.classify_save(path)), hc09_detect.is_xbox_save(path))
+                self._crash_save_cache = (stamp, value)           # this runs every few seconds on the window's thread: the save is opened only when it changed
+                return value
+            put("save", lambda: classified()[0])
             put("save file", lambda: CRASH.shorten(path))
-            put("Xbox 360 save", lambda: hc09_detect.is_xbox_save(path))
+            put("Xbox 360 save", lambda: classified()[1])
             put("players loaded", lambda: len(self.model.players))
             put("unsaved changes", lambda: bool(self.dirty))
         else:
@@ -11271,10 +11567,10 @@ class App(tk.Tk):
             return                        # no timestamp: the next start tries again
         self.ui_prefs["update_checked_at"] = time.time()
         self.ui_prefs["update_info"] = result if status == "update" else None
+        if status == "update" and force:
+            self.ui_prefs.pop("update_skip", None)         # before the save: a check the person asked for shows the version again, also after a restart
         save_ui_prefs(self.ui_prefs)
         if status == "update":
-            if force:
-                self.ui_prefs.pop("update_skip", None)
             self._show_update_banner(result)
         else:
             self._hide_update_banner()
@@ -11366,7 +11662,7 @@ class App(tk.Tk):
         self.run_in_thread_with_busy("Updating the editor...", work, done, error_title="Update")
 
     def _restart_editor(self, root):
-        subprocess.Popen([sys.executable] + sys.argv, cwd=root)
+        subprocess.Popen([sys.executable, os.path.abspath(__file__)] + sys.argv[1:], cwd=root)      # argv[0] may be relative to the folder the editor was started from
         self.destroy()
 
     # ---------- UI layout ----------
@@ -11438,7 +11734,7 @@ class App(tk.Tk):
         x = self.winfo_rootx() + max(20, (self.winfo_width() - dlg.winfo_reqwidth()) // 2)
         y = self.winfo_rooty() + max(20, (self.winfo_height() - dlg.winfo_reqheight()) // 2)
         dlg.geometry(f"+{x}+{y}")
-        dlg.grab_set()
+        make_modal(dlg)
         dlg.focus_set()
 
     def _build_ui(self):
@@ -11790,7 +12086,13 @@ class App(tk.Tk):
         ttk.Label(top, text="Filter by team:").pack(side="left", padx=(16, 4))
         self.pick_filter_var = tk.StringVar()
         ttk.Entry(top, textvariable=self.pick_filter_var, width=20).pack(side="left")
-        self.pick_filter_var.trace_add("write", lambda *_a: self.refresh_picks())
+        self._pick_filter_job = None
+
+        def pick_filter_changed(*_a):
+            if self._pick_filter_job is not None:
+                self.after_cancel(self._pick_filter_job)
+            self._pick_filter_job = self.after(200, lambda: (setattr(self, "_pick_filter_job", None), self.refresh_picks()))
+        self.pick_filter_var.trace_add("write", pick_filter_changed)
         ttk.Button(top, text="Clear", command=lambda: self.pick_filter_var.set("")).pack(side="left", padx=(6, 0))
 
         help_text = (
@@ -12797,7 +13099,8 @@ class App(tk.Tk):
         recent-files list, so all three stay in sync. Runs the slow bridge.js
         export on a background thread so the window stays responsive instead
         of Windows marking it "(Not Responding)" during the load."""
-        self.run_in_thread_with_busy(
+        self._run_exclusive(
+            "_file_busy", "The editor is still saving or loading a save. Wait until that is finished, then try again.",
             f"Loading {recent_file_display(db_path)}...",
             lambda: self.model.load_all_from_db(db_path),
             lambda _result: self._on_load_db_path_success(db_path),
@@ -12878,10 +13181,6 @@ class App(tk.Tk):
         path = self._recent_display_to_path.get(display)
         if not path:
             return
-        if not os.path.isfile(path):
-            messagebox.showerror("File not found", f"This save no longer exists:\n{path}")
-            self._refresh_recent_files_ui(load_recent_files())
-            return
         self._open_save_path(path)
 
     def _open_save_path(self, path):
@@ -12905,18 +13204,27 @@ class App(tk.Tk):
         if hc09_detect is None:
             return []
         roots = hc09_detect.emulator_search_roots() if search else []
-        return hc09_detect.candidate_rpcs3_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
+        return hc09_detect.candidate_rpcs3_dirs(load_recent_files(), self._extra_dirs(), roots)
 
     def _detect_xenia_dirs(self, search=False):
         if hc09_detect is None:
             return []
         roots = hc09_detect.emulator_search_roots() if search else []
-        return hc09_detect.candidate_xenia_dirs(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []), roots)
+        return hc09_detect.candidate_xenia_dirs(load_recent_files(), self._extra_dirs(), roots)
+
+    def _extra_dirs(self):
+        """The folders the person added to the Saves search that still exist (one that was deleted or sits on an unplugged drive is dropped from the list, so detection does not walk it every time)."""
+        dirs = list(self.ui_prefs.get("extra_rpcs3_dirs", []))
+        kept = [d for d in dirs if os.path.isdir(d)]
+        if len(kept) != len(dirs):
+            self.ui_prefs["extra_rpcs3_dirs"] = kept
+            save_ui_prefs(self.ui_prefs)
+        return kept
 
     def _detect_pcport_roots(self):
         if hc09_detect is None:
             return []
-        return hc09_detect.candidate_pcport_roots(load_recent_files(), self.ui_prefs.get("extra_rpcs3_dirs", []))
+        return hc09_detect.candidate_pcport_roots(load_recent_files(), self._extra_dirs())
 
     def detected_saves(self, search=False):
         """The career saves found in RPCS3's savedata folders, in Xenia's content folders (those of the recent saves, any the user added, the usual places and, if asked,
@@ -12983,16 +13291,20 @@ class App(tk.Tk):
             messagebox.showinfo("Nothing to save", "Load a save file first.")
             return
 
-        self.run_in_thread_with_busy(
+        edits = getattr(self, "_edit_serial", 0)
+        self._run_exclusive(
+            "_file_busy", "The editor is still saving or loading a save. Wait until that is finished, then try again.",
             "Saving...",
             self.model.save_to_db,
-            self._on_save_success,
+            lambda backup: self._on_save_success(backup, edits),
             error_title="Save Error",
         )
 
-    def _on_save_success(self, backup_path):
-        self._commit_pending_motivator_boosts()
-        self.clear_dirty()
+    def _on_save_success(self, backup_path, edit_serial=None):
+        unchanged = edit_serial is None or edit_serial == getattr(self, "_edit_serial", 0)       # nothing was edited while the save ran
+        if unchanged:
+            self._commit_pending_motivator_boosts()
+            self.clear_dirty()                             # (an edit made meanwhile is not in the file: the '*' stays and the boost stays pending)
         if self._playbook_data is not None:
             # Saving moved the file's timestamp, but what the Playbooks tab holds is exactly what was
             # just written - re-stamp it so the next Add plays isn't refused as "the save was reloaded".
@@ -13053,11 +13365,12 @@ class App(tk.Tk):
             self.on_team_select()
 
     def _prompt_first_team_choice(self):
+        self.refresh_players_for_team()                    # the list shows the players of THIS save while the window is open (it held the rows of the save before)
         p = self._ui_palette
         dlg = tk.Toplevel(self, background=p["bg"] if p else None)
         dlg.title("Choose Your Team")
         dlg.transient(self)
-        dlg.grab_set()
+        make_modal(dlg)
         dlg.geometry("420x620")
         dlg.minsize(380, 480)
 
@@ -13096,10 +13409,10 @@ class App(tk.Tk):
 
         btn_frm = ttk.Frame(dlg)
         btn_frm.pack(fill="x", padx=12, pady=(0, 12))
-        ttk.Button(
-            btn_frm, text="Skip",
-            command=lambda: (dlg.destroy(), self._activate_team_by_id(SIGN_DEST_TEAMS[0][0])),
-        ).pack(side="left")
+        skip = lambda: (dlg.destroy(), self._activate_team_by_id(SIGN_DEST_TEAMS[0][0]))
+        dlg.protocol("WM_DELETE_WINDOW", skip)             # the X and Escape are Skip
+        dlg.bind("<Escape>", lambda e: skip())
+        ttk.Button(btn_frm, text="Skip", command=skip).pack(side="left")
         ttk.Button(btn_frm, text="Select", style="Accent.TButton", command=choose).pack(side="right")
 
     def on_team_select(self, event=None):
@@ -13110,6 +13423,8 @@ class App(tk.Tk):
         tid = txt.split(":", 1)[0].strip()
         self.selected_team_id.set(tid)
         self._pb_team_manual = False   # the Playbooks tab follows the newest team choice
+        if (self.player_search_var.get() or "").strip():
+            self.player_search_var.set("")                 # picking a team shows that team: the search is over
         self.refresh_players_for_team()
 
         per_save = self.ui_prefs.setdefault("per_save", {})
@@ -13136,6 +13451,10 @@ class App(tk.Tk):
         tid = self.selected_team_id.get().strip()
         if not tid:
             messagebox.showinfo("No team", "Select a team first.")
+            return
+
+        if not self.model.team_col:
+            messagebox.showwarning("No team column", "Team column not detected in play.csv.")
             return
 
         team_name = TEAM_NAMES.get(tid, tid)
@@ -13209,9 +13528,8 @@ class App(tk.Tk):
                     continue
                 row["SKPT"] = str(STAFF_SKPT_MAX_VALUE)
                 for f in field_names:
-                    if f in headers:
-                        _, hi = STAFF_NUMERIC_FIELDS.get(f, (0, 0))
-                        row[f] = str(hi)
+                    if f in headers and f in STAFF_NUMERIC_FIELDS:
+                        row[f] = str(STAFF_NUMERIC_FIELDS[f][1])
                 count += 1
             return count
 
@@ -13262,7 +13580,7 @@ class App(tk.Tk):
             self.after_cancel(self._player_search_after_id)
         self._player_search_after_id = self.after(150, self._run_player_search)
 
-    def _run_player_search(self):
+    def _run_player_search(self, preselect_model_idx=None):
         self._player_search_after_id = None
         query = (self.player_search_var.get() or "").strip().lower()
 
@@ -13305,8 +13623,9 @@ class App(tk.Tk):
         self.lbl_players_header.configure(text=f"Search Results ({len(matches)})")
 
         if self.lst_players.size() > 0:
-            self.lst_players.selection_set(0)
-            self.lst_players.activate(0)
+            row = self._player_index_map.index(preselect_model_idx) if preselect_model_idx in self._player_index_map else 0
+            self.lst_players.selection_set(row)
+            self.lst_players.activate(row)
             self.on_player_select()
 
     def on_clear_player_search(self):
@@ -13353,6 +13672,9 @@ class App(tk.Tk):
         if preselect_model_idx is None:
             preselect_model_idx = self.selected_player_index
 
+        if (self.player_search_var.get() or "").strip():   # the list shows search results: refresh those (and keep the player), not the team
+            self._run_player_search(preselect_model_idx)
+            return
         self.lbl_players_header.configure(text="Players on Team (play.csv)")
         self.lst_players.delete(0, tk.END)
         self.selected_player_index = None
@@ -13455,6 +13777,10 @@ class App(tk.Tk):
 
         fn = sanitize_name(fn_raw, max_len=15)
         ln = sanitize_name(ln_raw, max_len=15)
+
+        if not fn or not ln:
+            messagebox.showerror("Name", "The first and the last name cannot be empty (only letters, spaces, apostrophes, hyphens and periods are kept). Nothing was changed.")
+            return
 
         if fn != fn_raw.strip() or ln != ln_raw.strip():
             messagebox.showinfo(
@@ -13562,11 +13888,17 @@ class App(tk.Tk):
         new_cur = self.ent_new_cur.get().strip()
         new_max = self.ent_new_max.get().strip()
 
+        try:                                               # both numbers are read first: an invalid one changes nothing
+            cur = int(new_cur) if new_cur != "" and cur_col else None
+            mx = int(new_max) if new_max != "" and max_col else None
+        except ValueError:
+            messagebox.showerror("Apply Error", "The current value and the max must be whole numbers.")
+            return
         try:
-            if new_cur != "" and cur_col:
-                r[cur_col] = str(clamp_stat(int(new_cur)))
-            if new_max != "" and max_col:
-                r[max_col] = str(clamp_stat(int(new_max)))
+            if cur is not None:
+                r[cur_col] = str(clamp_stat(cur))
+            if mx is not None:
+                r[max_col] = str(clamp_stat(mx))
 
             self._enforce_current_le_max(r, cur_col, max_col)
             self.refresh_stats_for_player()
@@ -13576,30 +13908,8 @@ class App(tk.Tk):
             messagebox.showerror("Apply Error", str(e))
 
     def on_apply_both(self):
-        if self.selected_player_index is None or not self.selected_stat_key:
-            return
-        base_key = self.selected_stat_key
-        r = self.model.players[self.selected_player_index]
-        headers_set = set(self.model.player_headers)
-
-        cur_col = base_key if base_key in headers_set else None
-        max_col = self.model.max_map.get(base_key)
-
-        new_cur = self.ent_new_cur.get().strip()
-        new_max = self.ent_new_max.get().strip()
-
-        try:
-            if new_max != "" and max_col:
-                r[max_col] = str(clamp_stat(int(new_max)))
-            if new_cur != "" and cur_col:
-                r[cur_col] = str(clamp_stat(int(new_cur)))
-
-            self._enforce_current_le_max(r, cur_col, max_col)
-            self.refresh_stats_for_player()
-            self.tree_stats.selection_set(base_key)
-            self.tree_stats.see(base_key)
-        except Exception as e:
-            messagebox.showerror("Apply Error", str(e))
+        """Kept for the button that calls it: the same as Apply (the order of the two writes cannot matter, the current value is held to the max afterwards)."""
+        self.on_apply_stat()
 
     # ---------- Motivator Boost ----------
     def _commit_pending_motivator_boosts(self):
@@ -13618,7 +13928,26 @@ class App(tk.Tk):
     def get_current_save_key(self):
         """Key used to namespace boost history per save (folder name, since
         every save file is literally named USR-DATA)."""
-        return recent_file_display(self.model.db_path) if self.model.db_path else "unknown"
+        path = self.model.db_path
+        if not path:
+            return "unknown"
+        key = os.path.normcase(os.path.abspath(path))
+        self._adopt_old_save_key(key, recent_file_display(path))
+        return key
+
+    def _adopt_old_save_key(self, key, old_key):
+        """Settings and boost history used to be kept under the folder name only: the first time a save is asked for under its path, what was kept under its folder name is copied to it."""
+        done = self.__dict__.setdefault("_adopted_save_keys", set())
+        if key in done:
+            return
+        done.add(key)
+        per_save = self.ui_prefs.setdefault("per_save", {})
+        if old_key in per_save and key not in per_save:
+            per_save[key] = json.loads(json.dumps(per_save[old_key]))
+        state = getattr(self, "motivator_state", None)
+        boosts = state.setdefault("boosts", {}) if isinstance(state, dict) else {}
+        if old_key in boosts and key not in boosts:
+            boosts[key] = json.loads(json.dumps(boosts[old_key]))
 
     def get_player_boost_history(self, pgid):
         save_key = self.get_current_save_key()
@@ -13639,7 +13968,7 @@ class App(tk.Tk):
         dlg = tk.Toplevel(self)
         dlg.title("Apply Motivator Boost")
         dlg.transient(self)
-        dlg.grab_set()
+        make_modal(dlg)
 
         frm = ttk.Frame(dlg, padding=12)
         frm.pack(fill="both", expand=True)
@@ -13732,7 +14061,9 @@ class App(tk.Tk):
         for base_key, max_col in self.model.max_map.items():
             if base_key in MOTIVATOR_EXCLUDED_BASE_KEYS and not include_excluded:
                 continue
-            cur_val = safe_int(r.get(max_col, "")) or 0
+            cur_val = safe_int(r.get(max_col, ""))
+            if cur_val is None:                            # an empty or non-numeric cell is not a potential: nothing is written into it
+                continue
             r[max_col] = str(clamp_stat(cur_val + amount))
 
         pgid = (r.get("PGID", "") or "").strip()
@@ -13765,7 +14096,7 @@ class App(tk.Tk):
         dlg = tk.Toplevel(self)
         dlg.title("Apply Motivator Boost to Team")
         dlg.transient(self)
-        dlg.grab_set()
+        make_modal(dlg)
 
         frm = ttk.Frame(dlg, padding=12)
         frm.pack(fill="both", expand=True)
@@ -13902,7 +14233,14 @@ class App(tk.Tk):
     # ---- Play designer (a prototype of Create-A-Play outside the game; see hc09_plays.py and docs/hc09_play_data.md)
     PLAY_TABLES = "SETL,PBPL,PLYS,PSLO,PSLD,ARTO,ARTD,PLPD,PLRD,PLCM,SETG,SGFF,FORM,PBAI,SPKF,SPKG"
 
+    _play_library_lock = threading.Lock()
+
     def load_play_library(self, archives=None):
+        """The play library read from the game files. Two loads share one cache folder, so the second waits for the first."""
+        with self._play_library_lock:
+            return self._load_play_library(archives)
+
+    def _load_play_library(self, archives=None):
         """Read the game's plays from the archives (the bridge's play-sets-scan): the master play database holds all of them. About a second; may run
         off the main thread. Needs the archives' paths (found beforehand on the main thread, as that may ask the user)."""
         archives = archives or self._personnel_archives()
@@ -13963,12 +14301,14 @@ class App(tk.Tk):
         names = ("rpcs3", "xenia", "xenia_canary", "xenia_edge", "xenia-edge") + (hc09_detect.PCPORT_PROGRAMS if hc09_detect is not None else ("hc09", "hc09-launcher"))
         try:
             if os.name == "nt":
-                out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=15, creationflags=NO_WINDOW)
+                out = subprocess.run(["tasklist"], capture_output=True, text=True, encoding="oem", errors="replace", timeout=15, creationflags=NO_WINDOW)
                 running = {line.split()[0].lower() for line in out.stdout.splitlines() if line.strip()}
                 return any(n + ".exe" in running for n in names)
             return any(subprocess.run(["pgrep", "-x", n], capture_output=True, timeout=15, creationflags=NO_WINDOW).returncode == 0 for n in names)
-        except (OSError, subprocess.SubprocessError):
-            return False
+        except (OSError, subprocess.SubprocessError, LookupError, ValueError):
+            # the check itself failed (a timeout on a busy machine, say): that is not "nothing is running". The person is asked.
+            return not messagebox.askyesno("Is the game closed?", "The editor could not check whether RPCS3, Xenia or HC09 for PC is running.\n\nIs the game, and the emulator, closed? "
+                                           "Answer Yes only if you are sure: they rewrite the saves they have open.")
 
     def _career_open(self, path):
         """Is this file the save that is loaded in the editor?"""
@@ -14019,8 +14359,33 @@ class App(tk.Tk):
             shutil.copy2(old, os.path.join(dest, name, "USR-DATA"))
         with open(os.path.join(dest, "info.json"), "w", encoding="utf-8") as f:
             json.dump({"profile": profile_path, "career": career_path, "play": result.get("name", "")}, f, indent=1)
-        for name, new, old in pairs:
-            shutil.copy2(new, old)
+        staged = []
+        try:
+            for name, new, old in pairs:
+                tmp = old + ".hc09-new"                                # beside the target: the last step is then a rename on the same drive
+                shutil.copy2(new, tmp)
+                staged.append((name, tmp, old))
+            done = []
+            try:
+                for name, tmp, old in staged:
+                    os.replace(tmp, old)
+                    done.append((name, old))
+            except Exception as e:
+                put_back = []
+                for name, old in done:                                 # what was already replaced goes back from the copy made first
+                    try:
+                        shutil.copy2(os.path.join(dest, name, "USR-DATA"), old)
+                        put_back.append(name)
+                    except Exception:
+                        pass
+                raise RuntimeError(f"The files could not be put into your game ({e}). " + (f"What was already replaced ({' and '.join(put_back)}) was put back. " if put_back else "") +
+                                   f"Your own files are saved in {dest}; nothing is lost.") from e
+        finally:
+            for _name, tmp, _old in staged:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
         self._reload_if_open(career_path)
         return dest
 
@@ -14039,10 +14404,16 @@ class App(tk.Tk):
             info = json.load(f)
         if self._career_open(info["career"]) and self.dirty:
             raise RuntimeError("The career that is open in the editor has unsaved changes. Save them or throw them away (Reload from File), then try again.")
+        safety = os.path.join(self.TEST_BACKUP_DIR, "before-put-back-" + time.strftime("%Y%m%d-%H%M%S"))      # no info.json in it: it is not offered as a backup to put back
+        for name in ("profile", "career"):
+            if os.path.isfile(info[name]):
+                os.makedirs(os.path.join(safety, name), exist_ok=True)
+                shutil.copy2(info[name], os.path.join(safety, name, "USR-DATA"))               # what is about to be replaced (a season played since, say) is kept
         for name in ("profile", "career"):
             shutil.copy2(os.path.join(dest, name, "USR-DATA"), info[name])
         self._reload_if_open(info["career"])
         info["folder"] = dest
+        info["safety"] = safety
         return info
 
     def install_blocker(self, career_path):
@@ -14261,7 +14632,7 @@ class App(tk.Tk):
             f.write(summary["message"] + "\n")
         return summary
 
-    def _append_and_import(self, db_path, new_rows, tables_headers, check_capacity=True):
+    def _append_and_import(self, db_path, new_rows, tables_headers):
         """Append rows ({table: [row dicts]}) to the tables of a save file with the bridge's append import; raises unless every table was written."""
         tmp = tempfile.mkdtemp(prefix="hc09_append_")
         try:
@@ -14326,8 +14697,6 @@ class App(tk.Tk):
                               "USR-DATA files over them, start the game, load the career and look in the playbook under Created Plays.")
         if summary.get("left_out"):
             summary["message"] += "\n\nNot copied into the career (their set, play, slot or group number is already used there, or is one of the game's own sets): " + ", ".join(summary["left_out"]) + "."
-        if summary.get("career_linked") is False:
-            summary["message"] += "\n\nNote: this career does not link the play in any playbook, so it will not show in this career (it was changed in the profile)."
         with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
             f.write(summary["message"] + "\n")
         return summary
@@ -14359,8 +14728,9 @@ class App(tk.Tk):
             raise RuntimeError("The game files already have these values.")
         apply_personnel_targets(self.model, targets, self._personnel_backup_dir(), mode=mode)
         self._forget_playbook_names()
+        self._book_names_rows = None
         if changes["name"]:
-            self.reload_book_play_names(archives[0])
+            self._book_names_rows = self.reload_book_play_names(archives[0])
         return targets, report
 
     def _entry_hint(self, boot_ast, table):
@@ -14403,7 +14773,8 @@ class App(tk.Tk):
         self._refuse_write_to_iso_copy(*archives)
         if books is None:
             targets, report = self.game_file_apply(GF.name_only_changes(lib, plyl, name), archives)
-            return targets, report, [], self.reload_book_play_names(archives[0])
+            rows = getattr(self, "_book_names_rows", None)          # game_file_apply read them already
+            return targets, report, [], rows if rows is not None else self.reload_book_play_names(archives[0])
         os.makedirs(self.GAMEFILE_CACHE_DIR, exist_ok=True)
         names_entry, names_rows = self._book_name_rows(archives[0], self.GAMEFILE_CACHE_DIR)
         targets, report, missing = GF.book_name_targets(names_entry, names_rows, plyl, books, name)
@@ -14413,7 +14784,7 @@ class App(tk.Tk):
         self._forget_playbook_names()                              # the Playbooks tab's data holds the old names: it reads them again at its next use
         return targets, report, missing, self.reload_book_play_names(archives[0])
 
-    def game_file_restore(self, archives):
+    def game_file_restore(self, archives, allow_added=False):
         """Write every backed-up entry of the play databases back (the Set personnel tool shares the backups); returns how many were put back."""
         self._refuse_write_to_iso_copy(*archives)
         copies, cache = self.game_file_copies(archives)
@@ -14430,7 +14801,7 @@ class App(tk.Tk):
             pass
         holder = _Copies()
         holder.copies = copies
-        res = restore_personnel_files(self.model, holder, self._personnel_backup_dir())
+        res = restore_personnel_files(self.model, holder, self._personnel_backup_dir(), allow_added=allow_added)
         self._forget_playbook_names()
         self.reload_book_play_names(archives[0])                       # the playbook names may be as they were before a rename: the editor reads them again
         return sum(1 for r in res.get("results", []) if r.get("restored"))
@@ -14447,7 +14818,7 @@ class App(tk.Tk):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def _forget_playbook_names(self):
+    def _forget_playbook_names(self, keep_data=False):
         """The cached copy of the playbook names, sets, formations and plays is out of date (the game files were written: a rename, an added play, a changed play, put back): the Playbooks tab
         reads all of it again from the game files at its next use."""
         for name in PLAYBOOK_NAME_FILES + (PLAYBOOK_PLAYNAMES_FILE,):
@@ -14455,7 +14826,8 @@ class App(tk.Tk):
                 os.remove(os.path.join(PLAYBOOK_CACHE_DIR, name))
             except OSError:
                 pass
-        self._playbook_data = None
+        if not keep_data:                                  # (a rename of playbooks only changes names: App._apply_book_renames updates the loaded data in place)
+            self._playbook_data = None
 
     def rename_playbooks_apply(self, boot_ast, renames):
         """Write {(BGID, BOFF): new name} into the game's PLAB (bridge entry-patch: the entry is checked before it is written and backed up the first time). Returns (playbooks renamed, the PLAB rows read
@@ -14466,7 +14838,7 @@ class App(tk.Tk):
         if not edits:
             raise RuntimeError("The game files already have these names.")
         apply_personnel_targets(self.model, [PN.target_for(entry, edits)], self._personnel_backup_dir())
-        self._forget_playbook_names()
+        self._forget_playbook_names(keep_data=True)
         return len(edits), self.playbook_rows_for_rename(boot_ast)[0]
 
     def rename_playbooks_restore(self, boot_ast):
@@ -14476,6 +14848,17 @@ class App(tk.Tk):
         res = apply_personnel_targets(self.model, [PN.restore_target_for(entry)], self._personnel_backup_dir(), mode="restore")
         self._forget_playbook_names()
         return any(r.get("restored") for r in res.get("results", [])), self.playbook_rows_for_rename(boot_ast)[0]
+
+    def _apply_book_renames(self, renames):
+        """After Rename playbooks: the new names in the Playbooks data that is loaded ({(BGID, BOFF): name}), so nothing is reloaded (a reload asks about, or drops, unsaved playbook edits)."""
+        data = self._playbook_data
+        if data is None:
+            return
+        data.rename_books(renames)
+        try:
+            self._fill_playbook_books()
+        except Exception:
+            pass
 
     def on_open_rename_playbooks(self):
         if PN is None:
@@ -14525,7 +14908,8 @@ class App(tk.Tk):
         """{playbook (BOKL): the formation id (PBFM) the playbook gives the set}: the PGSL rows of the set in the user-profile template of the game (qkl_boot.ast entry 47)."""
         cache = os.path.join(self.GAMEFILE_CACHE_DIR, "pgsl")
         shutil.rmtree(cache, ignore_errors=True)
-        self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PGSL", "--top-index", "47", "--require-fields", "BOKL,SETL,PBFM", "--require-rows", "--out-dir", cache])
+        roles = self.model.run_bridge(["add-play-layout", "--ast", boot_ast]).get("roles") or {}
+        self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PGSL", "--top-index", str(roles.get("47", 47)), "--require-fields", "BOKL,SETL,PBFM", "--require-rows", "--out-dir", cache])
         return {int(r["BOKL"]): int(r["PBFM"]) for r in read_csv_dicts(os.path.join(cache, "pgsl.csv")) if int(r["SETL"]) == int(setl)}
 
     def add_play_state(self, boot_ast):
@@ -14726,6 +15110,12 @@ class App(tk.Tk):
         )
         if path and path.lower().endswith(".iso"):
             return self._boot_from_iso(path)
+        if path and os.path.basename(path).lower() != BOOT_AST_FILENAME.lower():
+            messagebox.showerror(f"{feature}", f"That file is {os.path.basename(path)}, not {BOOT_AST_FILENAME}. Pick {BOOT_AST_FILENAME} (PS3_GAME/USRDIR, or next to default.xex) or the game's disc image.")
+            return ""
+        if path:
+            self.ui_prefs["boot_ast_path"] = path          # only needed once
+            save_ui_prefs(self.ui_prefs)
         return path or ""
 
     ISO_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "iso")
@@ -14738,7 +15128,7 @@ class App(tk.Tk):
         db = getattr(getattr(self, "model", None), "db_path", None) or ""         # no model yet when this is asked at start
         install = hc09_detect.recomp_install_of(db) if db else None
         own = hc09_detect.recomp_iso(install) if install else ""
-        isos = hc09_detect.find_recomp_isos(([db] if db else []) + list(load_recent_files()), self.ui_prefs.get("extra_rpcs3_dirs", []))
+        isos = hc09_detect.find_recomp_isos(([db] if db else []) + list(load_recent_files()), self._extra_dirs())
         return own, isos
 
     def _recomp_disc_image(self):
@@ -15055,7 +15445,7 @@ class App(tk.Tk):
         sorted_picks = sorted(
             enumerate(self.model.picks),
             key=lambda item: (
-                int((item[1].get(DRAFT_PICK_ID, "") or "").strip() or "99999"),
+                (t if (t := safe_int(item[1].get(DRAFT_PICK_ID, ""))) is not None else 99999),
                 y if (y := safe_int(item[1].get(DRAFT_PICK_YEAR, ""))) is not None else 999,
                 safe_int(item[1].get(DRAFT_PICK_NUM, "")) or 0,
             )
@@ -15146,7 +15536,7 @@ class App(tk.Tk):
 
         dest_tid = self.pick_dest_combo.get_tid()
         if not dest_tid:
-            messagebox.showerror("Unknown team", f"'{self.pick_dest_combo.combo.get()}' doesn't match any team.")
+            messagebox.showerror("Unknown team", self.pick_dest_combo.unknown_message())
             return
 
         # See the investigation log above _build_picks_tab - confirmed working
@@ -15302,13 +15692,21 @@ class App(tk.Tk):
         self._max_staff_row_fields(staff_list[idx], field_names)
         return iid
 
+    def _set_staff_skpt_max(self, rows, iid):
+        """SKPT of the selected staff row to its maximum (iid as _max_out_staff_skills returns it)."""
+        try:
+            row = rows[int(iid)]
+        except (TypeError, ValueError, IndexError):
+            return
+        if "SKPT" in row:
+            row["SKPT"] = str(STAFF_SKPT_MAX_VALUE)
+
     def _max_staff_row_fields(self, row, field_names):
         """Set a staff row's skill fields to their maximums."""
         headers = set(row.keys())
         for field in field_names:
-            if field in headers:
-                _, hi = STAFF_NUMERIC_FIELDS.get(field, (0, 0))
-                row[field] = str(hi)
+            if field in headers and field in STAFF_NUMERIC_FIELDS:
+                row[field] = str(STAFF_NUMERIC_FIELDS[field][1])
 
     def on_max_all_coaches(self):
         """Max out every coach the Coach tab is showing (My Team: the whole staff): the confirmed skills and
@@ -15347,8 +15745,9 @@ class App(tk.Tk):
     def set_trainer_skpt_to_max(self):
         """Auto-fill trainer SKPT entry field with maximum value (131071) and max out this trainer's skills."""
         self.ent_trainer_skpt.delete(0, tk.END)
-        self.ent_trainer_skpt.insert(0, "131071")
+        self.ent_trainer_skpt.insert(0, str(STAFF_SKPT_MAX_VALUE))
         iid = self._max_out_staff_skills(self.tree_trainer, self.model.trainers, TRAINER_MAXABLE_SKILL_FIELDS)
+        self._set_staff_skpt_max(self.model.trainers, iid)     # in the row: re-selecting it after the refresh refills the box from the row
         self.refresh_trainer()
         self._reselect(self.tree_trainer, iid)
 
@@ -15356,15 +15755,16 @@ class App(tk.Tk):
         """Auto-fill coach SKPT entry field with maximum value (131071) and max out this
         coach's skills (including Development, for whichever position buckets are populated)."""
         self.ent_coach_skpt.delete(0, tk.END)
-        self.ent_coach_skpt.insert(0, "131071")
+        self.ent_coach_skpt.insert(0, str(STAFF_SKPT_MAX_VALUE))
         iid = self._max_out_staff_skills(self.tree_coach, self.model.coaches, COACH_MAXABLE_SKILL_FIELDS)
+        self._set_staff_skpt_max(self.model.coaches, iid)
 
         sel = self.tree_coach.selection()
         if sel:
             try:
                 self._max_out_coach_development(int(sel[0]))
-            except Exception:
-                pass
+            except Exception as e:                         # a coach without development rows is handled inside; anything else is said
+                messagebox.showerror("Max out", f"The skills were maxed, but the development values could not be: {e}")
 
         self.refresh_coach()
         self._reselect(self.tree_coach, iid)
@@ -15403,15 +15803,16 @@ class App(tk.Tk):
         (Trade/Contract Negotiation, plus Potential Evaluation and Rookie Scouting for all 10
         position buckets if populated)."""
         self.ent_gm_skpt.delete(0, tk.END)
-        self.ent_gm_skpt.insert(0, "131071")
+        self.ent_gm_skpt.insert(0, str(STAFF_SKPT_MAX_VALUE))
         iid = self._max_out_staff_skills(self.tree_gm, self.model.gms, GM_MAXABLE_SKILL_FIELDS)
+        self._set_staff_skpt_max(self.model.gms, iid)
 
         sel = self.tree_gm.selection()
         if sel:
             try:
                 self._max_out_gm_potential_eval(int(sel[0]))
-            except Exception:
-                pass
+            except Exception as e:                         # a GM without scouting rows is handled inside; anything else is said
+                messagebox.showerror("Max out", f"The skills were maxed, but the scouting values could not be: {e}")
 
         self.refresh_gm()
         self._reselect(self.tree_gm, iid)
@@ -16139,6 +16540,10 @@ class App(tk.Tk):
             def pick(code):
                 if code == cur_code:
                     return
+                tgid = (self.model.coaches[idx].get("TGID", "") or "").strip()
+                if code == "0" and any(i != idx and (c.get("TGID", "") or "").strip() == tgid and (c.get("COPS", "") or "").strip() == "0" for i, c in enumerate(self.model.coaches)):
+                    if not messagebox.askyesno("Second head coach", "This team already has a head coach. The Playbooks tab and the team playbook code take one head coach per team, so a second one can name the wrong playbook. Make this coach a head coach anyway?"):
+                        return
                 self.model.coaches[idx]["COPS"] = code
                 self.mark_dirty()
                 self.refresh_coach()
@@ -16210,6 +16615,8 @@ class App(tk.Tk):
                         lo, hi = GM_ROOKIE_SCOUTING_MIN_VALUE, GM_ROOKIE_SCOUTING_MAX_VALUE
                         field = GM_ROOKIE_SCOUTING_MAX_FIELD if is_max else GM_ROOKIE_SCOUTING_CUR_FIELD
                     v = max(lo, min(hi, v))
+                    if v != orig_v:
+                        messagebox.showinfo("Value adjusted", f"{orig_v} is outside the range {lo} to {hi} of this field, so {v} was stored.")
                     row = pe_rows.get(bucket)
                     if row is None:
                         return
@@ -16223,6 +16630,8 @@ class App(tk.Tk):
                     # coach row via PNid, looked up by each row's own PPGR field
                     # (see get_coach_development_rows / PPGR_TO_POSITION).
                     v = max(COACH_DEV_MIN_VALUE, min(COACH_DEV_MAX_VALUE, v))
+                    if v != orig_v:
+                        messagebox.showinfo("Value adjusted", f"{orig_v} is outside the range {COACH_DEV_MIN_VALUE} to {COACH_DEV_MAX_VALUE} of this field, so {v} was stored.")
                     coach_row = self.model.coaches[idx]
                     dev_rows = self.model.get_coach_development_rows(coach_row.get("PNid"))
                     if not dev_rows:
@@ -16244,6 +16653,8 @@ class App(tk.Tk):
                 # Determine clamp range
                 lo, hi = STAFF_NUMERIC_FIELDS.get(colname, (0, 131071))
                 v = max(lo, min(hi, v))
+                if v != orig_v:
+                    messagebox.showinfo("Value adjusted", f"{orig_v} is outside the range {lo} to {hi} of {colname}, so {v} was stored.")
 
                 target = None
                 if tree is self.tree_trainer:
@@ -16268,7 +16679,7 @@ class App(tk.Tk):
                 elif tree is self.tree_gm:
                     self.refresh_gm()
             except Exception as e:
-                messagebox.showerror("Invalid SKPT", str(e))
+                messagebox.showerror(f"Invalid {colname}", f"{colname} takes a whole number ({e}).")
 
         entry.bind("<Return>", lambda e: finish(True))
         entry.bind("<FocusOut>", lambda e: finish(True))
@@ -16353,7 +16764,10 @@ class App(tk.Tk):
         col = self.cmb_raw_col.get().strip()
         if not col:
             return
-        val = self.ent_raw_val.get()
+        val = self.ent_raw_val.get().strip()
+        if safe_int(self.model.players[self.selected_player_index].get(col, "")) is not None and safe_int(val) is None:
+            messagebox.showerror("Raw column", f"{col} holds whole numbers for this player: '{val}' is not one, so nothing was changed.")
+            return
         self.model.players[self.selected_player_index][col] = val
         self.refresh_stats_for_player()
         self.refresh_players_for_team()
@@ -16378,9 +16792,10 @@ _MUTATING_APP_METHODS = [
 
 def _wrap_mutating(method):
     def wrapped(self, *args, **kwargs):
-        result = method(self, *args, **kwargs)
-        self.mark_dirty()
-        return result
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self.mark_dirty()                              # also when it raised after part of the edit: marking too much is harmless, marking too little loses work
     wrapped.__name__ = method.__name__
     return wrapped
 
@@ -16487,8 +16902,8 @@ if __name__ == "__main__":
             pass
         sys.exit(1)
     attach_crash_reporting(app)
-    if CRASH is not None and CRASH._state.get("previous"):
-        app.after(1500, lambda: CrashReportDialog(app, CRASH._state["previous"], "The editor closed without warning the last time it ran.", title="Problem report saved"))
+    if CRASH is not None and CRASH.previous_report():
+        app.after(1500, lambda: CrashReportDialog(app, CRASH.previous_report(), "The editor closed without warning the last time it ran.", title="Problem report saved"))
     app.after(100, lambda: app._show_runtime_picker(on_done=lambda: app.after(300, app.reopen_last_save)))
     app.after(2500, app.start_update_check)       # after the window is up; never from __init__, so tests make no network calls
     app.mainloop()
