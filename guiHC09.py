@@ -8642,13 +8642,26 @@ class RenameInBooksDialog(tk.Toplevel):
     def _fill_books(self):
         lib, d = self.designer.lib, self.designer
         keep = [self._books[i] for i in self.lst.curselection()] if self._books else []
-        self._books = sorted(lib.books_of_play.get(self.plyl, ()), key=lambda b: d.books.get(b, (f"playbook {b}", ""))[0].lower())
+        # PPPN in qkl_boot.ast contains the game's shipped playbooks only. Custom
+        # playbooks occupy BOKL 1..10 in a save/profile; those numbers must never be
+        # treated as the same-numbered shipped book in PPPN. In particular, writing
+        # a rename against those colliding IDs changes an unrelated stock book and
+        # cannot rename the custom book. Custom-playbook play names live in the save's
+        # PBPL definitions, not in this game-file table.
+        available = set(lib.books_of_play.get(self.plyl, ()))
+        self._books = sorted((b for b in available if int(b) not in range(1, 11) and b in d.books),
+                             key=lambda b: d.books[b][0].lower())
         self.lst.delete(0, "end")
         for b in self._books:
-            self.lst.insert("end", f"{d.books.get(b, (f'playbook {b}', ''))[0]}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
+            self.lst.insert("end", f"{d.books[b][0]}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
         for i, b in enumerate(self._books):
             if b in keep:
                 self.lst.selection_set(i)
+        if available - set(self._books):
+            self.lbl_result.configure(
+                text="Custom playbooks are not listed here: this tool edits the game's shipped PPPN names only. "
+                     "For a custom play, use Rename my plays... to change its PBPL name in the profile/career. "
+                     "A custom book's individual play-name overrides are not supported.")
 
     def _apply(self):
         app, d = self.app, self.designer
