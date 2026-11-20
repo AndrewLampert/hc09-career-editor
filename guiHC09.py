@@ -14590,6 +14590,16 @@ class App(tk.Tk):
             boot = self._boot_from_iso(iso)
             if boot:
                 return boot
+        if runtime == "recomp":
+            messagebox.showinfo(
+                f"{feature} needs the Recomp disc image",
+                f"Recomp reads {BOOT_AST_FILENAME} from the original game disc image. Choose that ISO; a loose Xenia/RPCS3 archive is not used in Recomp mode.",
+            )
+            image = filedialog.askopenfilename(
+                title="Locate the Recomp game disc image",
+                filetypes=[("Disc image", "*.iso"), ("All files", "*.*")],
+            )
+            return self._boot_from_iso(image) if image else ""
         messagebox.showinfo(
             f"{feature} needs game data",
             f"This feature reads the game's {what} straight from your own game files.\n\n"
