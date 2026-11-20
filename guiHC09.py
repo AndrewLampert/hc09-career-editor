@@ -2674,7 +2674,8 @@ class SwapTradeDialog(tk.Toplevel):
         swap_players_safe(p1, p2, IMMUTABLE_KEYS)
         cap_note = ""
         if cap1 is not None and cap2 is not None and team1 != team2:       # each row keeps its team and now holds the other's contract: the team totals (TMSA) move by the difference
-            done = self.model.adjust_team_salary_cap(team1, cap2 - cap1) and self.model.adjust_team_salary_cap(team2, cap1 - cap2)
+            both = self.model.get_team_row(team1) is not None and self.model.get_team_row(team2) is not None     # both TEAM rows first: one adjusted and the other not would leave the totals out of step (and the clamp at 0 makes a roll-back inexact)
+            done = both and self.model.adjust_team_salary_cap(team1, cap2 - cap1) and self.model.adjust_team_salary_cap(team2, cap1 - cap2)
             cap_note = "\n\nThe two teams' salary cap totals were adjusted by the difference of the two cap hits." if done else "\n\n(Team cap totals not found/updated - load a save with the TEAM table.)"
         self.parent.mark_dirty()
 
@@ -5682,22 +5683,27 @@ class PersonnelDialog(tk.Toplevel):
             return False
         if not self._check_closed():
             return False
-        n_rows = sum(len(t["edits"]) for t in targets)
-        names = ", ".join(sorted({f"{os.path.basename(t['ast'])} #{t['index']}" for t in targets}))
-        if not messagebox.askyesno(what, f"This writes {n_rows} slot rows into {len(targets)} database copies ({names}) in the game's files. "
-                                          "The original of each is backed up first (once). The game and the emulator are closed?"):
+        if not self.app.begin_game_write():                # a rename or another writer of the game files is still running: not at the same time
             return False
-        self.config(cursor="watch")
-        self.update_idletasks()
         try:
-            self.app._refuse_write_to_iso_copy(*[t["ast"] for t in targets])
-            apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
-        except Exception as e:
-            messagebox.showerror(what, str(e))
-            return False
+            n_rows = sum(len(t["edits"]) for t in targets)
+            names = ", ".join(sorted({f"{os.path.basename(t['ast'])} #{t['index']}" for t in targets}))
+            if not messagebox.askyesno(what, f"This writes {n_rows} slot rows into {len(targets)} database copies ({names}) in the game's files. "
+                                              "The original of each is backed up first (once). The game and the emulator are closed?"):
+                return False
+            self.config(cursor="watch")
+            self.update_idletasks()
+            try:
+                self.app._refuse_write_to_iso_copy(*[t["ast"] for t in targets])
+                apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
+            except Exception as e:
+                messagebox.showerror(what, str(e))
+                return False
+            finally:
+                self.config(cursor="")
+            return True
         finally:
-            self.config(cursor="")
-        return True
+            self.app.end_game_write()
 
     def _reload(self, keep=None):
         try:
@@ -5726,19 +5732,24 @@ class PersonnelDialog(tk.Toplevel):
     def _restore_all(self):
         if not self._check_closed():
             return
-        if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
-                                                          "The game and the emulator are closed?"):
+        if not self.app.begin_game_write():                # not while another window is writing the game files
             return
-        self.config(cursor="watch")
-        self.update_idletasks()
         try:
-            self.app._refuse_write_to_iso_copy(*[c["ast"] for c in getattr(self.data, "copies", [])])
-            res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
-        except Exception as e:
-            messagebox.showerror("Restore all", str(e))
-            return
+            if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
+                                                              "The game and the emulator are closed?"):
+                return
+            self.config(cursor="watch")
+            self.update_idletasks()
+            try:
+                self.app._refuse_write_to_iso_copy(*[c["ast"] for c in getattr(self.data, "copies", [])])
+                res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
+            except Exception as e:
+                messagebox.showerror("Restore all", str(e))
+                return
+            finally:
+                self.config(cursor="")
         finally:
-            self.config(cursor="")
+            self.app.end_game_write()
         done = [r for r in res.get("results", []) if r.get("restored")]
         messagebox.showinfo("Restored", f"{len(done)} database copies restored from the backups.")
         self._reload(keep=self.setl)
@@ -10965,6 +10976,18 @@ class App(tk.Tk):
         Returns False, with a message, when another one is running."""
         return self._run_exclusive("_game_write_running", "The game files are being written by another window. Wait until that is finished, then try again.",
                                    busy_text, work_fn, on_success, error_title, on_finish)
+
+    def begin_game_write(self):
+        """The same one-at-a-time slot as run_game_write, for a writer that runs on the Tk thread itself (Set personnel): take it before writing, give it back with end_game_write() (in a
+        finally). Returns False, with a message, when a write started by another window is still running (two bridge processes writing qkl_boot.ast can corrupt it)."""
+        if getattr(self, "_game_write_running", False):
+            messagebox.showinfo("Game files", "The game files are being written by another window. Wait until that is finished, then try again.")
+            return False
+        self._game_write_running = True
+        return True
+
+    def end_game_write(self):
+        self._game_write_running = False
 
     # ---------- Portrait viewer (Player Editor tab) ----------
     # Read-only for now - writing a replacement portrait back into the game's
