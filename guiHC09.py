@@ -11442,8 +11442,20 @@ class App(tk.Tk):
         dlg.focus_set()
 
     def _build_ui(self):
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=12, pady=10)
+        # Two rows. One row needed about 2,040 px, and the window is 1,320 px wide: pack gives the widgets packed FIRST their space, so the right-hand ones (Options, Runtime, Full Screen,
+        # Build Recomp ISO) were squeezed to 1 px and could not be clicked. Now each row is far narrower than the window, and the right-hand buttons of a row are packed before the left-hand
+        # ones so they keep their space even in a narrow window.
+        top = ttk.Frame(self)                                  # row 1: the save file, and the window options
+        top.pack(fill="x", padx=12, pady=(10, 4))
+        tools = ttk.Frame(self)                                # row 2: the tools, the status, the runtime
+        tools.pack(fill="x", padx=12, pady=(0, 8))
+
+        # Modern UI / Dark Mode / the runtime switch live in the Options dialog (a small custom popup built from the same ttk widgets used everywhere else, NOT a native tk.Menu - Windows renders
+        # tk.Menu via the OS menu system, which ignores Tk's color options, so it would always look like a plain light Windows menu regardless of Dark Mode).
+        self._fullscreen_btn = ttk.Button(top, text="Full Screen", command=self.toggle_fullscreen)
+        self._fullscreen_btn.pack(side="right")
+        self._options_btn = ttk.Button(top, text="Options...", command=self._open_options_dialog)
+        self._options_btn.pack(side="right", padx=(0, 8))
 
         ttk.Button(top, text="Load Save File", style="Accent.TButton", command=self.on_load).pack(side="left")
         ttk.Button(top, text="Save to File", style="Accent.TButton", command=self.on_save).pack(side="left", padx=(8, 0))
@@ -11463,36 +11475,19 @@ class App(tk.Tk):
         self._recent_display_to_path = {}
         self._refresh_recent_files_ui(load_recent_files())
 
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=12)
-
-        ttk.Button(top, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
-        ttk.Button(top, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
-        ttk.Button(top, text="Player Type Fit...", command=self.on_open_player_type_fit).pack(side="left", padx=(8, 0))
-        ttk.Button(top, text="Game reference...", command=self.on_open_game_reference).pack(side="left", padx=(8, 0))
-
-        # Packed before the status label (both docking to the right) so it
-        # always claims its space regardless of how long the status text
-        # gets - previously a long "Loaded: ..." string could push this
-        # entirely off the visible window. Modern UI/Dark Mode live under one
-        # "Options" dropdown here rather than as two separate checkbuttons -
-        # that pair was what overflowed the toolbar at the app's default
-        # width. The dropdown is a small custom popup built from the same
-        # ttk.Checkbutton widgets used everywhere else, NOT a native tk.Menu -
-        # Windows renders tk.Menu via the OS menu system, which ignores Tk's
-        # color options entirely, so a real dropdown menu here would always
-        # look like a plain light Windows menu regardless of Dark Mode.
-        self._recomp_build_btn = ttk.Button(top, text="Build Recomp ISO...", command=self.on_build_recomp_iso,
+        # Row 2. The runtime buttons are packed first (docked right) so a long status text can never push them out of the window.
+        self._recomp_build_btn = ttk.Button(tools, text="Build Recomp ISO...", command=self.on_build_recomp_iso,
                                              state="normal" if self.ui_prefs.get("runtime", "xenia") == "recomp" else "disabled")
-        self._recomp_build_btn.pack(side="right", padx=(8, 0))
-        self._runtime_btn = ttk.Button(top, text=f"Runtime: {self.ui_prefs.get('runtime', 'xenia').upper()}", command=self._show_runtime_picker)
-        self._runtime_btn.pack(side="right", padx=(8, 0))
-        self._options_btn = ttk.Button(top, text="Options...", command=self._open_options_dialog)
-        self._options_btn.pack(side="right", padx=(8, 0))
-        self._fullscreen_btn = ttk.Button(top, text="Full Screen", command=self.toggle_fullscreen)
-        self._fullscreen_btn.pack(side="right", padx=(8, 0))
-        ttk.Separator(top, orient="vertical").pack(side="right", fill="y", padx=12)
+        self._recomp_build_btn.pack(side="right")
+        self._runtime_btn = ttk.Button(tools, text=f"Runtime: {self.ui_prefs.get('runtime', 'xenia').upper()}", command=self._show_runtime_picker)
+        self._runtime_btn.pack(side="right", padx=(0, 8))
 
-        self.lbl_status = ttk.Label(top, text="Load a save to begin (Saves... lists the ones found).", style="Status.TLabel", width=40, anchor="w")
+        ttk.Button(tools, text="Trade Players (Safe Swap)", command=self.on_open_swap_trade).pack(side="left")
+        ttk.Button(tools, text="Sign Free Agent...", command=self.on_open_sign_free_agent).pack(side="left", padx=(8, 0))
+        ttk.Button(tools, text="Player Type Fit...", command=self.on_open_player_type_fit).pack(side="left", padx=(8, 0))
+        ttk.Button(tools, text="Game reference...", command=self.on_open_game_reference).pack(side="left", padx=(8, 0))
+
+        self.lbl_status = ttk.Label(tools, text="Load a save to begin (Saves... lists the ones found).", style="Status.TLabel", width=40, anchor="w")
         self.lbl_status.pack(side="left", fill="x", expand=True, padx=14)
 
         self.update_banner = ttk.Frame(self)      # shown (packed above the tabs) only when a newer version exists
