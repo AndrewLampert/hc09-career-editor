@@ -12665,7 +12665,9 @@ class App(tk.Tk):
 
     def _ensure_book_play_names(self, boot_ast=""):
         """Best effort (worker thread, bridge only): the names each playbook gives its plays (table PPPN of qkl_boot.ast) into the playbook cache, if they are not there yet.
-        Without them the editor shows the master names. True if the file is there afterwards."""
+        Without them the editor shows the master names. True if the file is there afterwards. When it is not, and the archive WAS asked, self._book_names_failure says why (the Play creator tells the
+        person); it is None otherwise."""
+        self._book_names_failure = None
         path = os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE)
         if os.path.isfile(path) and os.path.getsize(path) > 200:        # a file with only the header row (an entry without rows) does not count
             return True
@@ -12675,9 +12677,13 @@ class App(tk.Tk):
         try:
             res = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows",
                                          "--out-dir", PLAYBOOK_CACHE_DIR])
-        except Exception:
+        except Exception as e:
+            self._book_names_failure = f"{type(e).__name__}: {e}"[:300]
             return False
-        return bool(res.get("records")) and os.path.isfile(path)
+        if not (bool(res.get("records")) and os.path.isfile(path)):
+            self._book_names_failure = "the export found no playbook play names in the game files"
+            return False
+        return True
 
     def _pb_selected_tid(self):
         name = self.pb_team_var.get()
@@ -14437,6 +14443,8 @@ class App(tk.Tk):
         try:                              # the names the playbooks give their plays, if they can be read (the master names are shown otherwise)
             if self._ensure_book_play_names(archives[0]):
                 lib.set_book_play_names(read_csv(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE)))
+            else:                         # the helper catches its own failures and says False: its reason (when the archive was asked) is shown too
+                lib.book_names_error = getattr(self, "_book_names_failure", None)
         except Exception as e:
             lib.book_names_error = f"{type(e).__name__}: {e}"[:300]        # the play creator tells the person (a rename that "did not work" is otherwise a silent fallback to the master names)
         return lib
@@ -15191,8 +15199,11 @@ class App(tk.Tk):
         boot_ast = self._find_boot_ast()                   # (may ask the person: on the Tk thread)
         if not boot_ast:
             return
+        runtime = self.ui_prefs.get("runtime", "xenia")
 
         def done(_result):                                 # the export (12 tables, a few seconds) ran in the background; the editor stayed alive
+            if not self._read_still_wanted(runtime):
+                return
             if self._philosophy_loaded(boot_ast):
                 PlayerTypeFitDialog(self, self.model)
 
@@ -15209,13 +15220,24 @@ class App(tk.Tk):
         boot_ast = self._find_boot_ast(feature="Game reference", what="injury, draft pick, contract and health tables")
         if not boot_ast:
             return
+        runtime = self.ui_prefs.get("runtime", "xenia")
 
         def done(_result):
+            if not self._read_still_wanted(runtime):
+                return
             loaded = self._reference_loaded(boot_ast)
             if loaded is not None:
                 GameReferenceDialog(self, loaded)
 
         self.run_in_thread_with_busy("Reading the game's tables...", lambda: self._reference_export(boot_ast), done, error_title="Couldn't read game data")
+
+    def _read_still_wanted(self, runtime):
+        """After a read of the game's tables in the background: False when the runtime was changed meanwhile. The tables came from the archive of the OLD runtime, and _set_runtime had already cleared the
+        caches before the export wrote them, so what it wrote is dropped too (nothing is loaded, the old archive path is not remembered again)."""
+        if self.ui_prefs.get("runtime", "xenia") == runtime:
+            return True
+        self._clear_game_data_caches()
+        return False
 
     def _reference_export(self, boot_ast):
         """The bridge exports of the Game reference's tables into the cache. Touches no widget: it may run on a background thread."""
