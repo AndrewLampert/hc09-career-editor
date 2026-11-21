@@ -898,15 +898,6 @@ for _cat, (_cur, _mx, _catname) in COACH_DEV_CATEGORIES.items():
         STAFF_FIELD_LABELS[f"DV_{_cat}_{_b}_M"] = f"{_b} {_catname[:3]} Max"
 del _cat, _cur, _mx, _catname, _b
 
-# COPS = which staff "slot" a coach fills on their team (Head Coach, Offensive
-# Coordinator, etc.). Sourced from a community report (Discord: NFL Head Coach
-# modding server) matching the order these appear under the in-game Develop
-# Staff screen, except DBC and DLC which are swapped from that on-screen
-# order; the same report confirmed in-game that swapping a coach's position
-# (e.g. HC <-> LBC) via this field works. Edited via the double-click dropdown
-# in the Coach tab (see is_cops_column in _on_tree_double_click), not the
-# generic numeric entry box, since it's a fixed set of labeled codes rather
-# than an arbitrary integer.
 # Staff special skills (the game's table ESPS, 62 of them). A person's skills are one bit each in the
 # 64-bit SPSB mask of the save's PSSK table (hex text; bit n is skill n; PNid is the person, the same
 # PNid as on their COCH / TRVW / GMVW row). People with no special skill have no row. The order was
@@ -1016,19 +1007,27 @@ STAFF_ROLE_SKILLS = {   # staff role -> the skills the game offers it (its table
     'GM': (0, 2, 3, 25, 26, 27, 61),
     'TR': (1, 5, 10, 24),
 }
-# COCH's COPS (coach position) -> the key above
-STAFF_COACH_ROLE = {"0": "HC", "1": "OC", "2": "DC", "3": "ST", "4": "QB", "5": "RB", "6": "WR", "7": "OL", "8": "LB", "9": "DL", "10": "DB"}
+# COPS = which staff "slot" a coach fills on their team (Head Coach, Offensive
+# Coordinator, etc.). Sourced from a community report (Discord: NFL Head Coach
+# modding server) matching the order these appear under the in-game Develop
+# Staff screen, except DBC and DLC which are swapped from that on-screen
+# order; the same report confirmed in-game that swapping a coach's position
+# (e.g. HC <-> LBC) via this field works. Edited via the double-click dropdown
+# in the Coach tab (see is_cops_column in _on_tree_double_click), not the
+# generic numeric entry box, since it's a fixed set of labeled codes rather
+# than an arbitrary integer.
+# ONE table: code -> (the key of STAFF_ROLE_SKILLS above, the label the Coach tab shows). The two maps below are made from it, so they cannot disagree (the DBC / DLC order is the known odd one).
+COACH_POSITIONS = {
+    "0": ("HC", "HC"), "1": ("OC", "OC"), "2": ("DC", "DC"), "3": ("ST", "STC"), "4": ("QB", "QBC"), "5": ("RB", "RBC"),
+    "6": ("WR", "WRC"), "7": ("OL", "OLC"), "8": ("LB", "LBC"), "9": ("DL", "DLC"), "10": ("DB", "DBC"),
+}
+STAFF_COACH_ROLE = {code: role for code, (role, _label) in COACH_POSITIONS.items()}          # COCH's COPS (coach position) -> the key of STAFF_ROLE_SKILLS
+COACH_POSITION_LABELS = {code: label for code, (_role, label) in COACH_POSITIONS.items()}    # COPS -> what the Coach tab shows
 
 
 def staff_skills_from_mask(mask):
     """The skill numbers whose bit is set in a PSSK mask."""
     return [n for n in STAFF_SPECIAL_SKILLS if mask >> n & 1]
-
-
-COACH_POSITION_LABELS = {
-    "0": "HC", "1": "OC", "2": "DC", "3": "STC", "4": "QBC", "5": "RBC",
-    "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
-}
 
 # Team philosophy: every setting on the game's Team Philosophy screen, stored per team in the
 # TPHS table (110 fields; the same field codes also appear on each coach row, COCH, but that
@@ -1287,10 +1286,13 @@ def safe_int(s):
 #                the stored weight is pounds minus 160)                                            exact (350 of 350)
 #   Production   counted as 0 (its weight stays in the divisor); it fits the readings best
 # A plain weighted average of PEAW and PEIW (the first version of this tab) was up to 19 points off under presets other
-# than Balanced; these formulas get 53 of the 55 readings within 1 point (30 exact) and none more than 3 off.
+# than Balanced; these formulas are far closer (EST_OVR_ACCURACY below says how close).
 # Other positions use the same formulas unchecked in the game. docs/hc09_position_presets.md has the readings. This
 # replaces an earlier version built on PLYT, the game's 37 player-generation archetypes, which are not the presets.
 # -----------------------------
+# How close Est. OVR is to the overall the game shows, against readings taken from the game (CB, SS, DT, FS; Production counted as 0): the ONE place the figures are written. The window's help text
+# and estimate_philosophy_overall's docstring refer to them. Change them here when a formula is refined or another position is checked.
+EST_OVR_ACCURACY = {"readings": 55, "exact": 30, "within_1": 53, "max_off": 3}
 # Where the game data read from the game's files is cached (gitignored). HC09_CACHE_DIR moves it, so that several copies of the editor (the tests, run side by side) do not wipe each other's data.
 GAMEDATA_CACHE = os.environ.get("HC09_CACHE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache")
 PHILOSOPHY_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "philosophies")
@@ -1426,11 +1428,19 @@ def _with_philosophy_overrides(table, rows):
     return out
 
 
-def load_philosophy_model():
+_NOT_READ = object()          # "the caller has not read it" (None already means "not extracted yet")
+
+
+def load_philosophy_model(body=_NOT_READ, size=_NOT_READ):
     """{philosophy value: {"athletic": {rating column: weight}, "skill": {...}, "factors": {"OINW": w, ...},
     "size": (HTSW, WTSW)}} from the cached PEAW, PEIW, PEOW and PESW tables, or {} if they have not been extracted
-    from the game files yet (a cache from before LPHC or the Size lookups were read counts as not extracted)."""
-    if load_body_weights() is None or load_size_tables() is None:
+    from the game files yet (a cache from before LPHC or the Size lookups were read counts as not extracted).
+    body, size: load_body_weights() and load_size_tables() when the caller has them already (each is read once per reload, not twice)."""
+    if body is _NOT_READ:
+        body = load_body_weights()
+    if size is _NOT_READ:
+        size = load_size_tables()
+    if body is None or size is None:
         return {}
     tables = {}
     for table in PHILOSOPHY_WEIGHT_TABLES:
@@ -1464,10 +1474,11 @@ PHILOSOPHY_SIZE = {}        # the Size grade's lookups (see load_size_tables)
 def reload_philosophy_data():
     """Read the cached philosophy tables into PHILOSOPHY_MODEL, PHILOSOPHY_WEIGHTS, PHILOSOPHY_BODY_WEIGHTS and PHILOSOPHY_SIZE."""
     global PHILOSOPHY_MODEL, PHILOSOPHY_WEIGHTS, PHILOSOPHY_BODY_WEIGHTS, PHILOSOPHY_SIZE
-    PHILOSOPHY_MODEL = load_philosophy_model()
+    body, size = load_body_weights(), load_size_tables()          # read once (the model used to read both only to see that they exist, and this read them again)
+    PHILOSOPHY_MODEL = load_philosophy_model(body, size)
     PHILOSOPHY_WEIGHTS = {gid: {**m["athletic"], **m["skill"]} for gid, m in PHILOSOPHY_MODEL.items()}
-    PHILOSOPHY_BODY_WEIGHTS = (load_body_weights() or {}) if PHILOSOPHY_MODEL else {}
-    PHILOSOPHY_SIZE = (load_size_tables() or {}) if PHILOSOPHY_MODEL else {}
+    PHILOSOPHY_BODY_WEIGHTS = (body or {}) if PHILOSOPHY_MODEL else {}
+    PHILOSOPHY_SIZE = (size or {}) if PHILOSOPHY_MODEL else {}
 
 
 reload_philosophy_data()
@@ -1492,11 +1503,12 @@ def _clean_philosophy_overrides(raw):
     return out
 
 
-def set_philosophy_overrides(raw):
-    """Use the editor's own weights for the presets they name, in place of the game's, and rebuild the model."""
+def set_philosophy_overrides(raw, reload=True):
+    """Use the editor's own weights for the presets they name, in place of the game's, and rebuild the model (reload=False: the caller rebuilds it, after setting the saved presets too)."""
     global PHILOSOPHY_OVERRIDES
     PHILOSOPHY_OVERRIDES = _clean_philosophy_overrides(raw)
-    reload_philosophy_data()
+    if reload:
+        reload_philosophy_data()
 
 
 def save_philosophy_overrides(app, overrides):
@@ -1540,11 +1552,12 @@ def _clean_philosophy_presets(raw):
     return out
 
 
-def set_philosophy_presets(raw):
+def set_philosophy_presets(raw, reload=True):
     """Use the presets saved in the editor and rebuild the model."""
     global PHILOSOPHY_CUSTOM
     PHILOSOPHY_CUSTOM = _clean_philosophy_presets(raw)
-    reload_philosophy_data()
+    if reload:
+        reload_philosophy_data()
 
 
 def save_philosophy_presets(app, presets):
@@ -1652,8 +1665,8 @@ def philosophy_grades(row, model, ppos=None):
 
 def estimate_philosophy_overall(row, model, ppos=None):
     """The overall the game's Evaluate Roster screen shows for this player under one philosophy, rebuilt from the game's
-    own formulas (see philosophy_grades); None if it can't be worked out. Within 1 point of the game's number for 53 of
-    55 readings (CB, SS, DT, FS), exact for 30, and never more than 3 off."""
+    own formulas (see philosophy_grades); None if it can't be worked out. How close it is to the game's number is in
+    EST_OVR_ACCURACY."""
     grades = philosophy_grades(row, model, ppos)
     return None if grades is None else grades["overall"]
 
@@ -3943,9 +3956,9 @@ class PlayerTypeFitDialog(tk.Toplevel):
             text="Est. OVR rebuilds the overall the game's Evaluate Roster screen shows for a player under this preset, with the "
                  "game's own formulas: seven grades (Athletic, Intangibles, Learning, Durability, Potential, Size, Production) "
                  "combined with the preset's weights. Athletic, Intangibles, Learning and Potential are the game's exact formulas, "
-                 "Durability is close, Size is the game's own height and weight lookup, and Production is counted as 0. Against 55 "
-                 "readings taken from the game (cornerbacks, safeties and defensive tackles) it was exact for 30, within 1 point for 53 "
-                 "and never more than 3 off; an unusual build could be a little further out. Other positions use the same formulas but "
+                 f"Durability is close, Size is the game's own height and weight lookup, and Production is counted as 0. Against {EST_OVR_ACCURACY['readings']} "
+                 f"readings taken from the game (cornerbacks, safeties and defensive tackles) it was exact for {EST_OVR_ACCURACY['exact']}, within 1 point for {EST_OVR_ACCURACY['within_1']} "
+                 f"and never more than {EST_OVR_ACCURACY['max_off']} off; an unusual build could be a little further out. Other positions use the same formulas but "
                  "haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that "
                  "player's team has now. Edit weights... changes the weights this window uses, and can save them as a preset of your "
                  "own; both are kept in the editor only (the game, your saves and your game files are not touched). The "
@@ -10788,7 +10801,7 @@ class App(tk.Tk):
 
         self.ui_prefs = load_ui_prefs()
         self._check_iso_copy_at_start()
-        set_philosophy_overrides(self.ui_prefs.get("philosophy_overrides"))
+        set_philosophy_overrides(self.ui_prefs.get("philosophy_overrides"), reload=False)       # one rebuild of the model for both (it was two, after the one at import)
         set_philosophy_presets(self.ui_prefs.get("philosophy_presets"))
         self.dark_mode_var = tk.BooleanVar(value=(self.ui_prefs.get("mode") == "dark"))
         # Master switch: every feature added alongside the visual facelift
