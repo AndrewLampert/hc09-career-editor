@@ -5687,6 +5687,8 @@ class PersonnelDialog(tk.Toplevel):
         if getattr(self, "_stale", False):
             messagebox.showinfo("Set personnel", "This window shows the sets as they were before the last change, and they could not be read again. Close it and open Set personnel again.", parent=self)
             return False
+        if self._reading():
+            return False
         if not targets:
             messagebox.showinfo("Nothing to change", "The game files already hold this.")
             return False
@@ -5713,10 +5715,21 @@ class PersonnelDialog(tk.Toplevel):
             self._cursor(False)
         return started
 
+    def _reading(self):
+        """True (with a message) while the sets are being read again after a write: a second write, or a second read, would rebuild the same cache folder at the same time and leave this window with
+        stale data or a failed reload."""
+        if getattr(self, "_reloading", False):
+            messagebox.showinfo("Set personnel", "The sets are being read again after the last change. Wait a moment, then try again.", parent=self)
+            return True
+        return False
+
     def _reload(self, keep=None):
         """Read the sets again after a write, in the background. When it does not work, the write itself went through, but this window still holds what it read BEFORE the write: it says so and turns the
         Apply buttons off (a second Apply would plan its change from values that are no longer in the files). Open Play creators read the files again either way."""
         app = self.app
+        if getattr(self, "_reloading", False):             # (one read at a time)
+            return
+        self._reloading = True
 
         def work():
             try:
@@ -5725,6 +5738,7 @@ class PersonnelDialog(tk.Toplevel):
                 return False, e
 
         def done(result):
+            self._reloading = False
             ok, value = result
             alive = self.winfo_exists()
             if not ok:
@@ -5768,6 +5782,8 @@ class PersonnelDialog(tk.Toplevel):
         self._run(self.data.reset_edits_for([setl]), "Reset to stock", lambda: self._written("Reset", "This set is back to stock. Start the game again to use it.", setl))
 
     def _restore_all(self):
+        if self._reading():
+            return
         if not self._check_closed():
             return
         if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
@@ -8494,6 +8510,9 @@ class CustomPlayDialog(tk.Toplevel):
         self._make_files(installed)
 
     def _uninstall(self):
+        if getattr(self, "_working", False):               # the files are being made: their install (the callback) would put the new copies over what this puts back
+            messagebox.showinfo("Put my saves back", "The play's files are still being made. Wait until that is finished, then try again.", parent=self)
+            return
         answer = messagebox.askyesnocancel("Put my saves back", "RPCS3, Xenia and HC09 for PC must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
                                            "No: put back your files from before the LAST install only.\nCancel: do nothing.\n\n"
                                            "Whatever the game saved since (a season played, say) is replaced too. A copy of your current files is kept first.", parent=self)
@@ -9093,9 +9112,16 @@ class GameFilesAddBase(WriteGuard, tk.Toplevel):
             return result, lines, reload_db
         return work
 
+    def _busy_now(self, title):
+        """True (with a message) while a plan is being worked out or a write runs: the plan is made against the list of added plays, and Take out / Put the game files back / a second Add change it."""
+        if getattr(self, "_planning", False) or getattr(self, "_writing", False):
+            messagebox.showinfo(title, "A play is being worked out or written. Wait until that is finished, then try again.", parent=self)
+            return True
+        return False
+
     def _take_out(self):
         sel = self.lst_added.curselection()
-        if not sel or self.boot is None:
+        if not sel or self.boot is None or self._busy_now("Add a play"):
             return
         app = self.app
         if app._rpcs3_running():
@@ -9118,6 +9144,8 @@ class GameFilesAddBase(WriteGuard, tk.Toplevel):
         self._start_write("Taking the play out...", work, done, "Add a play")
 
     def _restore(self):
+        if self._busy_now("Put the game files back"):
+            return
         gone = list(self.added)
 
         def work(archives):
@@ -9351,7 +9379,7 @@ class AddPlayDialog(GameFilesAddBase):
 
     def _apply(self):
         app = self.app
-        if self.boot is None or getattr(self, "_planning", False):
+        if self.boot is None or self._busy_now("Add a play"):
             return
         if app._rpcs3_running():
             messagebox.showerror("Add a play", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
@@ -9541,7 +9569,7 @@ class ConvertPlaysDialog(GameFilesAddBase):
 
     def _apply(self):
         app = self.app
-        if self.boot is None or getattr(self, "_planning", False):
+        if self.boot is None or self._busy_now("Convert my plays"):
             return
         if app._rpcs3_running():
             messagebox.showerror("Convert my plays", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
