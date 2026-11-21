@@ -898,15 +898,6 @@ for _cat, (_cur, _mx, _catname) in COACH_DEV_CATEGORIES.items():
         STAFF_FIELD_LABELS[f"DV_{_cat}_{_b}_M"] = f"{_b} {_catname[:3]} Max"
 del _cat, _cur, _mx, _catname, _b
 
-# COPS = which staff "slot" a coach fills on their team (Head Coach, Offensive
-# Coordinator, etc.). Sourced from a community report (Discord: NFL Head Coach
-# modding server) matching the order these appear under the in-game Develop
-# Staff screen, except DBC and DLC which are swapped from that on-screen
-# order; the same report confirmed in-game that swapping a coach's position
-# (e.g. HC <-> LBC) via this field works. Edited via the double-click dropdown
-# in the Coach tab (see is_cops_column in _on_tree_double_click), not the
-# generic numeric entry box, since it's a fixed set of labeled codes rather
-# than an arbitrary integer.
 # Staff special skills (the game's table ESPS, 62 of them). A person's skills are one bit each in the
 # 64-bit SPSB mask of the save's PSSK table (hex text; bit n is skill n; PNid is the person, the same
 # PNid as on their COCH / TRVW / GMVW row). People with no special skill have no row. The order was
@@ -1016,19 +1007,27 @@ STAFF_ROLE_SKILLS = {   # staff role -> the skills the game offers it (its table
     'GM': (0, 2, 3, 25, 26, 27, 61),
     'TR': (1, 5, 10, 24),
 }
-# COCH's COPS (coach position) -> the key above
-STAFF_COACH_ROLE = {"0": "HC", "1": "OC", "2": "DC", "3": "ST", "4": "QB", "5": "RB", "6": "WR", "7": "OL", "8": "LB", "9": "DL", "10": "DB"}
+# COPS = which staff "slot" a coach fills on their team (Head Coach, Offensive
+# Coordinator, etc.). Sourced from a community report (Discord: NFL Head Coach
+# modding server) matching the order these appear under the in-game Develop
+# Staff screen, except DBC and DLC which are swapped from that on-screen
+# order; the same report confirmed in-game that swapping a coach's position
+# (e.g. HC <-> LBC) via this field works. Edited via the double-click dropdown
+# in the Coach tab (see is_cops_column in _on_tree_double_click), not the
+# generic numeric entry box, since it's a fixed set of labeled codes rather
+# than an arbitrary integer.
+# ONE table: code -> (the key of STAFF_ROLE_SKILLS above, the label the Coach tab shows). The two maps below are made from it, so they cannot disagree (the DBC / DLC order is the known odd one).
+COACH_POSITIONS = {
+    "0": ("HC", "HC"), "1": ("OC", "OC"), "2": ("DC", "DC"), "3": ("ST", "STC"), "4": ("QB", "QBC"), "5": ("RB", "RBC"),
+    "6": ("WR", "WRC"), "7": ("OL", "OLC"), "8": ("LB", "LBC"), "9": ("DL", "DLC"), "10": ("DB", "DBC"),
+}
+STAFF_COACH_ROLE = {code: role for code, (role, _label) in COACH_POSITIONS.items()}          # COCH's COPS (coach position) -> the key of STAFF_ROLE_SKILLS
+COACH_POSITION_LABELS = {code: label for code, (_role, label) in COACH_POSITIONS.items()}    # COPS -> what the Coach tab shows
 
 
 def staff_skills_from_mask(mask):
     """The skill numbers whose bit is set in a PSSK mask."""
     return [n for n in STAFF_SPECIAL_SKILLS if mask >> n & 1]
-
-
-COACH_POSITION_LABELS = {
-    "0": "HC", "1": "OC", "2": "DC", "3": "STC", "4": "QBC", "5": "RBC",
-    "6": "WRC", "7": "OLC", "8": "LBC", "9": "DLC", "10": "DBC",
-}
 
 # Team philosophy: every setting on the game's Team Philosophy screen, stored per team in the
 # TPHS table (110 fields; the same field codes also appear on each coach row, COCH, but that
@@ -1287,10 +1286,13 @@ def safe_int(s):
 #                the stored weight is pounds minus 160)                                            exact (350 of 350)
 #   Production   counted as 0 (its weight stays in the divisor); it fits the readings best
 # A plain weighted average of PEAW and PEIW (the first version of this tab) was up to 19 points off under presets other
-# than Balanced; these formulas get 53 of the 55 readings within 1 point (30 exact) and none more than 3 off.
+# than Balanced; these formulas are far closer (EST_OVR_ACCURACY below says how close).
 # Other positions use the same formulas unchecked in the game. docs/hc09_position_presets.md has the readings. This
 # replaces an earlier version built on PLYT, the game's 37 player-generation archetypes, which are not the presets.
 # -----------------------------
+# How close Est. OVR is to the overall the game shows, against readings taken from the game (CB, SS, DT, FS; Production counted as 0): the ONE place the figures are written. The window's help text
+# and estimate_philosophy_overall's docstring refer to them. Change them here when a formula is refined or another position is checked.
+EST_OVR_ACCURACY = {"readings": 55, "exact": 30, "within_1": 53, "max_off": 3}
 # Where the game data read from the game's files is cached (gitignored). HC09_CACHE_DIR moves it, so that several copies of the editor (the tests, run side by side) do not wipe each other's data.
 GAMEDATA_CACHE = os.environ.get("HC09_CACHE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_gamedata_cache")
 PHILOSOPHY_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "philosophies")
@@ -1426,11 +1428,19 @@ def _with_philosophy_overrides(table, rows):
     return out
 
 
-def load_philosophy_model():
+_NOT_READ = object()          # "the caller has not read it" (None already means "not extracted yet")
+
+
+def load_philosophy_model(body=_NOT_READ, size=_NOT_READ):
     """{philosophy value: {"athletic": {rating column: weight}, "skill": {...}, "factors": {"OINW": w, ...},
     "size": (HTSW, WTSW)}} from the cached PEAW, PEIW, PEOW and PESW tables, or {} if they have not been extracted
-    from the game files yet (a cache from before LPHC or the Size lookups were read counts as not extracted)."""
-    if load_body_weights() is None or load_size_tables() is None:
+    from the game files yet (a cache from before LPHC or the Size lookups were read counts as not extracted).
+    body, size: load_body_weights() and load_size_tables() when the caller has them already (each is read once per reload, not twice)."""
+    if body is _NOT_READ:
+        body = load_body_weights()
+    if size is _NOT_READ:
+        size = load_size_tables()
+    if body is None or size is None:
         return {}
     tables = {}
     for table in PHILOSOPHY_WEIGHT_TABLES:
@@ -1464,10 +1474,11 @@ PHILOSOPHY_SIZE = {}        # the Size grade's lookups (see load_size_tables)
 def reload_philosophy_data():
     """Read the cached philosophy tables into PHILOSOPHY_MODEL, PHILOSOPHY_WEIGHTS, PHILOSOPHY_BODY_WEIGHTS and PHILOSOPHY_SIZE."""
     global PHILOSOPHY_MODEL, PHILOSOPHY_WEIGHTS, PHILOSOPHY_BODY_WEIGHTS, PHILOSOPHY_SIZE
-    PHILOSOPHY_MODEL = load_philosophy_model()
+    body, size = load_body_weights(), load_size_tables()          # read once (the model used to read both only to see that they exist, and this read them again)
+    PHILOSOPHY_MODEL = load_philosophy_model(body, size)
     PHILOSOPHY_WEIGHTS = {gid: {**m["athletic"], **m["skill"]} for gid, m in PHILOSOPHY_MODEL.items()}
-    PHILOSOPHY_BODY_WEIGHTS = (load_body_weights() or {}) if PHILOSOPHY_MODEL else {}
-    PHILOSOPHY_SIZE = (load_size_tables() or {}) if PHILOSOPHY_MODEL else {}
+    PHILOSOPHY_BODY_WEIGHTS = (body or {}) if PHILOSOPHY_MODEL else {}
+    PHILOSOPHY_SIZE = (size or {}) if PHILOSOPHY_MODEL else {}
 
 
 reload_philosophy_data()
@@ -1492,11 +1503,12 @@ def _clean_philosophy_overrides(raw):
     return out
 
 
-def set_philosophy_overrides(raw):
-    """Use the editor's own weights for the presets they name, in place of the game's, and rebuild the model."""
+def set_philosophy_overrides(raw, reload=True):
+    """Use the editor's own weights for the presets they name, in place of the game's, and rebuild the model (reload=False: the caller rebuilds it, after setting the saved presets too)."""
     global PHILOSOPHY_OVERRIDES
     PHILOSOPHY_OVERRIDES = _clean_philosophy_overrides(raw)
-    reload_philosophy_data()
+    if reload:
+        reload_philosophy_data()
 
 
 def save_philosophy_overrides(app, overrides):
@@ -1540,11 +1552,12 @@ def _clean_philosophy_presets(raw):
     return out
 
 
-def set_philosophy_presets(raw):
+def set_philosophy_presets(raw, reload=True):
     """Use the presets saved in the editor and rebuild the model."""
     global PHILOSOPHY_CUSTOM
     PHILOSOPHY_CUSTOM = _clean_philosophy_presets(raw)
-    reload_philosophy_data()
+    if reload:
+        reload_philosophy_data()
 
 
 def save_philosophy_presets(app, presets):
@@ -1620,7 +1633,10 @@ def philosophy_grades(row, model, ppos=None):
     "intangibles", "learning", "durability", "potential", "size", "overall"}; a grade that can't be worked out is
     None and is left out of the overall. Athletic, intangibles, learning and potential are the game's exact formulas,
     durability is close, size is the game's lookup and production is counted as 0 (see the comment above
-    PHILOSOPHY_CACHE_DIR). None if the player has neither skill nor athletic ratings."""
+    PHILOSOPHY_CACHE_DIR). None if the player has neither skill nor athletic ratings.
+    ppos: the position the preset is for, when it is not the player's own (a player who can switch position). It is used for the Size grade (the lookup of that position's height and weight groups);
+    the Durability grade is looked up for the player's OWN position and hand (_durability_grade takes no position). Whether the game does the same for a player off his position has not been
+    checked against a reading (docs/hc09_position_presets.md lists the readings there are), so the editor says so in the Player Type Fit help text rather than change a formula without evidence."""
     f = model["factors"]
     athletic = _floor_grade(_weighted_rating_average(row, model["athletic"]))
     intangibles = _floor_grade(_weighted_rating_average(row, model["skill"]))
@@ -1652,8 +1668,8 @@ def philosophy_grades(row, model, ppos=None):
 
 def estimate_philosophy_overall(row, model, ppos=None):
     """The overall the game's Evaluate Roster screen shows for this player under one philosophy, rebuilt from the game's
-    own formulas (see philosophy_grades); None if it can't be worked out. Within 1 point of the game's number for 53 of
-    55 readings (CB, SS, DT, FS), exact for 30, and never more than 3 off."""
+    own formulas (see philosophy_grades); None if it can't be worked out. How close it is to the game's number is in
+    EST_OVR_ACCURACY."""
     grades = philosophy_grades(row, model, ppos)
     return None if grades is None else grades["overall"]
 
@@ -3145,6 +3161,27 @@ def save_ui_prefs(prefs):
 # the coach-side ID field hasn't been independently confirmed yet.
 PORTRAIT_TOP_INDEX = {"player": 1777, "coach": 1775}
 PORTRAIT_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_portrait_cache")
+_PORTRAIT_EXTRACT_LOCK = threading.Lock()
+
+
+def ensure_portrait_archive(model, ast_path, kind, cache_path):
+    """The (large, one-time) nested portrait archive in the editor's cache, read out of the game's qkl_fe2ig.ast when it is not there. Only ONE extraction runs at a time (a second request waits, then
+    finds the file), and it is written to a temporary name and renamed: a request that looks the archive up while another is still extracting never reads a half file, and a stopped run leaves
+    no file that looks complete. An empty file is no archive."""
+    with _PORTRAIT_EXTRACT_LOCK:
+        if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
+            return cache_path
+        os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+        part = cache_path + ".part"
+        try:
+            os.remove(part)                                 # what a stopped run left behind
+        except OSError:
+            pass
+        model.run_bridge(["portrait-extract-archive", "--ast", ast_path, "--top-index", str(PORTRAIT_TOP_INDEX[kind]), "--out", part])
+        if not os.path.isfile(part) or os.path.getsize(part) == 0:
+            raise RuntimeError("The portrait archive could not be read out of the game files.")
+        os.replace(part, cache_path)
+    return cache_path
 PORTRAIT_ARCHIVE_FILENAME = {"player": "player_portraits.bin", "coach": "coach_portraits.bin"}
 
 # Auto-detected first: the RPCS3 install location the archive was originally
@@ -3753,12 +3790,7 @@ class AssignPortraitDialog(tk.Toplevel):
                 self._later(lambda: self.lbl_status.configure(text="Locate your game files first (see the Portrait panel)."))
                 return
             cache_path = self.parent._portrait_archive_cache_path("player")
-            if not os.path.isfile(cache_path):
-                os.makedirs(PORTRAIT_CACHE_DIR, exist_ok=True)
-                self.parent.model.run_bridge([
-                    "portrait-extract-archive", "--ast", ast_path,
-                    "--top-index", str(PORTRAIT_TOP_INDEX["player"]), "--out", cache_path,
-                ])
+            ensure_portrait_archive(self.parent.model, ast_path, "player", cache_path)
             result = self.parent.model.run_bridge(["portrait-list", "--archive", cache_path])
             shortids = result.get("shortIds", [])
             current = safe_int(self.row.get(PLAYER_PORTRAIT_CODE, ""))
@@ -3921,10 +3953,13 @@ class PlayerTypeFitDialog(tk.Toplevel):
             text="Est. OVR rebuilds the overall the game's Evaluate Roster screen shows for a player under this preset, with the "
                  "game's own formulas: seven grades (Athletic, Intangibles, Learning, Durability, Potential, Size, Production) "
                  "combined with the preset's weights. Athletic, Intangibles, Learning and Potential are the game's exact formulas, "
-                 "Durability is close, Size is the game's own height and weight lookup, and Production is counted as 0. Against 55 "
-                 "readings taken from the game (cornerbacks, safeties and defensive tackles) it was exact for 30, within 1 point for 53 "
-                 "and never more than 3 off; an unusual build could be a little further out. Other positions use the same formulas but "
-                 "haven't been checked in the game. Saved OVR is the overall stored in the save. Team's pick is the preset that "
+                 f"Durability is close, Size is the game's own height and weight lookup, and Production is counted as 0. Against {EST_OVR_ACCURACY['readings']} "
+                 f"readings taken from the game (cornerbacks, safeties and defensive tackles) it was exact for {EST_OVR_ACCURACY['exact']}, within 1 point for {EST_OVR_ACCURACY['within_1']} "
+                 f"and never more than {EST_OVR_ACCURACY['max_off']} off; an unusual build could be a little further out. Other positions use the same formulas but "
+                 "haven't been checked in the game. For a player listed under another position (the 'positions that can switch' box), "
+                 "Size uses the height and weight lookup of the position of the preset, while Durability still weighs the body parts "
+                 "for the player's own position; whether the game does the same hasn't been checked, so read those rows as estimates. "
+                 "Saved OVR is the overall stored in the save. Team's pick is the preset that "
                  "player's team has now. Edit weights... changes the weights this window uses, and can save them as a preset of your "
                  "own; both are kept in the editor only (the game, your saves and your game files are not touched). The "
                  "positions listed with 'include players of positions that can switch' are the ones that can really switch "
@@ -10970,7 +11005,7 @@ class App(tk.Tk):
 
         self.ui_prefs = load_ui_prefs()
         self._check_iso_copy_at_start()
-        set_philosophy_overrides(self.ui_prefs.get("philosophy_overrides"))
+        set_philosophy_overrides(self.ui_prefs.get("philosophy_overrides"), reload=False)       # one rebuild of the model for both (it was two, after the one at import)
         set_philosophy_presets(self.ui_prefs.get("philosophy_presets"))
         self.dark_mode_var = tk.BooleanVar(value=(self.ui_prefs.get("mode") == "dark"))
         # Master switch: every feature added alongside the visual facelift
@@ -11304,14 +11339,7 @@ class App(tk.Tk):
         portrait archive is cached locally, looks up shortid within it via
         bridge.js, and returns a PIL Image - or None if not found."""
         cache_path = self._portrait_archive_cache_path(kind)
-        if not os.path.isfile(cache_path):
-            os.makedirs(PORTRAIT_CACHE_DIR, exist_ok=True)
-            self.model.run_bridge([
-                "portrait-extract-archive",
-                "--ast", self.get_game_ast_path(),
-                "--top-index", str(PORTRAIT_TOP_INDEX[kind]),
-                "--out", cache_path,
-            ])
+        ensure_portrait_archive(self.model, self.get_game_ast_path(), kind, cache_path)
 
         with tempfile.NamedTemporaryFile(suffix=".dds", delete=False) as tf:
             dds_path = tf.name
@@ -13192,15 +13220,18 @@ class App(tk.Tk):
         ttk.Button(top, text="Max Special Skills", command=self.on_max_coach_skills).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Team Philosophy...", command=self.on_open_team_philosophy).pack(side="left", padx=(8, 0))
 
-        # Search controls for coach first/last name
+        # Search controls for coach first/last name, and the My Team / All Teams radios: a row of their own (all of it in one row needed about 1,400 px and the window can be 1,180, so the
+        # right-most controls, the radios that decide whether the 300+ row table is drawn, were cut off). The Layout row follows this one.
+        search_row = ttk.Frame(root)
+        search_row.pack(fill="x", padx=10, pady=(0, 6), after=top)
         self.coach_search_var = tk.StringVar()
-        ttk.Label(top, text="Search (First Last):").pack(side="left", padx=(12, 4))
-        self.ent_coach_search = ttk.Entry(top, textvariable=self.coach_search_var, width=20)
+        ttk.Label(search_row, text="Search (First Last):").pack(side="left", padx=(0, 4))
+        self.ent_coach_search = ttk.Entry(search_row, textvariable=self.coach_search_var, width=20)
         self.ent_coach_search.pack(side="left")
-        ttk.Button(top, text="Find", command=lambda: self.refresh_coach()).pack(side="left", padx=(6, 4))
-        ttk.Button(top, text="Clear", command=lambda: (self.coach_search_var.set(""), self.refresh_coach())).pack(side="left")
+        ttk.Button(search_row, text="Find", command=lambda: self.refresh_coach()).pack(side="left", padx=(6, 4))
+        ttk.Button(search_row, text="Clear", command=lambda: (self.coach_search_var.set(""), self.refresh_coach())).pack(side="left")
         self._build_staff_team_filter(
-            top, row_extra=lambda lay: ttk.Button(lay, text="Max All Coaches", command=self.on_max_all_coaches).pack(side="left", padx=(16, 0)))
+            search_row, row_extra=lambda lay: ttk.Button(lay, text="Max All Coaches", command=self.on_max_all_coaches).pack(side="left", padx=(16, 0)))
 
         # Help text reflects what's actually confirmed in-game (verified via direct testing).
         help_text = (
@@ -14483,19 +14514,37 @@ class App(tk.Tk):
         ast = os.path.join(os.path.dirname(boot_ast), "qkl_interface.ast")
         cache = os.path.join(GAMEDATA_CACHE, "ui")
         if not os.path.isfile(ast):
-            return None
+            return None                                        # (a copy of qkl_boot.ast read out of a disc image has no qkl_interface.ast beside it: the plain field is drawn)
+        stamp_path = os.path.join(cache, "source.json")
+
+        def source_stamp():
+            st = os.stat(ast)
+            return {"path": os.path.normcase(os.path.abspath(ast)), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
         try:
-            with open(os.path.join(cache, "manifest.json"), encoding="utf-8") as f:
-                m = json.load(f)
-            if m.get("sourceSize") == os.path.getsize(ast) and os.path.isfile(os.path.join(cache, "field.png")):
+            # The cache is valid for THIS file: the same path, size and time as when it was made (the size alone matched another install's, or a patched, archive of equal size), and every
+            # picture the designer loads is there (an interrupted run could leave the manifest and the field without the receiver numbers).
+            with open(stamp_path, encoding="utf-8") as f:
+                made_for = json.load(f)
+            pictures = ["field.png"] + [f"num{k}.png" for k in range(1, 6)]
+            if made_for == source_stamp() and all(os.path.isfile(os.path.join(cache, name)) for name in pictures):
                 return cache
         except (OSError, ValueError):
+            pass
+        try:
+            os.remove(stamp_path)                              # while the pictures are made again, no record claims they are current
+        except OSError:
             pass
         try:
             res = self.model.run_bridge(["ui-assets", "--ast", ast, "--out-dir", cache])
         except Exception:
             return None
-        return cache if res.get("found") else None
+        if not res.get("found"):
+            return None
+        try:
+            write_json_atomic(stamp_path, source_stamp())
+        except OSError:
+            pass
+        return cache
 
     # ---- putting a made custom play into the game and taking it out again
     TEST_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-test-backups")
@@ -15455,14 +15504,21 @@ class App(tk.Tk):
         label.pack()
         win.protocol("WM_DELETE_WINDOW", lambda: None)
         win.grab_set()
+        finished = tk.BooleanVar(master=win, value=False)
+
+        def poll():                                       # every 50 ms on Tk's own thread: the bar, and the end of the copy
+            if state["total"]:
+                bar["value"] = 100 * state["done"] / state["total"]
+                label.configure(text=f"{state['done'] >> 20} of {state['total'] >> 20} MB")
+            if state["finished"]:
+                finished.set(True)
+            else:
+                win.after(50, poll)
         threading.Thread(target=work, daemon=True).start()
         try:
-            while not state["finished"]:
-                if state["total"]:
-                    bar["value"] = 100 * state["done"] / state["total"]
-                    label.configure(text=f"{state['done'] >> 20} of {state['total'] >> 20} MB")
-                win.update()
-                time.sleep(0.05)
+            win.after(0, poll)
+            win.wait_variable(finished)                   # Tk's own modal wait (the editor's windows keep being drawn, the grab keeps input out); it replaces a loop of win.update() and sleep(0.05),
+            #                                              which ran every pending event of the whole application, over and over, inside this call
         except tk.TclError:
             raise RuntimeError("The editor was closed while the disc image was being read.")
         finally:
@@ -15489,9 +15545,18 @@ class App(tk.Tk):
             extracted = not (os.path.isfile(dest) and self._same_stamp(want, self._iso_copy_source(dest)))
             if extracted:
                 messagebox.showinfo("Reading the disc image", f"The editor reads {BOOT_AST_FILENAME} (about 460 MB) out of the disc image\n{iso}\ninto its own folder, once. A window shows how far it is.")
-                self._extract_iso_file(iso, dest)
-                with open(meta, "w", encoding="utf-8") as f:
-                    json.dump(want, f)
+                os.makedirs(folder, exist_ok=True)
+                marker = os.path.join(folder, self.ISO_BUSY_MARKER)       # tells another editor window (its _prune_iso_copies) that this folder is being filled: source.json only comes when the copy is finished
+                open(marker, "w").close()
+                try:
+                    self._extract_iso_file(iso, dest)
+                    with open(meta, "w", encoding="utf-8") as f:
+                        json.dump(want, f)
+                finally:
+                    try:
+                        os.remove(marker)
+                    except OSError:
+                        pass
         except (ValueError, OSError) as e:
             messagebox.showerror("Disc image", f"{BOOT_AST_FILENAME} could not be read out of the disc image.\n\n{e}\n\n{hc09_iso.describe(iso)}")
             return ""
@@ -15513,9 +15578,27 @@ class App(tk.Tk):
             folder = os.path.join(self.ISO_CACHE_DIR, name)
             if not os.path.isdir(folder) or os.path.normcase(os.path.abspath(folder)) == os.path.normcase(os.path.abspath(keep)):
                 continue
+            if self._iso_copy_is_busy(folder):                       # another editor window is reading an image into it right now
+                continue
             meta = self._iso_copy_source(os.path.join(folder, BOOT_AST_FILENAME))
-            if meta is None or not os.path.isfile(meta["iso"]):
-                shutil.rmtree(folder, ignore_errors=True)
+            if meta is None:
+                try:
+                    young = time.time() - os.path.getmtime(folder) < self.ISO_COPY_GRACE
+                except OSError:
+                    continue
+                if not young:                                        # no record and nobody filling it: what a stopped run left
+                    shutil.rmtree(folder, ignore_errors=True)
+            elif not os.path.isfile(meta["iso"]) and os.path.isdir(os.path.dirname(meta["iso"])):
+                shutil.rmtree(folder, ignore_errors=True)            # the image is gone from a folder that is there. (An image on a drive or share that is not connected now is not 'gone': its copy stays.)
+
+    ISO_BUSY_MARKER = ".extracting"
+    ISO_COPY_GRACE = 3600                                            # seconds: a folder without a record younger than this, or a marker younger than this x 6, is a copy being made
+
+    def _iso_copy_is_busy(self, folder):
+        try:
+            return time.time() - os.path.getmtime(os.path.join(folder, self.ISO_BUSY_MARKER)) < self.ISO_COPY_GRACE * 6
+        except OSError:
+            return False
 
     def _clear_game_data_caches(self):
         """The tables read out of qkl_boot.ast (philosophy weights, game reference, playbook names, personnel) are kept in the editor's cache without a record of which file they came from. When the game file
