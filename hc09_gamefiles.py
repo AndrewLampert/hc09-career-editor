@@ -291,7 +291,7 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
             plys = {(int(r["PLYL"]), int(r["poso"])): r for r in (_read(cache_dir, c["base"], "PLYS") or [])}
             step_table, art_table = ("PSLD", "ARTD") if changes.get("side") == "defense" else ("PSLO", "ARTO")
             steps, arts = _read(cache_dir, c["base"], step_table), _read(cache_dir, c["base"], art_table)      # PSAL and ARTL are COLUMNS; the tables are PSLO / PSLD (the step lists of the offense / the defense) and ARTO / ARTD (the art)
-            have_steps = {int(r["PSAL"]) for r in steps} if steps else None        # None: the copy has no such table (a Create-A-Play copy) and cannot be checked
+            have_steps = {int(r["PSAL"]) for r in steps} if steps else None        # None: the copy has no such table (a Create-A-Play copy) and cannot be checked. The compact copy (boot 42) has neither the tables nor the PSAL / ARTL columns of PLYS: new_step / new_art below stay False for it, so there is nothing to write there and nothing is skipped (only the master, boot 40, holds the assignments)
             have_arts = {int(r["ARTL"]) for r in arts} if arts else None
             for poso, want in changes["plys"].items():
                 row = plys.get((plyl, poso))
