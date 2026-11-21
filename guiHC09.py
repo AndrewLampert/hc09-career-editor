@@ -15230,14 +15230,21 @@ class App(tk.Tk):
         label.pack()
         win.protocol("WM_DELETE_WINDOW", lambda: None)
         win.grab_set()
+        finished = tk.BooleanVar(master=win, value=False)
+
+        def poll():                                       # every 50 ms on Tk's own thread: the bar, and the end of the copy
+            if state["total"]:
+                bar["value"] = 100 * state["done"] / state["total"]
+                label.configure(text=f"{state['done'] >> 20} of {state['total'] >> 20} MB")
+            if state["finished"]:
+                finished.set(True)
+            else:
+                win.after(50, poll)
         threading.Thread(target=work, daemon=True).start()
         try:
-            while not state["finished"]:
-                if state["total"]:
-                    bar["value"] = 100 * state["done"] / state["total"]
-                    label.configure(text=f"{state['done'] >> 20} of {state['total'] >> 20} MB")
-                win.update()
-                time.sleep(0.05)
+            win.after(0, poll)
+            win.wait_variable(finished)                   # Tk's own modal wait (the editor's windows keep being drawn, the grab keeps input out); it replaces a loop of win.update() and sleep(0.05),
+            #                                              which ran every pending event of the whole application, over and over, inside this call
         except tk.TclError:
             raise RuntimeError("The editor was closed while the disc image was being read.")
         finally:
