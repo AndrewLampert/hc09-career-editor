@@ -3148,6 +3148,27 @@ def save_ui_prefs(prefs):
 # the coach-side ID field hasn't been independently confirmed yet.
 PORTRAIT_TOP_INDEX = {"player": 1777, "coach": 1775}
 PORTRAIT_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hc09_portrait_cache")
+_PORTRAIT_EXTRACT_LOCK = threading.Lock()
+
+
+def ensure_portrait_archive(model, ast_path, kind, cache_path):
+    """The (large, one-time) nested portrait archive in the editor's cache, read out of the game's qkl_fe2ig.ast when it is not there. Only ONE extraction runs at a time (a second request waits, then
+    finds the file), and it is written to a temporary name and renamed: a request that looks the archive up while another is still extracting never reads a half file, and a stopped run leaves
+    no file that looks complete. An empty file is no archive."""
+    with _PORTRAIT_EXTRACT_LOCK:
+        if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
+            return cache_path
+        os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+        part = cache_path + ".part"
+        try:
+            os.remove(part)                                 # what a stopped run left behind
+        except OSError:
+            pass
+        model.run_bridge(["portrait-extract-archive", "--ast", ast_path, "--top-index", str(PORTRAIT_TOP_INDEX[kind]), "--out", part])
+        if not os.path.isfile(part) or os.path.getsize(part) == 0:
+            raise RuntimeError("The portrait archive could not be read out of the game files.")
+        os.replace(part, cache_path)
+    return cache_path
 PORTRAIT_ARCHIVE_FILENAME = {"player": "player_portraits.bin", "coach": "coach_portraits.bin"}
 
 # Auto-detected first: the RPCS3 install location the archive was originally
@@ -3756,12 +3777,7 @@ class AssignPortraitDialog(tk.Toplevel):
                 self.after(0, lambda: self.lbl_status.configure(text="Locate your game files first (see the Portrait panel)."))
                 return
             cache_path = self.parent._portrait_archive_cache_path("player")
-            if not os.path.isfile(cache_path):
-                os.makedirs(PORTRAIT_CACHE_DIR, exist_ok=True)
-                self.parent.model.run_bridge([
-                    "portrait-extract-archive", "--ast", ast_path,
-                    "--top-index", str(PORTRAIT_TOP_INDEX["player"]), "--out", cache_path,
-                ])
+            ensure_portrait_archive(self.parent.model, ast_path, "player", cache_path)
             result = self.parent.model.run_bridge(["portrait-list", "--archive", cache_path])
             shortids = result.get("shortIds", [])
             current = safe_int(self.row.get(PLAYER_PORTRAIT_CODE, ""))
@@ -11116,14 +11132,7 @@ class App(tk.Tk):
         portrait archive is cached locally, looks up shortid within it via
         bridge.js, and returns a PIL Image - or None if not found."""
         cache_path = self._portrait_archive_cache_path(kind)
-        if not os.path.isfile(cache_path):
-            os.makedirs(PORTRAIT_CACHE_DIR, exist_ok=True)
-            self.model.run_bridge([
-                "portrait-extract-archive",
-                "--ast", self.get_game_ast_path(),
-                "--top-index", str(PORTRAIT_TOP_INDEX[kind]),
-                "--out", cache_path,
-            ])
+        ensure_portrait_archive(self.model, self.get_game_ast_path(), kind, cache_path)
 
         with tempfile.NamedTemporaryFile(suffix=".dds", delete=False) as tf:
             dds_path = tf.name
@@ -14281,19 +14290,37 @@ class App(tk.Tk):
         ast = os.path.join(os.path.dirname(boot_ast), "qkl_interface.ast")
         cache = os.path.join(GAMEDATA_CACHE, "ui")
         if not os.path.isfile(ast):
-            return None
+            return None                                        # (a copy of qkl_boot.ast read out of a disc image has no qkl_interface.ast beside it: the plain field is drawn)
+        stamp_path = os.path.join(cache, "source.json")
+
+        def source_stamp():
+            st = os.stat(ast)
+            return {"path": os.path.normcase(os.path.abspath(ast)), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
         try:
-            with open(os.path.join(cache, "manifest.json"), encoding="utf-8") as f:
-                m = json.load(f)
-            if m.get("sourceSize") == os.path.getsize(ast) and os.path.isfile(os.path.join(cache, "field.png")):
+            # The cache is valid for THIS file: the same path, size and time as when it was made (the size alone matched another install's, or a patched, archive of equal size), and every
+            # picture the designer loads is there (an interrupted run could leave the manifest and the field without the receiver numbers).
+            with open(stamp_path, encoding="utf-8") as f:
+                made_for = json.load(f)
+            pictures = ["field.png"] + [f"num{k}.png" for k in range(1, 6)]
+            if made_for == source_stamp() and all(os.path.isfile(os.path.join(cache, name)) for name in pictures):
                 return cache
         except (OSError, ValueError):
+            pass
+        try:
+            os.remove(stamp_path)                              # while the pictures are made again, no record claims they are current
+        except OSError:
             pass
         try:
             res = self.model.run_bridge(["ui-assets", "--ast", ast, "--out-dir", cache])
         except Exception:
             return None
-        return cache if res.get("found") else None
+        if not res.get("found"):
+            return None
+        try:
+            write_json_atomic(stamp_path, source_stamp())
+        except OSError:
+            pass
+        return cache
 
     # ---- putting a made custom play into the game and taking it out again
     TEST_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "Documents", "hc09-test-backups")
@@ -15223,9 +15250,18 @@ class App(tk.Tk):
             extracted = not (os.path.isfile(dest) and self._same_stamp(want, self._iso_copy_source(dest)))
             if extracted:
                 messagebox.showinfo("Reading the disc image", f"The editor reads {BOOT_AST_FILENAME} (about 460 MB) out of the disc image\n{iso}\ninto its own folder, once. A window shows how far it is.")
-                self._extract_iso_file(iso, dest)
-                with open(meta, "w", encoding="utf-8") as f:
-                    json.dump(want, f)
+                os.makedirs(folder, exist_ok=True)
+                marker = os.path.join(folder, self.ISO_BUSY_MARKER)       # tells another editor window (its _prune_iso_copies) that this folder is being filled: source.json only comes when the copy is finished
+                open(marker, "w").close()
+                try:
+                    self._extract_iso_file(iso, dest)
+                    with open(meta, "w", encoding="utf-8") as f:
+                        json.dump(want, f)
+                finally:
+                    try:
+                        os.remove(marker)
+                    except OSError:
+                        pass
         except (ValueError, OSError) as e:
             messagebox.showerror("Disc image", f"{BOOT_AST_FILENAME} could not be read out of the disc image.\n\n{e}\n\n{hc09_iso.describe(iso)}")
             return ""
@@ -15247,9 +15283,27 @@ class App(tk.Tk):
             folder = os.path.join(self.ISO_CACHE_DIR, name)
             if not os.path.isdir(folder) or os.path.normcase(os.path.abspath(folder)) == os.path.normcase(os.path.abspath(keep)):
                 continue
+            if self._iso_copy_is_busy(folder):                       # another editor window is reading an image into it right now
+                continue
             meta = self._iso_copy_source(os.path.join(folder, BOOT_AST_FILENAME))
-            if meta is None or not os.path.isfile(meta["iso"]):
-                shutil.rmtree(folder, ignore_errors=True)
+            if meta is None:
+                try:
+                    young = time.time() - os.path.getmtime(folder) < self.ISO_COPY_GRACE
+                except OSError:
+                    continue
+                if not young:                                        # no record and nobody filling it: what a stopped run left
+                    shutil.rmtree(folder, ignore_errors=True)
+            elif not os.path.isfile(meta["iso"]) and os.path.isdir(os.path.dirname(meta["iso"])):
+                shutil.rmtree(folder, ignore_errors=True)            # the image is gone from a folder that is there. (An image on a drive or share that is not connected now is not 'gone': its copy stays.)
+
+    ISO_BUSY_MARKER = ".extracting"
+    ISO_COPY_GRACE = 3600                                            # seconds: a folder without a record younger than this, or a marker younger than this x 6, is a copy being made
+
+    def _iso_copy_is_busy(self, folder):
+        try:
+            return time.time() - os.path.getmtime(os.path.join(folder, self.ISO_BUSY_MARKER)) < self.ISO_COPY_GRACE * 6
+        except OSError:
+            return False
 
     def _clear_game_data_caches(self):
         """The tables read out of qkl_boot.ast (philosophy weights, game reference, playbook names, personnel) are kept in the editor's cache without a record of which file they came from. When the game file
