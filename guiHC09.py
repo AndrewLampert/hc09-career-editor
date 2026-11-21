@@ -50,6 +50,11 @@ except ImportError:                  # without it only changing a play in the ga
     GF = None
 
 try:
+    import hc09_defense as DEF
+except ImportError:                  # without it only the Change the defense window is missing
+    DEF = None
+
+try:
     import hc09_addplay as AP
 except ImportError:                  # without it only adding a play to the game files is missing
     AP = None
@@ -7270,7 +7275,11 @@ class PlayDesignerDialog(tk.Toplevel):
         else:
             state, note = "normal", ("This is one of your own plays: Save changes... puts the changes into it, or saves them as a new play." if self.is_mine() else "")
         self.btn_make.configure(state=state, text="Save changes..." if self.is_mine() else "Make custom play...")
-        self.btn_files.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
+        defense = d is not None and d["side"] == "defense"
+        if defense:                                        # a defensive play of the game: the window that gives each defender another of the game's own assignments
+            self.btn_files.configure(text="Change defense...", state="normal" if not self.is_mine() and GF is not None and DEF is not None else "disabled")
+        else:
+            self.btn_files.configure(text="Make a game play...", state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
         self.btn_book_name.configure(state="normal" if d is not None and not self.is_mine() and GF is not None else "disabled")
         self.btn_add.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None and AP is not None else "disabled")
         self.btn_convert.configure(state="normal" if getattr(self.lib, "custom", None) and GF is not None and AP is not None else "disabled")
@@ -7396,6 +7405,10 @@ class PlayDesignerDialog(tk.Toplevel):
 
     def _open_game_files(self):
         if self.detail is None or self.is_mine() or GF is None:
+            return
+        if self.detail["side"] == "defense":
+            if DEF is not None:
+                DefenseDialog(self.app, self)
             return
         GameFilesDialog(self.app, self)
 
@@ -8681,6 +8694,256 @@ class GameFilesDialog(WriteGuard, tk.Toplevel):
             self.designer.refresh_from_game_files(reselect=True)
 
         self._start_write("Changing the game files...", work, done, "Change in game files")
+
+    def _restore(self):
+        def done(result):
+            self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}.")
+            messagebox.showinfo("Put the game files back", f"Done: {result} file entr{'y is' if result == 1 else 'ies are'} as before the first change.", parent=self)
+            self.designer.refresh_from_game_files(reselect=True)
+
+        self._put_back("Put the game files back", "Put every play database entry that the editor changed (plays, Set personnel) back as it was before the first change?\n\nThe backups are in "
+                       "Documents\\hc09-game-file-backup.", lambda archives: self.app.game_file_restore(archives), done)
+
+
+class DefenseDialog(WriteGuard, tk.Toplevel):
+    """Change the defense: a defensive play of the game, with each defender given one of the assignments the game already has (a deep half, an outer third, a quarter, a hook, the flat, man on a receiver,
+    a rush ...), written into the game's own play database in place (over the play itself, or over another play of the same formation that you give up), so that the game treats it as a normal play.
+    The editor chooses, for each defender, the step list and the drawing the game itself uses for that assignment (hc09_defense); nothing is invented and no row is added. The first time, each
+    changed file entry is backed up and Put the game files back restores them."""
+
+    def __init__(self, app, designer):
+        super().__init__(designer)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Change the defense")
+        self.transient(designer)
+        make_modal(self)                                   # it reads the designer's play when a button is pressed: that play must not change behind it
+        self.geometry(f"1120x{min(760, self.winfo_screenheight() - 90)}")
+        self.minsize(980, 600)
+        self.app, self.designer = app, designer
+        lib = designer.lib
+        self.cat = getattr(lib, "_defense_catalog", None) or DEF.Catalog(lib)
+        lib._defense_catalog = self.cat
+        self.base = designer.plyl
+        d = designer.detail
+        self.slots = sorted(d["slots"], key=lambda s: (s["x"], s["poso"]))
+        self.changes = None
+        self._targets = {}
+        self.choice, self.values, self.boxes = {}, {}, {}  # poso -> StringVar, {text shown: group key, or None for 'as the game has it'}, the combobox
+        ttk.Label(self, text=f"Change the defense of {d['play']['name']}", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=1080, justify="left", padding=(14, 0, 14, 6),
+                  text="Give each defender one of the assignments the game already has. For each one the editor takes the step list and the drawing the game itself uses for it, writes them into the game's "
+                       "own files for this play (or over another play of the same formation that you give up) and the game treats it as a normal play. Close RPCS3 first. The first time, each changed "
+                       "file entry is saved in Documents\\hc09-game-file-backup, and Put the game files back restores them (the other changes made here too). Not tried in the game yet: the "
+                       "diagram shows what the game draws for the assignment, and whether the game plays a defender's assignment as it is drawn is not known.").pack(anchor="w")
+        form = ttk.Frame(self)
+        form.pack(fill="x", padx=14, pady=(0, 4))
+        ttk.Label(form, text="Name of the play (24 characters):").grid(row=0, column=0, sticky="w", pady=2)
+        self.name_var = tk.StringVar(value=d["play"]["name"][:24])
+        ttk.Entry(form, width=30, textvariable=self.name_var).grid(row=0, column=1, sticky="w", padx=6)
+        self.name_var.trace_add("write", lambda *_a: self._recompute())
+        ttk.Label(form, text="Put it in the place of:").grid(row=1, column=0, sticky="w", pady=2)
+        self.target_var = tk.StringVar()
+        self.cmb_target = ttk.Combobox(form, state="readonly", width=60, textvariable=self.target_var)
+        self.cmb_target.grid(row=1, column=1, sticky="w", padx=6)
+        self.cmb_target.bind("<<ComboboxSelected>>", lambda e: self._recompute())
+        ttk.Label(form, text="Start from:").grid(row=2, column=0, sticky="w", pady=2)
+        prow = ttk.Frame(form)
+        prow.grid(row=2, column=1, sticky="w", padx=6)
+        self.preset_var = tk.StringVar()
+        cmb = ttk.Combobox(prow, state="readonly", width=56, textvariable=self.preset_var, values=[text for _n, text in DEF.PRESETS])
+        cmb.pack(side="left")
+        ttk.Button(prow, text="Fill in the deep defenders", command=self._preset).pack(side="left", padx=(8, 0))
+        ttk.Button(prow, text="As the game has it", command=self._reset).pack(side="left", padx=(8, 0))
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True, padx=14, pady=(2, 2))
+        self.canvas = PlayCanvas(main, art_dir=getattr(lib, "_ui_art", None))
+        self.canvas.pack(side="left", anchor="n")
+        right = ttk.Frame(main)
+        right.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        for s in self.slots:
+            row = ttk.Frame(right)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=s["label"], width=6, font=("", 9, "bold")).pack(side="left")
+            var = tk.StringVar()
+            cmb = ttk.Combobox(row, state="readonly", width=58, textvariable=var)
+            cmb.pack(side="left")
+            cmb.bind("<<ComboboxSelected>>", lambda e: self._recompute())
+            self.choice[s["poso"]] = var
+            self.boxes[s["poso"]] = cmb
+            self._fill_options(s, cmb, var)
+        self.lbl_shell = ttk.Label(right, wraplength=560, justify="left", font=("", 10, "bold"), padding=(0, 8, 0, 0))
+        self.lbl_shell.pack(anchor="w")
+        self.lbl_warn = ttk.Label(right, wraplength=560, justify="left", foreground="#d98c1f")
+        self.lbl_warn.pack(anchor="w")
+        self.lbl_changes = ttk.Label(self, wraplength=1080, justify="left", padding=(14, 4, 14, 2))
+        self.lbl_changes.pack(anchor="w")
+        self.lbl_result = ttk.Label(self, wraplength=1080, justify="left", foreground="gray", padding=(14, 2, 14, 4))
+        self.lbl_result.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_apply = ttk.Button(btn, text="Put the play in the game files", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Put the game files back...", command=self._restore).pack(side="left")
+        self._load_targets()
+        self._recompute()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    # ---- the choices of each defender
+    def _fill_options(self, s, cmb, var):
+        cat = self.cat
+        own = cat.assignment[s["psal"]]
+        texts = {f"As the game has it: {own.words}": None}
+        for key, words, _n in cat.options(s["epos"]):
+            if key == own.key:
+                continue
+            texts[self._option_text(s, key, words)] = key
+        self.values[s["poso"]] = texts
+        cmb.configure(values=list(texts))
+        var.set(next(iter(texts)))
+
+    def _option_text(self, s, key, words, foreign=False):
+        """The text of an option: its words, and what to know about it: the drawing cannot be put in the right place from where the defender stands (the game has no art for it), or the game does not
+        give this assignment to this kind of defender (foreign)."""
+        notes = []
+        if foreign:
+            notes.append("the game does not give this to this position")
+        try:
+            pick = self.cat.pick(key, (s["x"], s["y"]), s["psal"], s["artl"])
+            if pick.error is not None and pick.error > DEF.ART_TOLERANCE:
+                notes.append(f"drawn {round(pick.error)} units off")
+        except ValueError:
+            pass
+        return words + (f"  ({'; '.join(notes)})" if notes else "")
+
+    def _set_choice(self, poso, key):
+        """Show `key` as the choice of the defender in slot poso (None: as the game has it), adding it to his list when the game does not give it to his kind of defender."""
+        texts = self.values[poso]
+        for text, k in texts.items():
+            if k == key:
+                self.choice[poso].set(text)
+                return
+        s = next(x for x in self.slots if x["poso"] == poso)
+        text = self._option_text(s, key, DEF.group_words(key), foreign=True)
+        texts[text] = key
+        self.boxes[poso].configure(values=list(texts))
+        self.choice[poso].set(text)
+
+    def _assign(self):
+        return {poso: self.values[poso].get(var.get()) for poso, var in self.choice.items() if self.values[poso].get(var.get()) is not None}
+
+    def _preset(self):
+        name = next((n for n, text in DEF.PRESETS if text == self.preset_var.get()), None)
+        if name is None:
+            return
+        try:
+            got = DEF.preset(name, self.slots, {s["poso"]: self.cat.assignment[s["psal"]].key for s in self.slots})
+        except ValueError as e:
+            self.lbl_changes.configure(text=str(e))
+            return
+        for poso in self.choice:
+            self._set_choice(poso, None)
+        for poso, key in got.items():
+            if key != self.cat.assignment[next(x for x in self.slots if x["poso"] == poso)["psal"]].key:
+                self._set_choice(poso, key)
+        self._recompute()
+
+    def _reset(self):
+        for poso in self.choice:
+            self._set_choice(poso, None)
+        self._recompute()
+
+    # ---- the place to put it
+    def _load_targets(self):
+        cands = GF.defense_candidates(self.designer.lib, self.base)
+        labels = []
+        self._targets = {}
+        for plyl, name, n in cands:
+            books = f"{n} playbook{'s' if n != 1 else ''}" if n else "in no playbook: no team has it"
+            label = f"this play: {name} ({books})" if plyl == self.base else f"{name} ({books})"
+            labels.append(label)
+            self._targets[label] = plyl
+        self.cmb_target.configure(values=labels)
+        self.target_var.set(labels[0])
+
+    # ---- what the choices make
+    def _recompute(self):
+        self.changes = None
+        self.btn_apply.configure(state="disabled")
+        lib, cat = self.designer.lib, self.cat
+        assign = self._assign()
+        target = self._targets.get(self.target_var.get(), self.base)
+        try:
+            ch = GF.defense_changes_for(lib, self.base, assign, target=target, name=self.name_var.get(), catalog=cat)
+        except ValueError as e:
+            self.lbl_changes.configure(text=str(e))
+            return
+        self._draw(assign)
+        picks = {poso: cat.pick(tuple(key), (s["x"], s["y"]), s["psal"], s["artl"]) for poso, key in assign.items() for s in self.slots if s["poso"] == poso and tuple(key) != cat.assignment[s["psal"]].key}
+        after = [(s["poso"], s["label"], cat.assignment[picks[s["poso"]].psal if s["poso"] in picks else s["psal"]]) for s in self.slots]
+        deep = DEF.deep_ids(a for _p, _l, a in after)
+        self.lbl_shell.configure(text=DEF.shell_name(deep, man=sum(1 for _p, _l, a in after if a.kind == "man")))
+        self.lbl_warn.configure(text="\n".join(DEF.check(after)))
+        if GF.is_empty(ch):
+            self.lbl_changes.configure(text="Nothing is changed yet: choose what a defender does, or start from a coverage, or give the play a new name.")
+            return
+        self.changes = ch
+        self.lbl_changes.configure(text="\n".join(GF.describe(lib, ch)))
+        self.btn_apply.configure(state="normal")
+
+    def _draw(self, assign):
+        """The play as it will be: the game's own drawing for each defender (the lines and zones the art row gives him), and, dashed, where the editor thinks each zone belongs."""
+        lib, cat = self.designer.lib, self.cat
+        d = self.designer.detail
+        slots, changed = [], set()
+        for s in d["slots"]:
+            key = assign.get(s["poso"])
+            if key is not None and tuple(key) != cat.assignment[s["psal"]].key:
+                pk = cat.pick(tuple(key), (s["x"], s["y"]), s["psal"], s["artl"])
+                s = {**s, "psal": pk.psal, "artl": pk.artl, "steps": lib.steps_of(d["table"], pk.psal), "art": lib.art_of(d["table"], pk.artl)}
+                changed.add(s["poso"])
+            slots.append(s)
+        self.canvas.draw_play(slots, "defense", lib, changed=changed)
+        for s in slots:
+            a = cat.assignment.get(s["psal"])
+            centre = cat.centre.get(a.key) if a is not None else None
+            if centre is None:
+                continue
+            x0, y0, x1, y1 = DEF.zone_extent(a.key, centre)
+            p0, p1 = self.canvas._p(x0, y0), self.canvas._p(x1, y1)
+            self.canvas.create_rectangle(*p0, *p1, outline="#ff9f40" if s["poso"] in changed else "#9ad0ff", dash=(3, 3), width=1)
+
+    def _archives(self):
+        return self.app._personnel_archives()
+
+    def _apply(self):
+        app, changes = self.app, self.changes
+        if changes is None:
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Change the defense", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        archives = self._archives()
+        if not archives:
+            return
+        give_up = f"\n\nThe play \"{changes['target_name']}\" is given up." if changes["plyl"] != changes["base"] else ""
+        approx = "\n\nThe diagram will not show some zones in the right place (listed in the window)." if changes.get("approximate") else ""
+        if not messagebox.askyesno("Change the defense", "Put the changed defense in the game files?\n\nThis writes into qkl_boot.ast of your game. Each changed entry is saved in Documents\\hc09-game-file-backup "
+                                   "and Put the game files back restores it." + give_up + approx + "\n\nNot tried in the game yet.", parent=self):
+            return
+
+        def work():
+            return app.game_file_apply(changes, archives)
+
+        def done(result):
+            _targets, report = result
+            self.lbl_result.configure(text="Done: " + "; ".join(f"{name}: {n_} value{'s' if n_ != 1 else ''}" for name, n_ in report) + ". Start the game and look at the play. The Play creator shows it now.")
+            messagebox.showinfo("Change the defense", "Done. Start the game and look at the play (Play Now, a playbook that has it).\n\nPut the game files back (this window) restores the files as they were.", parent=self)
+            self.designer.refresh_from_game_files(reselect=True)
+
+        self._start_write("Changing the game files...", work, done, "Change the defense")
 
     def _restore(self):
         def done(result):
