@@ -15026,8 +15026,11 @@ class App(tk.Tk):
         boot_ast = self._find_boot_ast()                   # (may ask the person: on the Tk thread)
         if not boot_ast:
             return
+        runtime = self.ui_prefs.get("runtime", "xenia")
 
         def done(_result):                                 # the export (12 tables, a few seconds) ran in the background; the editor stayed alive
+            if not self._read_still_wanted(runtime):
+                return
             if self._philosophy_loaded(boot_ast):
                 PlayerTypeFitDialog(self, self.model)
 
@@ -15044,13 +15047,24 @@ class App(tk.Tk):
         boot_ast = self._find_boot_ast(feature="Game reference", what="injury, draft pick, contract and health tables")
         if not boot_ast:
             return
+        runtime = self.ui_prefs.get("runtime", "xenia")
 
         def done(_result):
+            if not self._read_still_wanted(runtime):
+                return
             loaded = self._reference_loaded(boot_ast)
             if loaded is not None:
                 GameReferenceDialog(self, loaded)
 
         self.run_in_thread_with_busy("Reading the game's tables...", lambda: self._reference_export(boot_ast), done, error_title="Couldn't read game data")
+
+    def _read_still_wanted(self, runtime):
+        """After a read of the game's tables in the background: False when the runtime was changed meanwhile. The tables came from the archive of the OLD runtime, and _set_runtime had already cleared the
+        caches before the export wrote them, so what it wrote is dropped too (nothing is loaded, the old archive path is not remembered again)."""
+        if self.ui_prefs.get("runtime", "xenia") == runtime:
+            return True
+        self._clear_game_data_caches()
+        return False
 
     def _reference_export(self, boot_ast):
         """The bridge exports of the Game reference's tables into the cache. Touches no widget: it may run on a background thread."""
