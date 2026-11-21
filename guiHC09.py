@@ -5710,98 +5710,134 @@ class PersonnelDialog(tk.Toplevel):
             return False
         return True
 
-    def _run(self, targets, what):
+    def _cursor(self, busy):
+        try:
+            self.config(cursor="watch" if busy else "")
+        except tk.TclError:                                # the window was closed meanwhile
+            pass
+
+    def _run(self, targets, what, on_done=None):
+        """Write `targets` into the game files. The checks and the question are asked here, on the Tk thread; the write runs in the background (App.run_game_write: one game-file write at a time, the
+        editor stays alive). on_done() is called on the Tk thread when the write went through. Returns True when the write was started."""
         if getattr(self, "_stale", False):
             messagebox.showinfo("Set personnel", "This window shows the sets as they were before the last change, and they could not be read again. Close it and open Set personnel again.", parent=self)
+            return False
+        if self._reading():
             return False
         if not targets:
             messagebox.showinfo("Nothing to change", "The game files already hold this.")
             return False
         if not self._check_closed():
             return False
-        if not self.app.begin_game_write():                # a rename or another writer of the game files is still running: not at the same time
+        n_rows = sum(len(t["edits"]) for t in targets)
+        names = ", ".join(sorted({f"{os.path.basename(t['ast'])} #{t['index']}" for t in targets}))
+        if not messagebox.askyesno(what, f"This writes {n_rows} slot rows into {len(targets)} database copies ({names}) in the game's files. "
+                                          "The original of each is backed up first (once). The game and the emulator are closed?"):
             return False
-        try:
-            n_rows = sum(len(t["edits"]) for t in targets)
-            names = ", ".join(sorted({f"{os.path.basename(t['ast'])} #{t['index']}" for t in targets}))
-            if not messagebox.askyesno(what, f"This writes {n_rows} slot rows into {len(targets)} database copies ({names}) in the game's files. "
-                                              "The original of each is backed up first (once). The game and the emulator are closed?"):
-                return False
-            self.config(cursor="watch")
-            self.update_idletasks()
-            try:
-                self.app._refuse_write_to_iso_copy(*[t["ast"] for t in targets])
-                apply_personnel_targets(self.app.model, targets, self.app._personnel_backup_dir())
-            except Exception as e:
-                messagebox.showerror(what, str(e))
-                return False
-            finally:
-                self.config(cursor="")
+        app = self.app
+
+        def work():
+            app._refuse_write_to_iso_copy(*[t["ast"] for t in targets])
+            apply_personnel_targets(app.model, targets, app._personnel_backup_dir())
+
+        def done(_result):
+            if on_done:
+                on_done()
+
+        self._cursor(True)
+        started = app.run_game_write("Writing the game files...", work, done, error_title=what, on_finish=lambda: self._cursor(False))
+        if not started:
+            self._cursor(False)
+        return started
+
+    def _reading(self):
+        """True (with a message) while the sets are being read again after a write: a second write, or a second read, would rebuild the same cache folder at the same time and leave this window with
+        stale data or a failed reload."""
+        if getattr(self, "_reloading", False):
+            messagebox.showinfo("Set personnel", "The sets are being read again after the last change. Wait a moment, then try again.", parent=self)
             return True
-        finally:
-            self.app.end_game_write()
+        return False
 
     def _reload(self, keep=None):
-        """Read the sets again after a write. Returns True when it worked. When it does not, the write itself went through, but this window still holds what it read BEFORE the write: it says so and
-        turns the Apply buttons off (a second Apply would plan its change from values that are no longer in the files)."""
-        try:
-            self.data = self.app.reload_personnel_data()
-        except Exception as e:
-            messagebox.showerror("Set personnel", f"The change was written, but the game's play sets could not be read again:\n\n{e}\n\nWhat this window shows is from before the change. Close it and open Set personnel again.", parent=self)
-            self._stale = True
-            for name in ("btn_apply", "btn_reset"):
-                btn = getattr(self, name, None)
-                if btn is not None:
-                    try:
-                        btn.configure(state="disabled")
-                    except tk.TclError:
-                        pass
-            return False
-        self._stale = False
-        self._fill(keep=keep)
-        self.app.refresh_play_creators()                   # an open Play creator holds the sets it read earlier (their slot positions): read them again
-        return True
+        """Read the sets again after a write, in the background. When it does not work, the write itself went through, but this window still holds what it read BEFORE the write: it says so and turns the
+        Apply buttons off (a second Apply would plan its change from values that are no longer in the files). Open Play creators read the files again either way."""
+        app = self.app
+        if getattr(self, "_reloading", False):             # (one read at a time)
+            return
+        self._reloading = True
+
+        def work():
+            try:
+                return True, app.reload_personnel_data()
+            except Exception as e:
+                return False, e
+
+        def done(result):
+            self._reloading = False
+            ok, value = result
+            alive = self.winfo_exists()
+            if not ok:
+                if alive:
+                    messagebox.showerror("Set personnel", f"The change was written, but the game's play sets could not be read again:\n\n{value}\n\nWhat this window shows is from before the change. Close it and open Set personnel again.", parent=self)
+                    self._stale = True
+                    for name in ("btn_apply", "btn_reset"):
+                        btn = getattr(self, name, None)
+                        if btn is not None:
+                            try:
+                                btn.configure(state="disabled")
+                            except tk.TclError:
+                                pass
+                return
+            if alive:
+                self.data = value
+                self._stale = False
+                self._fill(keep=keep)
+            app.refresh_play_creators()                   # an open Play creator holds the sets it read earlier (their slot positions): read them again
+
+        app.run_in_thread_with_busy("Reading the game's play sets...", work, done, error_title="Set personnel")
+
+    def _written(self, title, text, keep):
+        """After a write went through: say so, and read the sets again."""
+        if self.winfo_exists():
+            messagebox.showinfo(title, text, parent=self)
+        self._reload(keep=keep)
 
     def _apply_set(self):
         chosen = self._chosen_changes()
         if self.setl is None or not chosen:
             return
-        plan = self.data.plan_change(self.setl, chosen)
-        if self._run(self.data.edits_for({self.setl: plan["changes"]}), "Apply to the game files"):
-            messagebox.showinfo("Applied", "Done. Start the game again to use it.")
-            self._reload(keep=self.setl)
+        setl = self.setl
+        plan = self.data.plan_change(setl, chosen)
+        self._run(self.data.edits_for({setl: plan["changes"]}), "Apply to the game files", lambda: self._written("Applied", "Done. Start the game again to use it.", setl))
 
     def _reset_set(self):
         if self.setl is None:
             return
-        if self._run(self.data.reset_edits_for([self.setl]), "Reset to stock"):
-            messagebox.showinfo("Reset", "This set is back to stock. Start the game again to use it.")
-            self._reload(keep=self.setl)
+        setl = self.setl
+        self._run(self.data.reset_edits_for([setl]), "Reset to stock", lambda: self._written("Reset", "This set is back to stock. Start the game again to use it.", setl))
 
     def _restore_all(self):
+        if self._reading():
+            return
         if not self._check_closed():
             return
-        if not self.app.begin_game_write():                # not while another window is writing the game files
+        if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
+                                                          "The game and the emulator are closed?"):
             return
-        try:
-            if not messagebox.askyesno("Restore all to stock", "This writes every backed-up original back into the game's files, undoing every change made here. "
-                                                              "The game and the emulator are closed?"):
-                return
-            self.config(cursor="watch")
-            self.update_idletasks()
-            try:
-                self.app._refuse_write_to_iso_copy(*[c["ast"] for c in getattr(self.data, "copies", [])])
-                res = restore_personnel_files(self.app.model, self.data, self.app._personnel_backup_dir())
-            except Exception as e:
-                messagebox.showerror("Restore all", str(e))
-                return
-            finally:
-                self.config(cursor="")
-        finally:
-            self.app.end_game_write()
-        done = [r for r in res.get("results", []) if r.get("restored")]
-        messagebox.showinfo("Restored", f"{len(done)} database copies restored from the backups.")
-        self._reload(keep=self.setl)
+        app, data, setl = self.app, self.data, self.setl
+        asts = [c["ast"] for c in getattr(data, "copies", [])]
+
+        def work():
+            app._refuse_write_to_iso_copy(*asts)
+            return restore_personnel_files(app.model, data, app._personnel_backup_dir())
+
+        def done(res):
+            restored = [r for r in res.get("results", []) if r.get("restored")]
+            self._written("Restored", f"{len(restored)} database copies restored from the backups.", setl)
+
+        self._cursor(True)
+        if not app.run_game_write("Putting the game files back...", work, done, error_title="Restore all", on_finish=lambda: self._cursor(False)):
+            self._cursor(False)
 
     def _bulk(self):
         PersonnelBulkDialog(self.app, self)
@@ -5933,10 +5969,12 @@ class PersonnelBulkDialog(tk.Toplevel):
             return
         changes = {s: self._plans[s]["changes"] for s in chosen}
         owner = self.owner
-        if owner._run(self.data.edits_for(changes), "Apply the bulk change"):
-            messagebox.showinfo("Applied", f"{len(chosen)} sets changed. Start the game again to use them.")
-            owner._reload(keep=owner.setl)
-            self.destroy()
+
+        def after():
+            owner._written("Applied", f"{len(chosen)} sets changed. Start the game again to use them.", owner.setl)
+            if self.winfo_exists():
+                self.destroy()
+        owner._run(self.data.edits_for(changes), "Apply the bulk change", after)
 
 
 class SavesDialog(tk.Toplevel):
@@ -7405,22 +7443,37 @@ class PlayDesignerDialog(tk.Toplevel):
                                    "for the plays it made. This gives those plays the rows in:\n\n" + "\n".join(os.path.dirname(s) for s in saves) + "\n\nA copy of each save is kept first. Close RPCS3 while "
                                    "you do it. Go on?", parent=self):
             return
-        lines, stock_ai = [], getattr(self.lib, "tables", {}).get("PBAI", [])
-        career_changed = False
-        for s in saves:
-            try:
-                n, skipped = add_cpu_rows_in_save(app.model, s, profile, stock_ai)
-                career_changed = career_changed or (n and s == db)
-                lines.append(f"{os.path.basename(os.path.dirname(s))}: " + (f"{n} CPU rows added" if n else "nothing to add (every play has CPU rows)") + (f"; not done: {len(skipped)} play(s) in no playbook the computer can use" if skipped else ""))
-            except Exception as e:
-                lines.append(f"{os.path.basename(os.path.dirname(s))}: NOT changed ({e})")
-        if db and len(saves) > 1 and career_changed:
-            try:
-                app.model.load_all_from_db(db)
-                app._on_load_db_path_success(db)
-            except Exception as e:
-                lines.append(f"The open career could not be read again ({e}): load it again from the file.")
-        messagebox.showinfo("Fix my plays for practice", "\n".join(lines) + "\n\nStart a new career (or load this one) and practice one of your plays: its play knowledge now goes up.", parent=self)
+        stock_ai = getattr(self.lib, "tables", {}).get("PBAI", [])
+
+        def work():                                        # the bridge work of every save, in the background
+            lines, career_changed = [], False
+            for s in saves:
+                try:
+                    n, skipped = add_cpu_rows_in_save(app.model, s, profile, stock_ai)
+                    career_changed = career_changed or (n and s == db)
+                    lines.append(f"{os.path.basename(os.path.dirname(s))}: " + (f"{n} CPU rows added" if n else "nothing to add (every play has CPU rows)") + (f"; not done: {len(skipped)} play(s) in no playbook the computer can use" if skipped else ""))
+                except Exception as e:
+                    lines.append(f"{os.path.basename(os.path.dirname(s))}: NOT changed ({e})")
+            reload_db = None
+            if db and len(saves) > 1 and career_changed:
+                try:
+                    app.model.load_all_from_db(db)
+                    reload_db = db
+                except Exception as e:
+                    lines.append(f"The open career could not be read again ({e}): load it again from the file.")
+            return lines, reload_db
+
+        def done(res):
+            lines, reload_db = res
+            if reload_db:
+                try:
+                    app._on_load_db_path_success(reload_db)
+                except Exception as e:
+                    lines.append(f"The open career could not be read again ({e}): load it again from the file.")
+            if self.winfo_exists():
+                messagebox.showinfo("Fix my plays for practice", "\n".join(lines) + "\n\nStart a new career (or load this one) and practice one of your plays: its play knowledge now goes up.", parent=self)
+
+        app.run_in_thread_with_busy("Fixing the plays for practice...", work, done, error_title="Fix my plays for practice")
 
     def _make_custom(self):
         if self.detail is None:
@@ -8355,70 +8408,78 @@ class CustomPlayDialog(tk.Toplevel):
                                         (f"  It is made a {FAMILY_NAME[plan['family']].lower()} (play type {plan['plyt']}, with the {'pass reads' if plan['family'] in ('dropback', 'play_action', 'option_pass') else 'run hole'} of that kind)."
                                          if plan else ""))
 
-    def _make_files(self):
-        """Make the play in copies of the profile and the career; the result, or None after telling why not."""
+    def _run_files(self, busy_text, title, work, then):
+        """The bridge work of making or changing the play's files, in the background (the window stays alive; the buttons wait for it). then(result) runs on the Tk thread when it worked; an error is
+        shown with `title`. Returns False when it was not started (one at a time)."""
+        if getattr(self, "_working", False):
+            return False
+        self._working = True
+        self.config(cursor="watch")
+        self.lbl_result.configure(text=busy_text)
+
+        def background():
+            try:
+                return True, work()
+            except Exception as e:
+                return False, e
+
+        def done(res):
+            self._working = False
+            if not self.winfo_exists():
+                return
+            self.config(cursor="")
+            ok, value = res
+            if not ok:
+                self.lbl_result.configure(text="")
+                messagebox.showerror(title, str(value), parent=self)
+                return
+            self.lbl_result.configure(text=value["message"])
+            self._made = value
+            then(value)
+
+        self.app.run_in_thread_with_busy(busy_text, background, done, error_title=title)
+        return True
+
+    def _make_files(self, then):
+        """Make the play in copies of the profile and the career, in the background; then(result) runs when it worked (an error, or a question that is not answered, tells why not and nothing runs)."""
         name = self.name_var.get().strip()
         if not name:
             messagebox.showerror("Make custom play", "Give the new play a name.", parent=self)
-            return None
+            return False
         try:
             name = clean_play_name(name)                           # 1 to 24 letters, digits and ordinary signs (the same rule as Rename my plays)
         except ValueError as e:
             messagebox.showerror("Make custom play", str(e), parent=self)
-            return None
+            return False
         why = self.target.problem()
         if why:
             messagebox.showerror("Make custom play", why, parent=self)
-            return None
+            return False
         t, d = self.target, self.designer
-        self.config(cursor="watch")
-        self.lbl_result.configure(text="Making the play ...")
-        self.update_idletasks()
-        try:
-            result = self.app.make_custom_play_files(d.lib, d.plyl, name, dict(d.overrides), t.profile_var.get().strip(), t.career_var.get().strip(), t.bokl(), t.out_var.get().strip(),
-                                                     plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
-        except Exception as e:
-            self.lbl_result.configure(text="")
-            messagebox.showerror("Make custom play", str(e), parent=self)
-            return None
-        finally:
-            self.config(cursor="")
-        self.lbl_result.configure(text=result["message"])
-        self._made = result
-        return result
+        args = (d.lib, d.plyl, name, dict(d.overrides), t.profile_var.get().strip(), t.career_var.get().strip(), t.bokl(), t.out_var.get().strip())       # (read now: the Tk variables)
+        kw = dict(plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
+        return self._run_files("Making the play ...", "Make custom play", lambda: self.app.make_custom_play_files(*args, **kw), then)
 
-    def _update_files(self):
-        """Put the changes into the play itself, in copies of the profile and the career; the result, or None after telling why not."""
+    def _update_files(self, then):
+        """Put the changes into the play itself, in copies of the profile and the career, in the background; then(result) runs when it worked."""
         name = self.name_var.get().strip()
         try:
             name = clean_play_name(name)                           # 1 to 24 letters, digits and ordinary signs (the same rule as Rename my plays)
         except ValueError as e:
             messagebox.showerror("Save changes", str(e), parent=self)
-            return None
+            return False
         why = self.target.problem()
         if why:
             messagebox.showerror("Save changes", why, parent=self)
-            return None
+            return False
         t, d = self.target, self.designer
         profile = t.profile_var.get().strip()
         if d.my_profile is None or os.path.abspath(profile) != os.path.abspath(d.my_profile):
             messagebox.showerror("Save changes", "The plays were read from another profile save than the one in Details. Close this window, choose 'Plays I made' again and try again.", parent=self)
-            return None
-        self.config(cursor="watch")
-        self.lbl_result.configure(text="Changing the play ...")
-        self.update_idletasks()
-        try:
-            result = self.app.update_custom_play_files(d.lib, d.plyl, name, dict(d.overrides), profile, t.career_var.get().strip(), t.out_var.get().strip(),
-                                                       plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
-        except Exception as e:
-            self.lbl_result.configure(text="")
-            messagebox.showerror("Save changes", str(e), parent=self)
-            return None
-        finally:
-            self.config(cursor="")
-        self.lbl_result.configure(text=result["message"])
-        self._made = result
-        return result
+            return False
+        args = (d.lib, d.plyl, name, dict(d.overrides), profile, t.career_var.get().strip(), t.out_var.get().strip())
+        kw = dict(plan=d.final_plan(), reads=d.reads_for_make(), alignment=d.alignment_for_make())
+        return self._run_files("Changing the play ...", "Save changes", lambda: self.app.update_custom_play_files(*args, **kw), then)
 
     def _update(self):
         t, d = self.target, self.designer
@@ -8434,24 +8495,23 @@ class CustomPlayDialog(tk.Toplevel):
         if not messagebox.askyesno("Save changes", f"Put the changes into your play \"{d.detail['play']['name']}\"?\n\nThis changes your profile save and your career save (the two USR-DATA files). Your own two files "
                                    "are saved first in Documents\\hc09-test-backups, and Put my saves back undoes it.\n\n" + f"Profile: {profile}\nCareer: {career}", parent=self):
             return
-        result = self._update_files()
-        if result is None:
-            return
-        try:
-            dest = self.app.install_custom_play(result, profile, career)
-        except Exception as e:
-            messagebox.showerror("Save changes", str(e), parent=self)
-            return
         keep = d.plyl
-        d.reload_mine(keep=keep)
-        self.lbl_result.configure(text="The changes are in the play.")
-        messagebox.showinfo("Save changes", f"Done. Start the game, load the career and look at the play in custom playbook {result.get('bokl', '')}, under Created Plays.\n\n"
-                            f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
+
+        def installed(result):                                    # the files are made: put them in place (two file copies, quick) and show the play as it is now
+            try:
+                dest = self.app.install_custom_play(result, profile, career)
+            except Exception as e:
+                messagebox.showerror("Save changes", str(e), parent=self)
+                return
+            d.reload_mine(keep=keep)
+            self.lbl_result.configure(text="The changes are in the play.")
+            messagebox.showinfo("Save changes", f"Done. Start the game, load the career and look at the play in custom playbook {result.get('bokl', '')}, under Created Plays.\n\n"
+                                f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
+        self._update_files(installed)
 
     def _make(self):
         """Only make the files: the two copies, for people who put them in place by hand."""
-        if self._make_files() is not None:
-            messagebox.showinfo("Custom play made", self._made["message"], parent=self)
+        self._make_files(lambda result: messagebox.showinfo("Custom play made", result["message"], parent=self))
 
     def _add(self):
         why = self.target.problem()
@@ -8469,22 +8529,25 @@ class CustomPlayDialog(tk.Toplevel):
                                    "(the two USR-DATA files). Your own two files are saved first in Documents\\hc09-test-backups, and Put my saves back undoes it.\n\n"
                                    f"Profile: {profile}\nCareer: {career}", parent=self):
             return
-        result = self._make_files()
-        if result is None:
-            return
-        try:
-            dest = self.app.install_custom_play(result, profile, career)
-        except Exception as e:
-            messagebox.showerror("Add to my game", str(e), parent=self)
-            return
-        use = t.in_use()
-        self.lbl_result.configure(text=f"Added to custom playbook {t.bokl()}.")
-        messagebox.showinfo("Add to my game", f"Done. Start the game, load the career and look in custom playbook {t.bokl()} ({t.playbook_name()}), under Created Plays.\n\n" +
-                            ("" if use is not False else f"Your team does not play with custom playbook {t.bokl()} yet, so the game will not offer the play until it does: Playbooks tab, Team playbooks, choose your team, "
-                             "Change... next to Offense, pick that playbook, then Save to File.\n\n") +
-                            f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
+
+        def installed(result):                                    # the files are made: put them in place (two file copies, quick)
+            try:
+                dest = self.app.install_custom_play(result, profile, career)
+            except Exception as e:
+                messagebox.showerror("Add to my game", str(e), parent=self)
+                return
+            use = t.in_use()
+            self.lbl_result.configure(text=f"Added to custom playbook {t.bokl()}.")
+            messagebox.showinfo("Add to my game", f"Done. Start the game, load the career and look in custom playbook {t.bokl()} ({t.playbook_name()}), under Created Plays.\n\n" +
+                                ("" if use is not False else f"Your team does not play with custom playbook {t.bokl()} yet, so the game will not offer the play until it does: Playbooks tab, Team playbooks, choose your team, "
+                                 "Change... next to Offense, pick that playbook, then Save to File.\n\n") +
+                                f"Your own files are saved in {dest}. Put my saves back (in this window) puts them back.", parent=self)
+        self._make_files(installed)
 
     def _uninstall(self):
+        if getattr(self, "_working", False):               # the files are being made: their install (the callback) would put the new copies over what this puts back
+            messagebox.showinfo("Put my saves back", "The play's files are still being made. Wait until that is finished, then try again.", parent=self)
+            return
         answer = messagebox.askyesnocancel("Put my saves back", "RPCS3, Xenia and HC09 for PC must be closed.\n\nYes: put back your files from before your FIRST install (every test play is gone).\n"
                                            "No: put back your files from before the LAST install only.\nCancel: do nothing.\n\n"
                                            "Whatever the game saved since (a season played, say) is replaced too. A copy of your current files is kept first.", parent=self)
@@ -9039,26 +9102,61 @@ class GameFilesAddBase(WriteGuard, tk.Toplevel):
         return ("These game files are not the stock game the editor was tried on:\n  " + "\n  ".join(diff) + "\nThe added plays were only tried in the PS3 game (RPCS3). Another version may "
                 "crash on the day before the first game, so use a copy of the game files and keep Put the game files back at hand.\n\n")
 
-    def _link(self, links=None, remove=(), keep=()):
+    def _link_work(self, saves, links=None, remove=(), keep=()):
+        """Link (or unlink) the plays in the saves given ([(label, path)], read from the ticked boxes beforehand: this touches no widget, so it may run on a background thread). Returns (the lines
+        that say what happened, the path of the open save when it was changed on disk and read again into the editor's model, else None)."""
         out = []
-        for label, path in self._selected_saves():
+        for label, path in saves:
             try:
                 a, r = link_plays_in_save(self.app.model, path, links, remove, keep)
                 out.append(f"{label}: {a} link{'s' if a != 1 else ''} added, {r} taken out")
             except Exception as e:
                 out.append(f"{label}: NOT changed ({e})")
         db = getattr(self.app.model, "db_path", None)
-        if db and any(path == db for _l, path in self._selected_saves()):
+        reload_db = None
+        if db and any(path == db for _l, path in saves):
             try:
                 self.app.model.load_all_from_db(db)           # the open save was changed on disk: read it again
-                self.app._on_load_db_path_success(db)
+                reload_db = db
             except Exception:
                 pass
+        return out, reload_db
+
+    def _link_finish(self, reload_db):
+        """On the Tk thread, after _link_work: the open save was read again, so the editor's lists are filled from it."""
+        if reload_db:
+            try:
+                self.app._on_load_db_path_success(reload_db)
+            except Exception:
+                pass
+
+    def _link(self, links=None, remove=(), keep=()):
+        """_link_work and _link_finish in one call, on the calling thread (what the write windows do in the background is done at once here)."""
+        out, reload_db = self._link_work(self._selected_saves(), links, remove, keep)
+        self._link_finish(reload_db)
         return out
+
+    def _with_links(self, write_work, links=None, remove=(), keep=(), enabled=True):
+        """A writer's work function with the linking of the ticked saves after it, in the same background step. The ticked saves are read NOW (they are Tk variables). The work function it returns gives
+        (what write_work gave, the lines of the linking, the open save to read in again or None)."""
+        saves = self._selected_saves() if enabled else []
+
+        def work():
+            result = write_work()
+            lines, reload_db = self._link_work(saves, links, remove, keep) if saves else ([], None)
+            return result, lines, reload_db
+        return work
+
+    def _busy_now(self, title):
+        """True (with a message) while a plan is being worked out or a write runs: the plan is made against the list of added plays, and Take out / Put the game files back / a second Add change it."""
+        if getattr(self, "_planning", False) or getattr(self, "_writing", False):
+            messagebox.showinfo(title, "A play is being worked out or written. Wait until that is finished, then try again.", parent=self)
+            return True
+        return False
 
     def _take_out(self):
         sel = self.lst_added.curselection()
-        if not sel or self.boot is None:
+        if not sel or self.boot is None or self._busy_now("Add a play"):
             return
         app = self.app
         if app._rpcs3_running():
@@ -9068,33 +9166,38 @@ class GameFilesAddBase(WriteGuard, tk.Toplevel):
         plays = [p for p in self.added if p["plyl"] != gone["plyl"]]
         if not messagebox.askyesno("Add a play", f"Take {gone['name']} (play {gone['plyl']}) out of the game files?\n\nIts links are taken out of the ticked saves too.", parent=self):
             return
+        work = self._with_links(lambda: app.add_play_write(self.boot, plays), remove=[gone], keep=plays)
 
-        def work():
-            return app.add_play_write(self.boot, plays)
-
-        def done(rep):
+        def done(res):
+            _rep, lines, reload_db = res
+            self._link_finish(reload_db)
             self.added = plays
             self._fill_added()
-            lines = self._link(remove=[gone], keep=plays) if self._selected_saves() else []
             self.lbl_result.configure(text="Taken out. " + "; ".join(lines))
             self.designer.refresh_from_game_files(reselect=False)
 
         self._start_write("Taking the play out...", work, done, "Add a play")
 
     def _restore(self):
+        if self._busy_now("Put the game files back"):
+            return
         gone = list(self.added)
 
-        def done(result):
+        def work(archives):
+            return self._with_links(lambda: self.app.game_file_restore(archives, allow_added=True), remove=gone, enabled=bool(gone))()
+
+        def done(res):
+            result, lines, reload_db = res
+            self._link_finish(reload_db)
             self.added = []
             self._fill_added()
-            lines = self._link(remove=gone) if gone and self._selected_saves() else []
             self.lbl_result.configure(text=f"Put back: {result} file entr{'y' if result == 1 else 'ies'}. " + "; ".join(lines))
             messagebox.showinfo("Put the game files back", f"Done. The game files are as before the first change.\n" + "\n".join(lines), parent=self)
             self.designer.refresh_from_game_files(reselect=True)            # the files are back as they were before the FIRST change, a Make a game play edit of the play shown included: show the play as they have it
 
         self._put_back("Put the game files back", "Put every play database entry that the editor changed back as it was before the first change: the plays added here come out (qkl_boot.ast is cut "
                        "back to its original length) and the Set personnel and Make a game play changes are undone.\n\nThe links of the added plays are taken out of the ticked saves.",
-                       lambda archives: self.app.game_file_restore(archives, allow_added=True), done)
+                       work, done)
 
 
 class AddPlayDialog(GameFilesAddBase):
@@ -9243,7 +9346,8 @@ class AddPlayDialog(GameFilesAddBase):
         return AP.everyone_books(self.designer.lib, candidates, self._groups, self.designer.detail["set"]["setl"], self.added)
 
     def _on_all(self):
-        """The box 'every offense playbook, and your saves': the playbook list is not used, every save is ticked, the formation gets a name."""
+        """The box 'every offense playbook, and your saves': the playbook list is not used, every save is ticked, the formation gets a name. The playbooks it goes into are worked out in the
+        background (formation groups and names: several bridge calls)."""
         on = self.all_var.get()
         self.lst_books.configure(state="disabled" if on else "normal")
         self._show_set()
@@ -9252,16 +9356,65 @@ class AddPlayDialog(GameFilesAddBase):
             return
         for v in self.save_vars:
             v.set(True)
-        try:
-            books, _pbfm, left_out = self._everyone_plan()
+        self.lbl_info.configure(text="Working out the playbooks...")
+
+        def work():
+            try:
+                return True, self._everyone_plan()
+            except Exception as e:
+                return False, e
+
+        def done(res):
+            if not self.winfo_exists() or not self.all_var.get():           # closed, or the box was unticked again meanwhile
+                return
+            ok, value = res
+            if not ok:
+                self.lbl_info.configure(text=f"The playbooks could not be worked out: {value}")
+                return
+            books, _pbfm, left_out = value
             self.lbl_info.configure(text=f"It goes into {len(books)} offense playbook{'s' if len(books) != 1 else ''}" +
                                     (f"; {len(left_out)} are left out (no formation group for it, or full): they are listed when the play is added." if left_out else "") + ".")
-        except Exception as e:
-            self.lbl_info.configure(text=f"The playbooks could not be worked out: {e}")
+
+        self.app.run_in_thread_with_busy("Working out the playbooks...", work, done, error_title="Add a play")
+
+    def _plan_play(self, inp):
+        """The play to add, worked out from the snapshot of the form `inp` (plain data: it touches no widget, so it may run on a background thread; it asks the bridge for the formation groups and the
+        ids the saves hold). Returns the plan dict; raises ValueError with the reason when the play cannot be added."""
+        app, lib, added, args = self.app, inp["lib"], inp["added"], inp["args"]
+        name = GF.clean_name(inp["name_raw"])
+        books = inp["books"]
+        stock_max = AP.stock_max_play(lib, added)
+        AP.check_ids(added, stock_max)
+        plyl = AP.free_play_id(lib, [p["plyl"] for p in added])
+        kw, left_out = {}, []
+        moved = AP.moved_players(lib, self.base, args["alignment"])
+        share = AP.find_shared(lib, self.base, args["alignment"], added) if moved else None
+        if inp["all"]:
+            books, pbfm, left_out = self._everyone_plan()
+            if not books:
+                raise ValueError("None of the offense playbooks can take the play: " + "; ".join(why for _b, why in left_out[:3]))
+            kw["book_pbfm"] = pbfm
+            if share is not None:
+                kw["share"] = share
+            else:
+                kw["new_set"] = True
+                kw["set_name"] = GF.clean_name(inp["set_raw"])
+                n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
+                kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids(), added=added)
+        elif moved:
+            if share is not None:
+                kw["share"] = share
+            else:
+                kw["set_name"] = GF.clean_name(inp["set_raw"])
+                n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
+                kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids(), added=added)
+            kw["book_pbfm"] = app.book_set_formations(self.boot, inp["setl"])
+        play = AP.build(lib, self.base, name, books, plyl, stock_max=stock_max, cpu=inp["cpu"], **args, **kw)
+        return {"play": play, "name": name, "plyl": plyl, "books": books, "left_out": left_out, "everyone": inp["all"]}
 
     def _apply(self):
         app = self.app
-        if self.boot is None:
+        if self.boot is None or self._busy_now("Add a play"):
             return
         if app._rpcs3_running():
             messagebox.showerror("Add a play", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
@@ -9270,45 +9423,36 @@ class AddPlayDialog(GameFilesAddBase):
         if db and getattr(app, "dirty", False) and any(path == db for _l, path in self._selected_saves()):
             messagebox.showerror("Add a play", "The open save has changes that are not saved yet. Save it first (or untick it here), then try again.", parent=self)
             return
-        try:
-            name = GF.clean_name(self.name_var.get())
-            books = [self._books[i] for i in self.lst_books.curselection()]
-            lib = self.designer.lib
-            stock_max = AP.stock_max_play(lib, self.added)
-            AP.check_ids(self.added, stock_max)
-            plyl = AP.free_play_id(lib, [p["plyl"] for p in self.added])
-            kw, left_out = {}, []
-            moved = AP.moved_players(lib, self.base, self._args()["alignment"])
-            share = AP.find_shared(lib, self.base, self._args()["alignment"], self.added) if moved else None
-            if self.all_var.get():
-                books, pbfm, left_out = self._everyone_plan()
-                if not books:
-                    raise ValueError("None of the offense playbooks can take the play: " + "; ".join(why for _b, why in left_out[:3]))
-                kw["book_pbfm"] = pbfm
-                if share is not None:
-                    kw["share"] = share
-                else:
-                    kw["new_set"] = True
-                    kw["set_name"] = GF.clean_name(self.set_var.get())
-                    n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
-                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids(), added=self.added)
-            elif moved:
-                if share is not None:
-                    kw["share"] = share
-                else:
-                    kw["set_name"] = GF.clean_name(self.set_var.get())
-                    n_slots, n_groups, n_packs = AP.set_ids_needed(lib, self.base)
-                    kw["set_ids"] = AP.free_set_ids(lib, n_slots, n_groups, n_packs, self._taken_set_ids(), added=self.added)
-                kw["book_pbfm"] = app.book_set_formations(self.boot, self.designer.detail["set"]["setl"])
-            play = AP.build(lib, self.base, name, books, plyl, stock_max=stock_max, cpu=bool(self.cpu_var.get()), **self._args(), **kw)
-        except ValueError as e:
-            messagebox.showerror("Add a play", str(e), parent=self)
-            return
+        inp = {"name_raw": self.name_var.get(), "set_raw": self.set_var.get(), "books": [self._books[i] for i in self.lst_books.curselection()], "all": bool(self.all_var.get()),
+               "cpu": bool(self.cpu_var.get()), "args": self._args(), "setl": self.designer.detail["set"]["setl"], "lib": self.designer.lib, "added": list(self.added)}
+        self._planning = True
+
+        def work():
+            try:
+                return "ok", self._plan_play(inp)
+            except Exception as e:                         # the reason is shown as it is (a ValueError is the usual one); the window is never left waiting for a plan that will not come
+                return "error", str(e)
+
+        def planned(res):
+            self._planning = False
+            if not self.winfo_exists():
+                return
+            kind, value = res
+            if kind == "error":
+                messagebox.showerror("Add a play", value, parent=self)
+                return
+            self._confirm_and_write(value)
+
+        app.run_in_thread_with_busy("Working out the play...", work, planned, error_title="Add a play")
+
+    def _confirm_and_write(self, plan):
+        """On the Tk thread, with the plan worked out: the duplicate-name check, the question, then the write of the game files and the linking of the ticked saves (one background step)."""
+        app, lib = self.app, self.designer.lib
+        play, name, plyl, books, left_out, everyone = plan["play"], plan["name"], plan["plyl"], plan["books"], plan["left_out"], plan["everyone"]
         if any(p["name"].lower() == name.lower() for p in self.added):
             messagebox.showerror("Add a play", f"A play called {name} was already added. Take it out first or give this one another name.", parent=self)
             return
         note = self._differs_note(lib)
-        everyone = self.all_var.get()
         where = f"in {len(books)} offense playbooks, with a formation of its own in each" if everyone else f"in {len(books)} playbook{'s' if len(books) != 1 else ''}"
         also = ("\n\nIt is linked in " + ", ".join(label for label, _p in self._selected_saves()) + " too." if everyone and self._selected_saves() else "")
         left = (f"\n\n{len(left_out)} playbook{'s are' if len(left_out) != 1 else ' is'} left out (listed afterwards)." if left_out else "")
@@ -9317,15 +9461,13 @@ class AddPlayDialog(GameFilesAddBase):
                                    "byte for byte.", parent=self):
             return
         plays = self.added + [play]
+        work = self._with_links(lambda: app.add_play_write(self.boot, plays), links=AP.links_of([play]))
 
-        def work():
-            rep = app.add_play_write(self.boot, plays)
-            return rep
-
-        def done(rep):
+        def done(res):
+            _rep, lines, reload_db = res
+            self._link_finish(reload_db)
             self.added = plays
             self._fill_added()
-            lines = self._link(links=AP.links_of([play])) if self._selected_saves() else []
             note = " ".join(play.get("warnings") or []) if play.get("cpu") and not everyone else ""          # only the caution of the experimental CPU box (it may crash the game) is shown here
             names = app.playbook_name_map(self.boot)
             out = [f"{names.get(b, 'playbook')} ({b}): {why}" for b, why in left_out]
@@ -9452,9 +9594,17 @@ class ConvertPlaysDialog(GameFilesAddBase):
         """The playbooks' formation groups (the menus of the play-call screen) from the game files: AP.FormationGroups."""
         return self.app.formation_groups(self.boot)
 
+    def _plan_convert(self, inp):
+        """The plays to convert, from the snapshot `inp` (plain data; may run on a background thread: it asks the bridge for the formation groups and the ids the saves hold). Returns (plays, skipped);
+        raises ValueError with the reason."""
+        lib = inp["lib"]
+        AP.check_ids(inp["added"], AP.stock_max_play(lib, inp["added"]))
+        groups = self._formation_groups()
+        return AP.convert_mine(lib, inp["bases"], inp["books"], groups, added=inp["added"], taken=self._taken_set_ids())
+
     def _apply(self):
         app = self.app
-        if self.boot is None:
+        if self.boot is None or self._busy_now("Convert my plays"):
             return
         if app._rpcs3_running():
             messagebox.showerror("Convert my plays", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
@@ -9468,13 +9618,30 @@ class ConvertPlaysDialog(GameFilesAddBase):
         if not bases or not books:
             messagebox.showerror("Convert my plays", "Pick at least one play and one playbook.", parent=self)
             return
-        try:
-            AP.check_ids(self.added, AP.stock_max_play(self.designer.lib, self.added))
-            groups = self._formation_groups()
-            plays, skipped = AP.convert_mine(self.designer.lib, bases, books, groups, added=self.added, taken=self._taken_set_ids())
-        except ValueError as e:
-            messagebox.showerror("Convert my plays", str(e), parent=self)
-            return
+        inp = {"lib": self.designer.lib, "bases": bases, "books": books, "added": list(self.added)}
+        self._planning = True
+
+        def work():
+            try:
+                return "ok", self._plan_convert(inp)
+            except Exception as e:
+                return "error", str(e)
+
+        def planned(res):
+            self._planning = False
+            if not self.winfo_exists():
+                return
+            kind, value = res
+            if kind == "error":
+                messagebox.showerror("Convert my plays", value, parent=self)
+                return
+            self._confirm_and_convert(value[0], value[1], books)
+
+        app.run_in_thread_with_busy("Working out the plays...", work, planned, error_title="Convert my plays")
+
+    def _confirm_and_convert(self, plays, skipped, books):
+        """On the Tk thread, with the plays worked out: the list of what is skipped, the question, then the write of the game files and the linking of the ticked saves (one background step)."""
+        app = self.app
         lib = self.designer.lib
         notes = [f"{lib.plays[b]['name']}: {why}" for b, why in skipped]
         if not plays:
@@ -9488,14 +9655,13 @@ class ConvertPlaysDialog(GameFilesAddBase):
                                    "files back restores the file byte for byte.", parent=self):
             return
         everything = self.added + plays
+        work = self._with_links(lambda: app.add_play_write(self.boot, everything), links=AP.links_of(plays))
 
-        def work():
-            return app.add_play_write(self.boot, everything)
-
-        def done(rep):
+        def done(res):
+            _rep, lines, reload_db = res
+            self._link_finish(reload_db)
             self.added = everything
             self._fill_added()
-            lines = self._link(links=AP.links_of(plays)) if self._selected_saves() else []
             self.lbl_result.configure(text=f"Done: {len(plays)} play{'s' if len(plays) != 1 else ''} converted. " + "; ".join(lines) + (" " if lines else "") +
                                       "Start the game, make a NEW career and look in the playbook. Do not edit them in the game.")
             self._set_skipped([f"{p['name']}: play {p['plyl']}, formation {p['new_set']}" for p in plays] + (["", "Not converted:"] + notes if notes else []))
@@ -11045,18 +11211,6 @@ class App(tk.Tk):
         Returns False, with a message, when another one is running."""
         return self._run_exclusive("_game_write_running", "The game files are being written by another window. Wait until that is finished, then try again.",
                                    busy_text, work_fn, on_success, error_title, on_finish)
-
-    def begin_game_write(self):
-        """The same one-at-a-time slot as run_game_write, for a writer that runs on the Tk thread itself (Set personnel): take it before writing, give it back with end_game_write() (in a
-        finally). Returns False, with a message, when a write started by another window is still running (two bridge processes writing qkl_boot.ast can corrupt it)."""
-        if getattr(self, "_game_write_running", False):
-            messagebox.showinfo("Game files", "The game files are being written by another window. Wait until that is finished, then try again.")
-            return False
-        self._game_write_running = True
-        return True
-
-    def end_game_write(self):
-        self._game_write_running = False
 
     # ---------- Portrait viewer (Player Editor tab) ----------
     # Read-only for now - writing a replacement portrait back into the game's
