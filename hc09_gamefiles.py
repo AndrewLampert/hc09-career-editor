@@ -14,11 +14,12 @@ import collections
 import csv
 import os
 
+import hc09_defense as D
 import hc09_plays as P
 
 PLPD_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "rcv"))
 PLCM_COLS = tuple(f"{a}{k}" for k in range(1, 6) for a in ("per", "dir", "ply"))
-SCAN_TABLES = "PBPL,PLYL,PLYS,PLPD,PLRD,PLCM,SETP,SETG,SGFF,PBAI,PSLO,ARTO"          # PSLO / ARTO: the offense step lists (column PSAL) and art (column ARTL) a copy holds
+SCAN_TABLES = "PBPL,PLYL,PLYS,PLPD,PLRD,PLCM,SETP,SETG,SGFF,PBAI,PSLO,ARTO,PSLD,ARTD"          # PSLO / ARTO: the offense step lists (column PSAL) and art (column ARTL) a copy holds; PSLD / ARTD the defense's
 NAMES_ENTRY = 46                     # the entry of qkl_boot.ast that holds PPPN: the names the playbooks give their plays (the play-call screen shows these)
 PLAY_COLS = ("PLYT", "PLF_", "vpos", "risk", "motn")      # the columns of a play's own row that follow the play built (PBAI rows clone PLYT, PLF_ and vpos)
 
@@ -154,6 +155,60 @@ def changes_for(lib, base, overrides, plan=None, reads=None, alignment=None, tar
     return out
 
 
+def defense_candidates(lib, base):
+    """The plays a changed defensive play can be written over: the base itself first, then the other plays of its set (the set is the formation: the same eleven defenders stand in the same places),
+    fewest playbooks first. A defensive play has no pass reads, run hole or combination rows, so any play of the set can take it. [(plyl, name, number of playbooks)]."""
+    d = lib.detail(base)
+    if d["side"] != "defense":
+        raise ValueError("That is not a defensive play.")
+    out = [(q["plyl"], q["name"], len(lib.books_of_play.get(q["plyl"], ()))) for q in lib.plays.values() if q["setl"] == d["set"]["setl"] and q["plyl"] != base]
+    out.sort(key=lambda t: (t[2], t[1].lower(), t[0]))
+    return [(base, lib.plays[base]["name"], len(lib.books_of_play.get(base, ())))] + out
+
+
+def defense_changes_for(lib, base, assign, target=None, name=None, catalog=None):
+    """What has to change in the game's rows for the defensive play TARGET (default: the base play itself) to become the play shown for `base` with the defenders of `assign` ({slot: assignment
+    group, as hc09_defense.Catalog.pick takes: (kind, ident)}) doing what it says. Every step list and art row written is one the game already has (hc09_defense chooses them for where each
+    defender stands). The result has the shape of changes_for() plus "side": "defense", "lines": one sentence per changed defender and "approximate": [(defender, how far off the drawn zone is)],
+    so describe(), is_empty() and targets_for() take it. Raises ValueError for a play that is not defensive, a target of another set, or an assignment the game has no step list for."""
+    cat = catalog or D.Catalog(lib)
+    d = lib.detail(base)
+    if d["side"] != "defense":
+        raise ValueError("Only the defense of a defensive play is changed here.")
+    st = d["set"]
+    target = base if target is None else target
+    if target not in lib.plays or lib.plays[target]["setl"] != st["setl"]:
+        raise ValueError("A play can only be written over a play of the same set (the set is the formation's alignment).")
+    tplay, bplay = lib.plays[target], lib.plays[base]
+    out = {"plyl": target, "base": base, "setl": st["setl"], "name": None, "plys": {}, "play": {}, "plpd": {}, "plrd": {}, "plcm": {}, "setp": {}, "setg": {}, "default_group": None,
+           "shared_with": [], "playbooks": len(lib.books_of_play.get(target, ())), "target_name": tplay["name"], "side": "defense", "lines": [], "approximate": []}
+    if name is not None:
+        want = clean_name(name)
+        if want != tplay["name"].strip():
+            out["name"] = want
+    for s in d["slots"]:
+        poso = s["poso"]
+        want_psal, want_artl = s["psal"], s["artl"]
+        key = assign.get(poso)
+        if key is not None and tuple(key) != cat.assignment[s["psal"]].key:
+            pick = cat.pick(tuple(key), (s["x"], s["y"]), s["psal"], s["artl"])
+            want_psal, want_artl = pick.psal, pick.artl
+            out["lines"].append(f"{s['label']}: {cat.assignment[s['psal']].words} becomes {cat.assignment[pick.psal].words}.")
+            if pick.error is not None and pick.error > D.ART_TOLERANCE:
+                out["approximate"].append((s["label"], round(pick.error)))
+        old = lib.slot_rows[target].get(poso)
+        if old is None:
+            continue
+        diff = {c: v for c, v, o in (("PSAL", want_psal, old["psal"]), ("ARTL", want_artl, old["artl"])) if v != o}
+        if diff:
+            out["plys"][poso] = diff
+    if target != base:                                  # the play of another is written over the target: its play columns follow (as changes_for does)
+        stock = {"PLYT": tplay["plyt"], "PLF_": tplay["plf"], "vpos": tplay["vpos"], "risk": tplay["risk"], "motn": tplay["motn"]}
+        have = {"PLYT": bplay["plyt"], "PLF_": bplay["plf"], "vpos": bplay["vpos"], "risk": bplay["risk"], "motn": bplay["motn"]}
+        out["play"] = {c: have[c] for c in PLAY_COLS if have[c] != stock[c]}
+    return out
+
+
 def is_empty(changes):
     return not (changes["name"] or any(changes[k] for k in ("plys", "play", "plpd", "plrd", "plcm", "setp", "setg")))
 
@@ -234,8 +289,9 @@ def targets_for(copies, cache_dir, changes, names_entry=None, names_rows=None):
             if changes["name"] and "name" in mine and _text(mine["name"]) != changes["name"]:
                 edits.append({"table": play_table, "match": {"PLYL": plyl}, "expect": {"name": _text(mine["name"])}, "set": {"name": changes["name"]}})
             plys = {(int(r["PLYL"]), int(r["poso"])): r for r in (_read(cache_dir, c["base"], "PLYS") or [])}
-            steps, arts = _read(cache_dir, c["base"], "PSLO"), _read(cache_dir, c["base"], "ARTO")      # PSAL and ARTL are COLUMNS; the tables are PSLO (offense step lists) and ARTO (offense art)
-            have_steps = {int(r["PSAL"]) for r in steps} if steps else None        # None: the copy has no such table (a Create-A-Play copy) and cannot be checked
+            step_table, art_table = ("PSLD", "ARTD") if changes.get("side") == "defense" else ("PSLO", "ARTO")
+            steps, arts = _read(cache_dir, c["base"], step_table), _read(cache_dir, c["base"], art_table)      # PSAL and ARTL are COLUMNS; the tables are PSLO / PSLD (the step lists of the offense / the defense) and ARTO / ARTD (the art)
+            have_steps = {int(r["PSAL"]) for r in steps} if steps else None        # None: the copy has no such table (a Create-A-Play copy) and cannot be checked. The compact copy (boot 42) has neither the tables nor the PSAL / ARTL columns of PLYS: new_step / new_art below stay False for it, so there is nothing to write there and nothing is skipped (only the master, boot 40, holds the assignments)
             have_arts = {int(r["ARTL"]) for r in arts} if arts else None
             for poso, want in changes["plys"].items():
                 row = plys.get((plyl, poso))
@@ -330,6 +386,18 @@ def describe(lib, changes):
     d = lib.detail(changes["base"])
     label = {s["poso"]: s["label"] for s in d["slots"]}
     lines = []
+    if changes.get("side") == "defense":
+        if changes["plyl"] != changes["base"]:
+            lines.append(f"The play \"{changes['target_name']}\" is given up: its place in {changes['playbooks']} playbook{'s' if changes['playbooks'] != 1 else ''} is taken by the new play.")
+        if changes["name"]:
+            lines.append(f"The name becomes \"{changes['name']}\" (in the play's own row and in the playbooks' names for it).")
+        lines += changes.get("lines", [])
+        if changes["play"].get("PLYT") is not None:
+            lines.append(f"The kind of play (play type) becomes {changes['play']['PLYT']}.")
+        if changes.get("approximate"):
+            lines.append("The diagram will not show these zones in the right place (the game has no art that reaches there from where the defender stands; whether the drawing matters for more than the diagram is not known): "
+                         + ", ".join(f"{who} ({off} units off)" for who, off in changes["approximate"]) + ".")
+        return lines
     if changes["plyl"] != changes["base"]:
         lines.append(f"The play \"{changes['target_name']}\" is given up: its place in {changes['playbooks']} playbook{'s' if changes['playbooks'] != 1 else ''} is taken by the new play.")
     if changes["name"]:
