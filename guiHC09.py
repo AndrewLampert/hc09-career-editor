@@ -12990,15 +12990,18 @@ class App(tk.Tk):
         ttk.Button(top, text="Max Special Skills", command=self.on_max_coach_skills).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Team Philosophy...", command=self.on_open_team_philosophy).pack(side="left", padx=(8, 0))
 
-        # Search controls for coach first/last name
+        # Search controls for coach first/last name, and the My Team / All Teams radios: a row of their own (all of it in one row needed about 1,400 px and the window can be 1,180, so the
+        # right-most controls, the radios that decide whether the 300+ row table is drawn, were cut off). The Layout row follows this one.
+        search_row = ttk.Frame(root)
+        search_row.pack(fill="x", padx=10, pady=(0, 6), after=top)
         self.coach_search_var = tk.StringVar()
-        ttk.Label(top, text="Search (First Last):").pack(side="left", padx=(12, 4))
-        self.ent_coach_search = ttk.Entry(top, textvariable=self.coach_search_var, width=20)
+        ttk.Label(search_row, text="Search (First Last):").pack(side="left", padx=(0, 4))
+        self.ent_coach_search = ttk.Entry(search_row, textvariable=self.coach_search_var, width=20)
         self.ent_coach_search.pack(side="left")
-        ttk.Button(top, text="Find", command=lambda: self.refresh_coach()).pack(side="left", padx=(6, 4))
-        ttk.Button(top, text="Clear", command=lambda: (self.coach_search_var.set(""), self.refresh_coach())).pack(side="left")
+        ttk.Button(search_row, text="Find", command=lambda: self.refresh_coach()).pack(side="left", padx=(6, 4))
+        ttk.Button(search_row, text="Clear", command=lambda: (self.coach_search_var.set(""), self.refresh_coach())).pack(side="left")
         self._build_staff_team_filter(
-            top, row_extra=lambda lay: ttk.Button(lay, text="Max All Coaches", command=self.on_max_all_coaches).pack(side="left", padx=(16, 0)))
+            search_row, row_extra=lambda lay: ttk.Button(lay, text="Max All Coaches", command=self.on_max_all_coaches).pack(side="left", padx=(16, 0)))
 
         # Help text reflects what's actually confirmed in-game (verified via direct testing).
         help_text = (
