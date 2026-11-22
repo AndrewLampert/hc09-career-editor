@@ -10,11 +10,11 @@ function makeArchive(entries) {
     const headerSize = 0x30;
     const rowSize = 25; // separator + 4 + 8 + 4 + 4 + 4 byte fields
     const tocLength = entries.length * rowSize;
-    const dataStart = headerSize + tocLength;
+    const tocOffset = 0x40;\n    const dataStart = tocOffset + tocLength;
     const header = Buffer.alloc(headerSize);
     header.write('BGFA1.05', 0, 'latin1');
     header.writeInt32LE(entries.length, 12);
-    header.writeInt32LE(headerSize, 16);
+    header.writeInt32LE(tocOffset, 16);
     header.writeInt32LE(tocLength, 24);
     [4, 8, 4, 4, 4].forEach((length, i) => header.writeInt8(length, 33 + i));
     header.writeInt8(0, 38); // byte-aligned TOC offsets
@@ -37,7 +37,7 @@ function makeArchive(entries) {
         payloads.push(data);
         nextData += data.length;
     }
-    return Buffer.concat([header, ...rows, ...payloads]);
+    return Buffer.concat([header, Buffer.alloc(tocOffset - headerSize), ...rows, ...payloads]);
 }
 
 function parseArchive(buffer, extract = true) {
