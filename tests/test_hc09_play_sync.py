@@ -45,7 +45,6 @@ class CustomPlaySyncTests(unittest.TestCase):
         mounted_again = lib.mount_custom(profile)
         self.assertEqual(mounted_again, mounted)
         self.assertEqual(lib.detail(mounted_again[0])["play"]["name"], "Saved Play")
-        self.assertEqual(summary["plyl"], hc09_plays.CUSTOM_OFFSETS["PLYL"] * 0 + summary["plyl"])
 
     def test_sync_updates_profile_values_in_career_copy_across_all_tables(self):
         _, profile, summary = make_profile()
@@ -56,7 +55,7 @@ class CustomPlaySyncTests(unittest.TestCase):
         profile["SETP"][0]["artx"] = "77"
         profile["SETG"][0]["x___"] = "123456"
         profile["SGFF"][0]["name"] = "Default Alignment"
-        profile["PLYS"][0]["PSAL"] = "1"
+        profile["PLYS"][0]["PSAL"] = "2"
         profile["PLPD"][0]["per1"] = "65"
         profile["PLRD"][0]["hole"] = "6"
         profile["PLCM"][0]["decision"] = "2"
