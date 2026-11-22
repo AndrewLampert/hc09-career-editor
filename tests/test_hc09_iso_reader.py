@@ -101,6 +101,26 @@ class XdvdfsReaderTests(unittest.TestCase):
             {"a", "b", "c"},
         )
 
+    def test_duplicate_filenames_are_preserved_and_first_match_is_deterministic(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "duplicates.iso")
+            first = directory_entry("same.ast", 34, 3, right=6)
+            second = directory_entry("same.ast", 35, 4)
+            root = first + second
+            image = bytearray(36 * hc09_iso.SECTOR)
+            descriptor = 32 * hc09_iso.SECTOR
+            image[descriptor:descriptor + len(hc09_iso.MAGIC)] = hc09_iso.MAGIC
+            struct.pack_into("<II", image, descriptor + len(hc09_iso.MAGIC), 33, len(root))
+            image[33 * hc09_iso.SECTOR:33 * hc09_iso.SECTOR + len(root)] = root
+            image[34 * hc09_iso.SECTOR:34 * hc09_iso.SECTOR + 3] = b"one"
+            image[35 * hc09_iso.SECTOR:35 * hc09_iso.SECTOR + 4] = b"two!"
+            with open(path, "wb") as f:
+                f.write(image)
+
+            entries = hc09_iso._entries(root)
+            self.assertEqual([item["name"] for item in entries], ["same.ast", "same.ast"])
+            self.assertEqual(hc09_iso.find(path, "same.ast"), (0, 34, 3))
+
     def test_entry_tree_stops_on_cycles_and_ignores_out_of_range_links(self):
         entries = directory_entry("a", 10, 1, right=4)
         entries += directory_entry("b", 11, 1, left=8)
