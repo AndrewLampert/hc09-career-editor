@@ -12888,7 +12888,10 @@ class App(tk.Tk):
         def work():
             if boot_ast and not self._playbook_names_cached(boot_ast):
                 self._extract_playbook_names(boot_ast)
-            game = {os.path.splitext(f)[0]: read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES}
+            # If the archive could not be located, never fall back to CSVs whose
+            # source cannot be verified. The career/profile data still loads by ID.
+            game = ({os.path.splitext(f)[0]: read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES}
+                    if boot_ast and self._playbook_names_cached(boot_ast) else {})
             if self._ensure_book_play_names(boot_ast):
                 game["pppn"] = read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE))
             tmp = tempfile.mkdtemp(prefix="hc09_playbooks_")
