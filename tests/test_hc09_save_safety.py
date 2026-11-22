@@ -38,6 +38,25 @@ class SaveBackupSafetyTests(unittest.TestCase):
             with open(db, "rb") as f:
                 self.assertEqual(f.read(), b"original-save")
 
+    def test_first_write_backup_is_preserved_while_rolling_backup_tracks_latest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = os.path.join(folder, "career.db")
+            with open(db, "wb") as f:
+                f.write(b"original-save")
+            with mock.patch.object(guiHC09.hc09_detect, "is_xbox_save", return_value=False):
+                rolling = guiHC09.backup_save(db)
+                opened = db + ".opened.bak"
+                self.assertEqual(rolling, db + ".bak")
+                with open(db, "wb") as f:
+                    f.write(b"after-first-write")
+                guiHC09.backup_save(db)
+
+            with open(opened, "rb") as f:
+                self.assertEqual(f.read(), b"original-save")
+            with open(rolling, "rb") as f:
+                self.assertEqual(f.read(), b"after-first-write")
+            self.assertEqual(guiHC09._OPENED_COPIES, {os.path.normcase(os.path.abspath(db))})
+
     def test_failed_rollback_reports_where_the_recovery_copy_is(self):
         with tempfile.TemporaryDirectory() as folder:
             db = os.path.join(folder, "career.db")
