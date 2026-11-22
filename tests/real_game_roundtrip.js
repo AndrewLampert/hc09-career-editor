@@ -170,9 +170,25 @@ function main() {
     if (!args.save || args.save === true) {
         throw new Error('Usage: node tests/real_game_roundtrip.js --save <career-save> [--asts <qkl_boot.ast>[,<qkl_fe2ig.ast>]]');
     }
-    const sourceSave = path.resolve(args.save);
-    if (!fs.existsSync(sourceSave) || !fs.statSync(sourceSave).isFile()) {
-        throw new Error('Save file not found: ' + sourceSave);
+    const suppliedSavePath = path.resolve(args.save);
+    if (!fs.existsSync(suppliedSavePath)) {
+        throw new Error('Save file or directory not found: ' + suppliedSavePath);
+    }
+    let sourceSave = suppliedSavePath;
+    if (fs.statSync(suppliedSavePath).isDirectory()) {
+        const entries = fs.readdirSync(suppliedSavePath, { withFileTypes: true });
+        const candidates = entries
+            .filter((entry) => entry.isFile() && /^(USR-DATA|.*\\.mc02)$/i.test(entry.name))
+            .map((entry) => path.join(suppliedSavePath, entry.name));
+        if (candidates.length !== 1) {
+            throw new Error(
+                'Expected exactly one USR-DATA or .mc02 save file in ' + suppliedSavePath +
+                '; found ' + candidates.length + (candidates.length ? ': ' + candidates.join(', ') : '')
+            );
+        }
+        sourceSave = candidates[0];
+    } else if (!fs.statSync(suppliedSavePath).isFile()) {
+        throw new Error('Save path is not a regular file: ' + suppliedSavePath);
     }
     if (!fs.existsSync(bridge)) throw new Error('Bridge not found: ' + bridge);
 
