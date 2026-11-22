@@ -5,6 +5,7 @@ const { Readable } = require('node:stream');
 const test = require('node:test');
 
 const ASTParser = require('../hc09-bridge/vendor/node_modules/madden-file-tools/streams/ASTParser');
+const { validateAstHeader } = require('../hc09-bridge/archive_safety');
 
 function makeArchive(entries) {
     const headerSize = 0x30;
@@ -97,6 +98,34 @@ test('AST reader preserves separate entries that share the same ID', async () =>
     assert.deepEqual(result.toc.map((entry) => entry.id.toString('hex')),
         [Buffer.from(duplicateId).toString('hex'), Buffer.from(duplicateId).toString('hex')]);
     assert.deepEqual(result.payloads.map((entry) => entry.data.toString()), ['first', 'second']);
+});
+
+
+test('AST header validator accepts a complete TOC with the declared entry count', () => {
+    assert.equal(validateAstHeader({
+        individualTOCLength: 24,
+        tableOfContentsLength: 50,
+        tableOfContentsAdditionalOffset: 0,
+        numberOfFiles: 2,
+    }), 2);
+});
+
+test('AST header validator rejects a truncated TOC row', () => {
+    assert.throws(() => validateAstHeader({
+        individualTOCLength: 24,
+        tableOfContentsLength: 49,
+        tableOfContentsAdditionalOffset: 0,
+        numberOfFiles: 2,
+    }), /damaged or incomplete table of contents/);
+});
+
+test('AST header validator rejects an unexpected entry count', () => {
+    assert.throws(() => validateAstHeader({
+        individualTOCLength: 24,
+        tableOfContentsLength: 50,
+        tableOfContentsAdditionalOffset: 0,
+        numberOfFiles: 3,
+    }), /declares 3 entries.*contains 2/);
 });
 
 test('AST TOC-only mode reads the directory without extracting large payloads', async () => {
