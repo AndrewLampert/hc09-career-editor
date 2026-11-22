@@ -2,7 +2,7 @@
 'use strict';
 
 // Optional real-file integration check. It never edits the supplied originals:
-// a temporary copy of the save is exported, imported unchanged, and verified.
+// a temporary copy of the save receives a reversible field edit, then is restored and verified.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
