@@ -6678,7 +6678,7 @@ class PlayDesignerDialog(tk.Toplevel):
     game's assignments (including the option reads the in-game editor does not offer), and make a custom play of it in copies of your profile and career saves.
     Nothing is written to the game's files or to your saves here."""
 
-    def __init__(self, app, lib):
+    def __init__(self, app, lib, custom_books=None, custom_book_plays=None, profile_path=""):
         super().__init__(app)
         p = getattr(app, "_ui_palette", None)
         if p:
@@ -6701,7 +6701,9 @@ class PlayDesignerDialog(tk.Toplevel):
         self.align_override = {}     # {slot: (x, y) in yards} set in the Move players window
         self.plyl = None
         self.detail = None
-        self.my_profile = None       # the profile save whose custom plays are mounted in the library ("Plays I made"), or None
+        self.my_profile = profile_path or None  # profile whose custom plays are mounted in the library
+        self.custom_books = dict(custom_books or {})  # {profile PBGI 1-10: name}
+        self.custom_book_plays = {int(k): set(v) for k, v in (custom_book_plays or {}).items()}  # {PBGI: mounted PLYL ids from the open career}
         self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
         self.books = self._read_books()
 
@@ -6734,6 +6736,8 @@ class PlayDesignerDialog(tk.Toplevel):
         ttk.Checkbutton(top, text="Option plays only", variable=self.opt_var, command=self._fill).pack(side="left")
         self.lbl_count = ttk.Label(top, foreground="gray")
         self.lbl_count.pack(side="left", padx=(12, 0))
+        self.lbl_book_hint = ttk.Label(self, foreground="gray", wraplength=1180, justify="left", padding=(12, 0, 12, 4))
+        self.lbl_book_hint.pack(anchor="w")
 
         main = ttk.Frame(self)
         main.pack(fill="both", expand=True, padx=12, pady=(0, 4))
@@ -6839,9 +6843,14 @@ class PlayDesignerDialog(tk.Toplevel):
                 nm, kind = self.books.get(b, (f"playbook {b}", ""))
                 if not kind or kind == side or side == "other":
                     names[nm] = b
-        self._book_values = {"Any playbook": None, self.MINE: "mine", **{n: b for n, b in sorted(names.items())}}
+        values = {"Any playbook": None, self.MINE: "mine", **{n: b for n, b in sorted(names.items())}}
+        if side == "offense":
+            for pbgi, name in sorted(self.custom_books.items()):
+                values[f"My custom: {name}"] = ("custom", pbgi)
+        self._book_values = values
         self.cmb_book.configure(values=list(self._book_values))
         self.book_var.set("Any playbook")
+        self._update_book_hint()
         self._fill()
 
     MINE = "Plays I made (my profile)"
@@ -6850,7 +6859,20 @@ class PlayDesignerDialog(tk.Toplevel):
         """A playbook was chosen; 'Plays I made' first reads the custom plays of the profile save."""
         if self.book_var.get() == self.MINE and not self.reload_mine():
             self.book_var.set("Any playbook")
+        self._update_book_hint()
         self._fill()
+
+    def _update_book_hint(self):
+        selected = self._book_values.get(self.book_var.get())
+        if isinstance(selected, tuple) and len(selected) == 2 and selected[0] == "custom":
+            self.lbl_book_hint.configure(
+                text="Showing plays linked to this custom playbook in the open career. Custom plays can be edited and saved back to your profile/career. "
+                     "Stock plays are shared game plays: using Make a game play... changes the underlying game play for every playbook that uses it, not only this custom book."
+            )
+        elif selected == "mine":
+            self.lbl_book_hint.configure(text="Showing custom plays stored in your profile. Pick one to edit it, then use Update my play... to save changes.")
+        else:
+            self.lbl_book_hint.configure(text="")
 
     def reload_mine(self, keep=None):
         """Read the custom plays of the profile save again and mount them (the play creator opens them like any play); False after saying why not. keep: the mounted play to select again."""
@@ -7001,20 +7023,27 @@ class PlayDesignerDialog(tk.Toplevel):
         self._slot_selected()
 
     def _fill(self):
-        want_book = self._book_values.get(self.book_var.get())
-        mine = want_book == "mine"
-        if mine:
-            want_book = None
+        selected_book = self._book_values.get(self.book_var.get())
+        mine = selected_book == "mine"
+        custom_book = isinstance(selected_book, tuple) and len(selected_book) == 2 and selected_book[0] == "custom"
+        custom_ids = self.custom_book_plays.get(selected_book[1], set()) if custom_book else set()
+        want_book = None if mine or custom_book else selected_book
         text = self.find_var.get().strip().lower()
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         shown = 0
-        for r in self.lib.play_list(self._side(), custom=mine):
+        if custom_book:
+            rows = self.lib.play_list(self._side(), custom=False) + self.lib.play_list(self._side(), custom=True)
+        else:
+            rows = self.lib.play_list(self._side(), custom=mine)
+        for r in rows:
+            if custom_book and r["plyl"] not in custom_ids:
+                continue
             if want_book is not None and want_book not in self.lib.books_of_play.get(r["plyl"], ()):
                 continue
             if self.opt_var.get() and not r["option"]:
                 continue
-            shown_name = self.lib.name_in_book(r["plyl"], want_book) if want_book is not None else r["name"]       # in one playbook, the name that playbook shows
+            shown_name = self.lib.name_in_book(r["plyl"], want_book) if want_book is not None else r["name"]
             if text and text not in r["name"].lower() and text not in shown_name.lower() and text not in r["set"].lower() and text not in r["form"].lower():
                 continue
             self.tree.insert("", tk.END, iid=str(r["plyl"]), values=(shown_name, r["form"], r["set"], "yes" if r["option"] else ""))
@@ -7056,12 +7085,13 @@ class PlayDesignerDialog(tk.Toplevel):
         """Under the play art: the playbooks that have the play shown, by name, with the name a playbook gives the play where it is not the play's own ("Packers (as Liz Lft Deep Attack)")."""
         lib, plyl = self.lib, self.plyl
         books = lib.books_of_play.get(plyl, ()) if plyl is not None else ()
+        custom_books = [name for pbgi, name in self.custom_books.items() if plyl in self.custom_book_plays.get(pbgi, set())] if plyl is not None else []
         if plyl is None:
             text = ""
-        elif lib.is_custom(plyl):                            # a play of "Plays I made": its playbook links are in the profile and the career, which the library does not read (books_of_play is the game's own)
-            text = "A play you made. Its playbooks are kept in your profile and career; this box lists only the game's own."
+        elif lib.is_custom(plyl):
+            text = "A play you made. Its playbook links are stored in your profile and career."
         elif not books:
-            text = "In no playbook."
+            text = "In no game playbook."
         else:
             master = lib.plays[plyl]["name"].strip() if plyl in lib.plays else ""
             items = []
@@ -7069,7 +7099,9 @@ class PlayDesignerDialog(tk.Toplevel):
                 nm = self.books.get(b, (f"playbook {b}", ""))[0]
                 own = lib.name_in_book(plyl, b).strip()
                 items.append((nm.lower(), nm + (f" (as {own})" if own != master else "")))
-            text = f"In {len(items)} playbook{'s' if len(items) != 1 else ''}: " + ", ".join(t for _k, t in sorted(items)) + "."
+            text = f"In {len(items)} game playbook{'s' if len(items) != 1 else ''}: " + ", ".join(t for _k, t in sorted(items)) + "."
+        if custom_books:
+            text += (" " if text else "") + "Also in your custom playbook" + ("s: " if len(custom_books) != 1 else ": ") + ", ".join(sorted(custom_books)) + "."
         self.txt_books.configure(state="normal")
         self.txt_books.delete("1.0", "end")
         self.txt_books.insert("1.0", text)
@@ -12274,6 +12306,18 @@ class App(tk.Tk):
         self.lbl_status.pack(side="left", fill="x", expand=True, padx=14)
 
         self.update_banner = ttk.Frame(self)      # shown (packed above the tabs) only when a newer version exists
+        self.hc27_help_frame = ttk.Frame(self)
+        self.hc27_help_label = ttk.Label(
+            self.hc27_help_frame, justify="left", wraplength=1200,
+            text=(
+                "HC27 career save loaded. Save to File updates this career save only; it does not change the default roster for new careers. "
+                "To share this career, share its CAREER save. If you also want its custom plays and playbooks available to new careers, share the matching PROFILE save. "
+                "To publish supported game-data edits for new careers: select Runtime: Static Recomp, make the game-data edits, close HC27, then click Build Recomp ISO... "
+                "and save a new image. The editor updates hc09.ini when it can detect the install; otherwise set IsoPath in hc09.ini to the new image. "
+                "The original ISO is never overwritten. Player and roster edits made in this career remain in the career save; Build Recomp ISO does not publish them."
+            )
+        )
+        self.hc27_help_label.pack(fill="x", padx=10, pady=6)
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
@@ -13603,7 +13647,18 @@ class App(tk.Tk):
             error_title=error_title,
         )
 
+    @staticmethod
+    def _is_hc27_save_path(db_path):
+        """HC27 Recomp careers live under userdata-hc27, separate from HC09 careers."""
+        path = os.path.normcase(os.path.normpath(db_path or "")).replace("/", "\\")
+        return "\\userdata-hc27\\" in path
+
     def _on_load_db_path_success(self, db_path):
+        if self._is_hc27_save_path(db_path):
+            self.hc27_help_frame.pack(fill="x", padx=12, pady=(0, 6), before=self.notebook)
+        else:
+            self.hc27_help_frame.pack_forget()
+
         # Any boosts applied since the last Save are being discarded along
         # with the rest of the in-memory edits - drop their "already
         # boosted" flags too so they don't get silently skipped later.
@@ -14998,12 +15053,33 @@ class App(tk.Tk):
                 self._extract_playbook_names(boot)       # playbook names for the filter
             lib = self.load_play_library(archives)
             lib._ui_art = self.load_play_art(boot)
-            return lib
+            profile = self.default_save_targets().get("profile") or ""
+            custom_books, custom_book_plays = {}, {}
+            if profile and os.path.isfile(profile):
+                try:
+                    custom_books = self.profile_custom_books(profile)
+                    self.load_my_plays(lib, profile)      # mount custom plays so a custom book can show both stock and user-made plays
+                    career = self.model.db_path or ""
+                    if career and os.path.isfile(career):
+                        pgpl = self._export_tables(career, ["PGPL"])["PGPL"][1]
+                        original_to_mounted = {int(info["plyl"]): mounted for mounted, info in lib.custom.items()}
+                        for row in pgpl:
+                            try:
+                                bokl, plyl = int(row["BOKL"]), int(row["PLYL"])
+                            except (KeyError, TypeError, ValueError):
+                                continue
+                            if 1 <= bokl <= 10:
+                                custom_book_plays.setdefault(bokl, set()).add(original_to_mounted.get(plyl, plyl))
+                except Exception:
+                    # The stock Play Creator remains usable if the profile/career custom-book data cannot be read.
+                    custom_books, custom_book_plays = {}, {}
+            return lib, profile, custom_books, custom_book_plays
 
-        def done(lib):
+        def done(result):
+            lib, profile, custom_books, custom_book_plays = result
             self.ui_prefs["boot_ast_path"] = boot
             save_ui_prefs(self.ui_prefs)
-            PlayDesignerDialog(self, lib)
+            PlayDesignerDialog(self, lib, custom_books, custom_book_plays, profile)
 
         self.run_in_thread_with_busy("Reading the game's plays...", work, done, error_title="Play creator")
 
