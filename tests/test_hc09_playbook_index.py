@@ -116,10 +116,10 @@ class PlaybookIndexTests(unittest.TestCase):
             output = root / "out"
             source.mkdir()
             fixtures = {
-                "pbpl_qkl_boot_40.csv": "PLYL,SETL,name,PLYT\\n10,5,Inside Zone,1\\n",
-                "setl_qkl_boot_40.csv": "SETL,name,FORM\\n5,Ace,1\\n",
-                "pbai_qkl_boot_40.csv": "BOKL,PBPL,SETL,AIGR,prct\\n1,10,5,2,75\\n",
-                "form_qkl_boot_40.csv": "FORM,name\\n1,I Form\\n",
+                "pbpl_qkl_boot_40.csv": "PLYL,SETL,name,PLYT\n10,5,Inside Zone,1\n",
+                "setl_qkl_boot_40.csv": "SETL,name,FORM\n5,Ace,1\n",
+                "pbai_qkl_boot_40.csv": "BOKL,PBPL,SETL,AIGR,prct\n1,10,5,2,75\n",
+                "form_qkl_boot_40.csv": "FORM,name\n1,I Form\n",
             }
             for name, content in fixtures.items():
                 (source / name).write_text(content, encoding="utf-8")
