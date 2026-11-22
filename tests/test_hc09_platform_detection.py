@@ -75,6 +75,13 @@ class PlatformDetectionTests(unittest.TestCase):
             self.assertIsNone(detect.mc02_db_start(short))
             self.assertEqual(detect.classify_save(short), ("other", None))
 
+    def test_unexpected_roster_table_count_is_not_classified_as_profile_or_career(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "roster.mc02")
+            with open(path, "wb") as f:
+                f.write(mc02_save(16))
+            self.assertEqual(detect.classify_save(path), ("other", 16))
+
     def test_recomp_install_is_found_from_a_nested_save_path(self):
         with tempfile.TemporaryDirectory() as folder:
             install = os.path.join(folder, "HC09Recomp")
