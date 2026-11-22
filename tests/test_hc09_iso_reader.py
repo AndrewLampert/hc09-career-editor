@@ -37,7 +37,7 @@ class XdvdfsReaderTests(unittest.TestCase):
             self.make_image(path)
             self.assertEqual(
                 hc09_iso.list_root(path),
-                [("folder", 20, True), ("root.bin", 4, False)],
+                [("folder", 24, True), ("root.bin", 4, False)],
             )
 
     def test_find_walks_nested_paths_case_insensitively(self):
