@@ -21,19 +21,19 @@ Run from the repository root in PowerShell. Close the game and emulator first so
 For a PS3 save:
 
 \`\`\`powershell
-node tests\\real_game_roundtrip.js --save "C:\\path\\to\\USR-DATA" --asts "C:\\path\\to\\qkl_boot.ast"
+node tests\real_game_roundtrip.js --save "C:\path\to\USR-DATA" --asts "C:\path\to\qkl_boot.ast"
 \`\`\`
 
 For a Xenia save:
 
 \`\`\`powershell
-node tests\\real_game_roundtrip.js --save "C:\\path\\to\\career.mc02" --asts "C:\\path\\to\\qkl_boot.ast"
+node tests\real_game_roundtrip.js --save "C:\path\to\career.mc02" --asts "C:\path\to\qkl_boot.ast"
 \`\`\`
 
 To scan both play-data archives, pass both paths as a comma-separated --asts value:
 
 \`\`\`powershell
-node tests\\real_game_roundtrip.js --save "C:\\path\\to\\USR-DATA" --asts "C:\\path\\to\\qkl_boot.ast,C:\\path\\to\\qkl_fe2ig.ast"
+node tests\real_game_roundtrip.js --save "C:\path\to\USR-DATA" --asts "C:\path\to\qkl_boot.ast,C:\path\to\qkl_fe2ig.ast"
 \`\`\`
 
 A successful run prints JSON with ok: true, the save helper type, number of tables checked, the reversible field edit and restore, and the number of populated play-set entries found. A failure prints the exact stage that failed. Do not use a save that is actively being changed by the game.
