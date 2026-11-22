@@ -41,7 +41,7 @@ class PlayCreationTests(unittest.TestCase):
         self.assertEqual(len(detail["slots"]), 11)
         self.assertEqual([slot["poso"] for slot in detail["slots"]], list(range(11)))
         self.assertEqual([slot["psal"] for slot in detail["slots"]], [1] * 11)
-        self.assertTrue(all(slot["text"] == "pass block" for slot in detail["slots"]))
+        self.assertTrue(all(slot["text"] == "14" for slot in detail["slots"]))
 
     def test_custom_play_build_copies_eleven_slots_and_assignment_rows(self):
         lib = make_library()
@@ -60,7 +60,7 @@ class PlayCreationTests(unittest.TestCase):
         lib = make_library()
         profile = {
             "SETL": [{"SETL": "1"}],
-            "PBPL": [{"PLYL": "1"}],
+            "PBPL": [{"SETL": "1", "PLYL": "1"}],
             "SETP": [{"SETP": "1"}],
             "SGFF": [{"SGF_": "1"}],
         }
