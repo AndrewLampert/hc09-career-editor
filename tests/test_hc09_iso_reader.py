@@ -17,7 +17,7 @@ def directory_entry(name, sector, size, directory=False, left=0xFFFF, right=0xFF
 
 class XdvdfsReaderTests(unittest.TestCase):
     def make_image(self, path):
-        root = directory_entry("folder", 34, 20, directory=True)
+        root = directory_entry("folder", 34, 20, directory=True, right=5)
         root += directory_entry("root.bin", 35, 4)
         nested = directory_entry("inside.dat", 36, 5)
         image = bytearray(37 * hc09_iso.SECTOR)
