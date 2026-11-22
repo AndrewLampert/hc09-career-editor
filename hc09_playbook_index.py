@@ -59,6 +59,8 @@ def build_index(pbpl_rows, setl_rows, pbai_rows, form_rows=(), pppn_rows=()):
         "missing_pbpl": [],
         "missing_setl": [],
         "duplicate_book_play_rows": 0,
+        # A mismatch is diagnostic evidence, not automatically an error.
+        "pbai_set_mismatches": [],
     }
     seen_rows = set()
 
@@ -112,6 +114,25 @@ def build_index(pbpl_rows, setl_rows, pbai_rows, form_rows=(), pppn_rows=()):
         for play_id, item in sorted(play_map.items()):
             item["ai_rows"].sort(key=lambda row: (row["group"], row["weight"]))
             item["pbai_set_ids"].sort()
+            if any(set_id >= 0 and set_id != item["set_id"] for set_id in item["pbai_set_ids"]):
+                linked_sets = []
+                for set_id in item["pbai_set_ids"]:
+                    linked = sets.get(set_id)
+                    linked_sets.append({
+                        "set_id": set_id,
+                        "set_name": first_value(linked, "name", "NAME") if linked else "",
+                        "formation_id": as_int(linked, "FORM", -1) if linked else -1,
+                        "formation_name": formations.get(as_int(linked, "FORM", -1), "") if linked else "",
+                    })
+                master_set = sets.get(item["set_id"])
+                diagnostics["pbai_set_mismatches"].append({
+                    "book_id": book_id,
+                    "play_id": play_id,
+                    "play_name": item["master_name"],
+                    "master_set_id": item["set_id"],
+                    "master_set_name": first_value(master_set, "name", "NAME") if master_set else "",
+                    "pbai_sets": linked_sets,
+                })
             rows.append(item)
         result[str(book_id)] = {"book_id": book_id, "play_count": len(rows), "plays": rows}
     diagnostics["book_count"] = len(result)
