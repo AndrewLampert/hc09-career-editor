@@ -54,6 +54,23 @@ class RecompIsoSafetyTests(unittest.TestCase):
             self.assertEqual(progress[-1], (3, 3))
             self.assertEqual(os.listdir(os.path.dirname(output)), ["qkl_boot.ast"])
 
+    def test_interrupted_extract_does_not_replace_existing_destination(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = os.path.join(folder, "source.iso")
+            output = os.path.join(folder, "existing.ast")
+            self.make_image(source, size=3)
+            with open(output, "wb") as f:
+                f.write(b"previous complete extraction")
+
+            def stop_copy(done, total):
+                raise RuntimeError("simulated extraction interruption")
+
+            with self.assertRaisesRegex(RuntimeError, "simulated extraction interruption"):
+                hc09_iso.extract(source, "qkl_boot.ast", output, stop_copy)
+            with open(output, "rb") as f:
+                self.assertEqual(f.read(), b"previous complete extraction")
+            self.assertEqual(os.listdir(folder), ["existing.ast", "source.iso"])
+
     def test_replace_rejects_empty_archive_without_creating_output(self):
         with tempfile.TemporaryDirectory() as folder:
             source = os.path.join(folder, "source.iso")
