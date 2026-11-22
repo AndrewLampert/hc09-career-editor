@@ -73,7 +73,7 @@ class CustomPlaySyncTests(unittest.TestCase):
         self.assertEqual(career["SETP"][0]["artx"], "77")
         self.assertEqual(career["SETG"][0]["x___"], "123456")
         self.assertEqual(career["SGFF"][0]["name"], "Default Alignment")
-        self.assertEqual(career["PLYS"][0]["PSAL"], "1")
+        self.assertEqual(career["PLYS"][0]["PSAL"], "2")
         self.assertEqual(career["PLPD"][0]["per1"], "65")
         self.assertEqual(career["PLRD"][0]["hole"], "6")
         self.assertEqual(career["PLCM"][0]["decision"], "2")
