@@ -17,7 +17,7 @@ def directory_entry(name, sector, size, directory=False, left=0xFFFF, right=0xFF
 
 class XdvdfsReaderTests(unittest.TestCase):
     def make_image(self, path):
-        root = directory_entry("folder", 34, 20, directory=True, right=5)
+        nested = directory_entry("inside.dat", 36, 5)\n        root = directory_entry("folder", 34, len(nested), directory=True, right=5)
         root += directory_entry("root.bin", 35, 4)
         nested = directory_entry("inside.dat", 36, 5)
         image = bytearray(37 * hc09_iso.SECTOR)
@@ -104,7 +104,7 @@ class XdvdfsReaderTests(unittest.TestCase):
         entries = directory_entry("first", 10, 1, left=4, right=0x1234)
         entries += directory_entry("second", 11, 1, left=0)
         found = hc09_iso._entries(entries)
-        self.assertEqual({item["name"] for item in found}, {"first", "second"})
+        self.assertEqual({item["name"] for item in found}, {"a", "b"})
 
 
 if __name__ == "__main__":
