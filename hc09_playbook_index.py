@@ -124,6 +124,7 @@ def main():
     parser.add_argument("--dir", required=True, type=Path, help="directory written by play-sets-scan")
     parser.add_argument("--prefix", default="qkl_boot_40", help="archive/entry suffix, normally qkl_boot_40")
     parser.add_argument("--pppn", type=Path, help="optional PPPN CSV exported separately (BOKL,PLYL,PPPM)")
+    parser.add_argument("--form-csv", type=Path, help="optional FORM CSV from a fe2ig copy (FORM,name)")
     parser.add_argument("--out", type=Path, default=Path("playbook-index"), help="output directory")
     args = parser.parse_args()
 
@@ -133,7 +134,7 @@ def main():
     pbpl = table("PBPL")
     setl = table("SETL")
     pbai = table("PBAI")
-    form = table("FORM")
+    form = read_csv(args.form_csv) if args.form_csv else table("FORM")
     pppn = read_csv(args.pppn) if args.pppn else []
 
     missing = [name for name, rows in (("PBPL", pbpl), ("SETL", setl), ("PBAI", pbai)) if not rows]
