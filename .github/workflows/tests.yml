@@ -42,3 +42,5 @@ jobs:
           node-version: "20"
       - name: Test AST archive parser
         run: node --test tests/ast_archive_safety.test.js
+      - name: Check real-game integration harness syntax
+        run: node --check tests/real_game_roundtrip.js
