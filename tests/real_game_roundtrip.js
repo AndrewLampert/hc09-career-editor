@@ -191,6 +191,8 @@ function main() {
         }
 
         const inspect = runBridge('inspect', ['--db', workingSave]);
+        const helperMatch = inspect.match(/^Helper: (.+)$/m);
+        const helperType = helperMatch ? helperMatch[1] : 'unknown';
         const tables = tableNamesFromInspect(inspect);
         fs.mkdirSync(beforeDir);
         fs.mkdirSync(editedDir);
@@ -271,7 +273,7 @@ function main() {
             save: {
                 original: sourceSave,
                 originalSha256Unchanged: true,
-                helper: beforeCheck.helper || null,
+                helper: helperType,
                 tables: tables.length,
                 tablesCompared: comparedTables,
                 reversibleEdit: { table: edit.table, field: edit.field, originalValue: edit.current, temporaryValue: edit.changed, restored: true },
