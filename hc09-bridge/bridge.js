@@ -14,6 +14,7 @@ const DBHelperFactory = require('madden-file-tools/helpers/DBHelperFactory');
 const HC09Helper = require('madden-file-tools/helpers/HC09Helper');
 const TDBParser = require('madden-file-tools/streams/TDBParser');
 const ASTParser = require('madden-file-tools/streams/ASTParser');
+const { validateAstHeader } = require('./archive_safety');
 const { Readable } = require('stream');
 
 const DEFAULT_TABLES = ['PLAY', 'DRPK', 'SLRI', 'TRVW', 'COCH', 'GMVW', 'GMSK', 'CSKL', 'TEAM', 'cINF', 'TPHS', 'PSSK'];
@@ -491,6 +492,18 @@ function extractEntry(source, index) {
         const parser = new ASTParser();
         let resolved = false;
         let fileStream = null;
+        const parseToc = parser.ontoc.bind(parser);
+        parser.ontoc = function (buf) {
+            try {
+                validateAstHeader(this.file.header);
+            } catch (error) {
+                reject(error);
+                this.destroy();
+                if (fileStream) fileStream.destroy();
+                return;
+            }
+            return parseToc(buf);
+        };
         // Resolving on a match without tearing anything down leaves the
         // parser (and, for a file source, the underlying read) running in
         // the background for the rest of the archive even though nothing is
@@ -527,6 +540,18 @@ function readToc(source) {
         const parser = new ASTParser();
         parser.extract = false;
         let fileStream = null;
+        const parseToc = parser.ontoc.bind(parser);
+        parser.ontoc = function (buf) {
+            try {
+                validateAstHeader(this.file.header);
+            } catch (error) {
+                reject(error);
+                this.destroy();
+                if (fileStream) fileStream.destroy();
+                return;
+            }
+            return parseToc(buf);
+        };
         // The 'toc' event fires as soon as the parser has read the archive's
         // table of contents, well before it has streamed the rest of the
         // (possibly huge) file. Resolving here without tearing anything down
