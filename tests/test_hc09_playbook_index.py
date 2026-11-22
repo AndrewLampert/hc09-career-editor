@@ -96,6 +96,19 @@ class PlaybookIndexTests(unittest.TestCase):
         self.assertEqual(play["formation_name"], "I Form")
         self.assertEqual(play["pbai_set_ids"], [6])
         self.assertEqual(diagnostics["missing_setl"], [])
+        self.assertEqual(diagnostics["pbai_set_mismatches"], [{
+            "book_id": 1,
+            "play_id": 10,
+            "play_name": "Play",
+            "master_set_id": 5,
+            "master_set_name": "Master set",
+            "pbai_sets": [{
+                "set_id": 6,
+                "set_name": "AI row set",
+                "formation_id": 2,
+                "formation_name": "Shotgun",
+            }],
+        }])
 
     def test_missing_formation_name_does_not_lose_set_or_play(self):
         index, diagnostics = build_index(
