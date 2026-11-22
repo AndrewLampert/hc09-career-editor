@@ -72,7 +72,7 @@ class PlaybookCacheTests(unittest.TestCase):
         stamp = guiHC09.App._playbook_source_stamp(self.archive)
         path = os.path.join(self.cache_dir, guiHC09.PLAYBOOK_PLAYNAMES_FILE)
         with open(path, "w", encoding="utf-8") as f:
-            f.write("BOKL,PLYL,PPPM\\n" + ("1,2,Example play\\n" * 20))
+            f.write("BOKL,PLYL,PPPM\n" + ("1,2,Example play\n" * 20))
         with open(os.path.join(self.cache_dir, "pppn-source.json"), "w", encoding="utf-8") as f:
             json.dump(stamp, f)
         self.app.model = SimpleNamespace(run_bridge=Mock())
@@ -85,7 +85,7 @@ class PlaybookCacheTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write("stale data" * 40)
         with open(marker, "w", encoding="utf-8") as f:
-            json.dump(guiHC09.App._playbook_source_stamp(self.archive), f)
+            json.dump({"path": "different archive", "size": 0, "mtime_ns": 0}, f)
         self.app.model = SimpleNamespace(run_bridge=Mock(side_effect=RuntimeError("export failed")))
         self.assertFalse(self.app._ensure_book_play_names(self.archive))
         self.assertFalse(os.path.exists(path))
@@ -97,7 +97,7 @@ class PlaybookCacheTests(unittest.TestCase):
 
         def export(args):
             with open(path, "w", encoding="utf-8") as f:
-                f.write("BOKL,PLYL,PPPM\\n" + ("1,2,Example play\\n" * 20))
+                f.write("BOKL,PLYL,PPPM\n" + ("1,2,Example play\n" * 20))
             return {"records": 20}
 
         self.app.model = SimpleNamespace(run_bridge=Mock(side_effect=export))
@@ -107,11 +107,11 @@ class PlaybookCacheTests(unittest.TestCase):
 
     def test_stock_export_validates_tables_before_stamping_cache(self):
         outputs = {
-            "PLAB": "PBGI,BNAM\\n1,Example book\\n",
+            "PLAB": "PBGI,BNAM\n1,Example book\n",
             "PBFM,SETL,PBPL": (
-                "pbfm.csv", "PBFM,name\\n1,Example formation\\n",
-                "setl.csv", "SETL,name\\n1,Example set\\n",
-                "pbpl.csv", "SETL,PLYL,name\\n1,2,Example play\\n",
+                "pbfm.csv", "PBFM,name\n1,Example formation\n",
+                "setl.csv", "SETL,name\n1,Example set\n",
+                "pbpl.csv", "SETL,PLYL,name\n1,2,Example play\n",
             ),
         }
 
@@ -128,7 +128,7 @@ class PlaybookCacheTests(unittest.TestCase):
             elif tables == "PPPN":
                 path = os.path.join(self.cache_dir, guiHC09.PLAYBOOK_PLAYNAMES_FILE)
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write("BOKL,PLYL,PPPM\\n" + ("1,2,Example play\\n" * 20))
+                    f.write("BOKL,PLYL,PPPM\n" + ("1,2,Example play\n" * 20))
                 return {"records": 20}
             return {"records": 1}
 
@@ -142,11 +142,11 @@ class PlaybookCacheTests(unittest.TestCase):
             tables = args[args.index("--tables") + 1]
             if tables == "PLAB":
                 with open(os.path.join(self.cache_dir, "plab.csv"), "w", encoding="utf-8") as f:
-                    f.write("PBGI,BNAM\\n1,Example book\\n")
+                    f.write("PBGI,BNAM\n1,Example book\n")
             elif tables == "PBFM,SETL,PBPL":
                 for name in ("pbfm.csv", "setl.csv", "pbpl.csv"):
                     with open(os.path.join(self.cache_dir, name), "w", encoding="utf-8") as f:
-                        f.write("wrong,columns\\n1,Example\\n")
+                        f.write("wrong,columns\n1,Example\n")
             return {"records": 1}
 
         self.app.model = SimpleNamespace(run_bridge=Mock(side_effect=export))
