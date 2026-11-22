@@ -57,6 +57,29 @@ class RecompIsoIntegrityTests(unittest.TestCase):
             self.assertEqual(result[appended_at - 1], 0)
             self.assertEqual(os.path.getsize(source), len(original))
 
+    def test_failed_replacement_keeps_existing_destination_untouched(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = os.path.join(folder, "source.iso")
+            replacement = os.path.join(folder, "replacement.ast")
+            output = os.path.join(folder, "output.iso")
+            self.make_nested_image(source)
+            with open(replacement, "wb") as f:
+                f.write(b"new replacement")
+            with open(output, "wb") as f:
+                f.write(b"previous good output")
+
+            def stop_copy(done, total):
+                raise RuntimeError("simulated write failure")
+
+            with self.assertRaisesRegex(RuntimeError, "simulated write failure"):
+                hc09_iso.replace_file(
+                    source, "folder/inside.dat", replacement, output,
+                    progress=stop_copy,
+                )
+            with open(output, "rb") as f:
+                self.assertEqual(f.read(), b"previous good output")
+            self.assertFalse(any(name.endswith(".part") for name in os.listdir(folder)))
+
     def test_truncated_original_file_is_rejected_before_output_is_created(self):
         with tempfile.TemporaryDirectory() as folder:
             source = os.path.join(folder, "source.iso")
