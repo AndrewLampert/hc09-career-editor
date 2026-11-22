@@ -29,3 +29,16 @@ jobs:
         run: python -m compileall -q .
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+
+  ast-archive:
+    name: AST archive tests
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Test AST archive parser
+        run: node --test tests/ast_archive_safety.test.js
