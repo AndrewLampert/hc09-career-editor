@@ -27,7 +27,7 @@ python .\hc09_playbook_index.py --dir ".\playbook-research\tables" --prefix qkl_
 ```
 
 Outputs:
-- `playbook_index.csv`: one row per book/play link, with master name, optional playbook-specific name, formation, set, play type, AI groups and weights.
+- `playbook_index.csv`: one row per book/play link, with master name, optional playbook-specific name, formation, set, play type, AI groups and weights. Pass `--form-csv` with the `FORM` export from a `qkl_fe2ig` copy (commonly entry 1676 on the PS3 USA build) because the master `qkl_boot` entry may not contain formation names.
 - `playbooks.json`: the same data grouped by numeric book ID.
 - `diagnostics.json`: missing play/set links and duplicate book/play links.
 
