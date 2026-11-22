@@ -217,5 +217,83 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
             self.assertFalse(os.path.exists(app.TEST_BACKUP_DIR))
 
 
+    def test_write_tables_in_save_verifies_and_keeps_a_backup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = os.path.join(folder, "career.db")
+            backup = os.path.join(folder, "career.bak")
+            out = os.path.join(folder, "tables")
+            os.makedirs(out)
+            with open(db, "wb") as f:
+                f.write(b"original-save")
+
+            def bridge(args):
+                if args[0] == "import":
+                    with open(db, "wb") as f:
+                        f.write(b"edited-save")
+                    return {"results": [{"table": "PGPL", "status": "ok", "warnings": []}]}
+                if args[0] == "verify-db":
+                    return {"ok": True}
+                raise AssertionError(args)
+
+            model = FakeBridgeModel(bridge)
+            guiHC09._OPENED_COPIES.discard(os.path.normcase(os.path.abspath(db)))
+            with mock.patch.object(guiHC09, "save_backup_path", return_value=backup):
+                guiHC09.write_tables_in_save(model, db, out, ["PGPL"])
+
+            with open(db, "rb") as f:
+                self.assertEqual(f.read(), b"edited-save")
+            with open(backup, "rb") as f:
+                self.assertEqual(f.read(), b"original-save")
+            self.assertEqual([call[0] for call in model.calls], ["import", "verify-db"])
+
+    def test_write_tables_in_save_restores_backup_after_partial_import_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = os.path.join(folder, "career.db")
+            backup = os.path.join(folder, "career.bak")
+            out = os.path.join(folder, "tables")
+            os.makedirs(out)
+            with open(db, "wb") as f:
+                f.write(b"original-save")
+
+            def bridge(args):
+                with open(db, "wb") as f:
+                    f.write(b"partially-written")
+                raise RuntimeError("simulated bridge failure")
+
+            model = FakeBridgeModel(bridge)
+            guiHC09._OPENED_COPIES.discard(os.path.normcase(os.path.abspath(db)))
+            with mock.patch.object(guiHC09, "save_backup_path", return_value=backup):
+                with self.assertRaisesRegex(RuntimeError, "simulated bridge failure"):
+                    guiHC09.write_tables_in_save(model, db, out, ["PGPL"])
+
+            with open(db, "rb") as f:
+                self.assertEqual(f.read(), b"original-save")
+
+    def test_write_tables_in_save_restores_backup_when_postwrite_verification_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = os.path.join(folder, "career.db")
+            backup = os.path.join(folder, "career.bak")
+            out = os.path.join(folder, "tables")
+            os.makedirs(out)
+            with open(db, "wb") as f:
+                f.write(b"original-save")
+
+            def bridge(args):
+                if args[0] == "import":
+                    with open(db, "wb") as f:
+                        f.write(b"invalid-save")
+                    return {"results": [{"table": "PGPL", "status": "ok", "warnings": []}]}
+                return {"ok": False, "issues": ["bad table layout"]}
+
+            model = FakeBridgeModel(bridge)
+            guiHC09._OPENED_COPIES.discard(os.path.normcase(os.path.abspath(db)))
+            with mock.patch.object(guiHC09, "save_backup_path", return_value=backup):
+                with self.assertRaisesRegex(RuntimeError, "does not check out"):
+                    guiHC09.write_tables_in_save(model, db, out, ["PGPL"])
+
+            with open(db, "rb") as f:
+                self.assertEqual(f.read(), b"original-save")
+
+
 if __name__ == "__main__":
     unittest.main()
