@@ -13044,6 +13044,11 @@ class App(tk.Tk):
         out = PLAYBOOK_CACHE_DIR
         os.makedirs(out, exist_ok=True)
         stamp_path = os.path.join(out, "playbook-source.json")
+        for name in PLAYBOOK_NAME_FILES + (PLAYBOOK_PLAYNAMES_FILE, "pppn-source.json"):
+            try:
+                os.remove(os.path.join(out, name))
+            except OSError:
+                pass
         try:
             os.remove(stamp_path)                 # never let a partial export look current
         except OSError:
@@ -13052,9 +13057,20 @@ class App(tk.Tk):
                                "--require-fields", "PBGI,BNAM", "--require-rows", "--out-dir", out])
         self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PBFM,SETL,PBPL",
                                "--out-dir", out])
-        missing = [name for name in PLAYBOOK_NAME_FILES if not os.path.isfile(os.path.join(out, name))]
-        if missing:
-            raise RuntimeError("The playbook-name export did not create: " + ", ".join(missing))
+        required_columns = {
+            "plab.csv": {"PBGI", "BNAM"},
+            "pbfm.csv": {"PBFM", "name"},
+            "setl.csv": {"SETL", "name"},
+            "pbpl.csv": {"SETL", "PLYL", "name"},
+        }
+        invalid = []
+        for name, columns in required_columns.items():
+            path = os.path.join(out, name)
+            rows = read_csv_dicts(path) if os.path.isfile(path) else []
+            if not rows or not columns.issubset(rows[0].keys()):
+                invalid.append(name)
+        if invalid:
+            raise RuntimeError("The playbook-name export is missing rows or required columns in: " + ", ".join(invalid))
         stamp = self._playbook_source_stamp(boot_ast)
         if not stamp or not write_json_atomic(stamp_path, stamp):
             raise RuntimeError("The playbook-name cache could not be tied to its source archive.")
@@ -13072,6 +13088,7 @@ class App(tk.Tk):
             return True
         try:
             os.remove(marker)                    # a failed/replaced export must not retain a valid stamp
+            os.remove(path)                       # don't let an older CSV masquerade as this export
         except OSError:
             pass
         try:
