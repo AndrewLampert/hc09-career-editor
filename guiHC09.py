@@ -12835,8 +12835,32 @@ class App(tk.Tk):
         except OSError:
             return None
 
-    def _playbook_names_cached(self):
-        return all(os.path.isfile(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES)
+    @staticmethod
+    def _playbook_source_stamp(boot_ast):
+        """Identity of the exact qkl_boot.ast used for the cached stock playbook names."""
+        try:
+            path = os.path.normcase(os.path.abspath(boot_ast))
+            st = os.stat(boot_ast)
+            return {"path": path, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+        except (OSError, TypeError, ValueError):
+            return None
+
+    def _playbook_cache_matches(self, boot_ast, marker):
+        """True only when a cache manifest belongs to this exact archive revision."""
+        wanted = self._playbook_source_stamp(boot_ast)
+        if not wanted:
+            return False
+        try:
+            with open(os.path.join(PLAYBOOK_CACHE_DIR, marker), encoding="utf-8") as f:
+                made_for = json.load(f)
+            return made_for == wanted
+        except (OSError, ValueError, TypeError):
+            return False
+
+    def _playbook_names_cached(self, boot_ast=""):
+        boot_ast = boot_ast or self.ui_prefs.get("boot_ast_path") or ""
+        return (self._playbook_cache_matches(boot_ast, "playbook-source.json")
+                and all(os.path.isfile(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES))
 
     def refresh_playbooks(self, force=False):
         if not self.model.db_path or not self.model.players:
@@ -12855,16 +12879,14 @@ class App(tk.Tk):
                 self._playbook_stamp = stamp                       # asked once for this change of the file
             return
 
-        boot_ast = ""
-        if not self._playbook_names_cached():
-            # Asks for qkl_boot.ast on the main thread if it can't find it (same
-            # prompt as Player Type Fit); cancelling just means IDs without names.
-            boot_ast = self._find_boot_ast("Playbooks", "playbook, formation, set and play names")
+        # Resolve the archive even when CSVs exist: their manifest must match this
+        # exact file revision, not merely a previous install at the same cache path.
+        boot_ast = self._find_boot_ast("Playbooks", "playbook, formation, set and play names")
         db_path, coaches = self.model.db_path, list(self.model.coaches)
         override = (self.ui_prefs.get("per_save", {}).get(self.get_current_save_key()) or {}).get("profile_path", "")
 
         def work():
-            if boot_ast:
+            if boot_ast and not self._playbook_names_cached(boot_ast):
                 self._extract_playbook_names(boot_ast)
             game = {os.path.splitext(f)[0]: read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, f)) for f in PLAYBOOK_NAME_FILES}
             if self._ensure_book_play_names(boot_ast):
@@ -13015,36 +13037,52 @@ class App(tk.Tk):
         self.run_in_thread_with_busy("Reading profile...", lambda: self._read_profile_names(path), done, error_title="Playbooks")
 
     def _extract_playbook_names(self, boot_ast):
-        """Pull the playbook / formation / set / play name tables out of the
-        user's own qkl_boot.ast into a local cache (worker thread - bridge only).
-        PLAB is asked for separately: it exists in two entries but only one has
-        the PBGI playbook-ID column and actual rows."""
+        """Pull stock playbook names into a cache tied to this exact archive revision."""
         out = PLAYBOOK_CACHE_DIR
+        os.makedirs(out, exist_ok=True)
+        stamp_path = os.path.join(out, "playbook-source.json")
+        try:
+            os.remove(stamp_path)                 # never let a partial export look current
+        except OSError:
+            pass
         self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PLAB",
                                "--require-fields", "PBGI,BNAM", "--require-rows", "--out-dir", out])
         self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PBFM,SETL,PBPL",
                                "--out-dir", out])
+        missing = [name for name in PLAYBOOK_NAME_FILES if not os.path.isfile(os.path.join(out, name))]
+        if missing:
+            raise RuntimeError("The playbook-name export did not create: " + ", ".join(missing))
+        stamp = self._playbook_source_stamp(boot_ast)
+        if not stamp or not write_json_atomic(stamp_path, stamp):
+            raise RuntimeError("The playbook-name cache could not be tied to its source archive.")
         self._ensure_book_play_names(boot_ast)
 
     def _ensure_book_play_names(self, boot_ast=""):
-        """Best effort (worker thread, bridge only): the names each playbook gives its plays (table PPPN of qkl_boot.ast) into the playbook cache, if they are not there yet.
-        Without them the editor shows the master names. True if the file is there afterwards. When it is not, and the archive WAS asked, self._book_names_failure says why (the Play creator tells the
-        person); it is None otherwise."""
+        """Best effort: cache PPPN only when it belongs to the selected qkl_boot.ast revision."""
         self._book_names_failure = None
         path = os.path.join(PLAYBOOK_CACHE_DIR, PLAYBOOK_PLAYNAMES_FILE)
-        if os.path.isfile(path) and os.path.getsize(path) > 200:        # a file with only the header row (an entry without rows) does not count
-            return True
         boot_ast = boot_ast or self.ui_prefs.get("boot_ast_path") or ""
         if not (boot_ast and os.path.isfile(boot_ast)):
             return False
+        marker = os.path.join(PLAYBOOK_CACHE_DIR, "pppn-source.json")
+        if os.path.isfile(path) and os.path.getsize(path) > 200 and self._playbook_cache_matches(boot_ast, "pppn-source.json"):
+            return True
+        try:
+            os.remove(marker)                    # a failed/replaced export must not retain a valid stamp
+        except OSError:
+            pass
         try:
             res = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows",
                                          "--out-dir", PLAYBOOK_CACHE_DIR])
         except Exception as e:
             self._book_names_failure = f"{type(e).__name__}: {e}"[:300]
             return False
-        if not (bool(res.get("records")) and os.path.isfile(path)):
+        if not (bool(res.get("records")) and os.path.isfile(path) and os.path.getsize(path) > 200):
             self._book_names_failure = "the export found no playbook play names in the game files"
+            return False
+        stamp = self._playbook_source_stamp(boot_ast)
+        if not stamp or not write_json_atomic(marker, stamp):
+            self._book_names_failure = "the playbook play-name cache could not be tied to its source archive"
             return False
         return True
 
@@ -15049,7 +15087,7 @@ class App(tk.Tk):
         boot = archives[0]
 
         def work():
-            if not self._playbook_names_cached():
+            if not self._playbook_names_cached(boot):
                 self._extract_playbook_names(boot)       # playbook names for the filter
             lib = self.load_play_library(archives)
             lib._ui_art = self.load_play_art(boot)
@@ -15415,7 +15453,7 @@ class App(tk.Tk):
     def _forget_playbook_names(self, keep_data=False):
         """The cached copy of the playbook names, sets, formations and plays is out of date (the game files were written: a rename, an added play, a changed play, put back): the Playbooks tab
         reads all of it again from the game files at its next use."""
-        for name in PLAYBOOK_NAME_FILES + (PLAYBOOK_PLAYNAMES_FILE,):
+        for name in PLAYBOOK_NAME_FILES + (PLAYBOOK_PLAYNAMES_FILE, "playbook-source.json", "pppn-source.json"):
             try:
                 os.remove(os.path.join(PLAYBOOK_CACHE_DIR, name))
             except OSError:
@@ -15475,7 +15513,7 @@ class App(tk.Tk):
 
     def playbook_name_map(self, boot_ast):
         """{playbook id (BOKL): its name} from the game's PLAB (read once into the cache)."""
-        if not self._playbook_names_cached():
+        if not self._playbook_names_cached(boot_ast):
             self._extract_playbook_names(boot_ast)
         names = {}
         for r in read_csv_dicts(os.path.join(PLAYBOOK_CACHE_DIR, "plab.csv")):
@@ -15594,7 +15632,7 @@ class App(tk.Tk):
         boot = archives[0]
 
         def work():
-            if not self._playbook_names_cached():
+            if not self._playbook_names_cached(boot):
                 self._extract_playbook_names(boot)       # names for the playbook filter
             return load_personnel_data(self.model, archives, self._personnel_backup_dir())
 
