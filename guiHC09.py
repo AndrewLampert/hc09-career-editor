@@ -13086,11 +13086,11 @@ class App(tk.Tk):
         marker = os.path.join(PLAYBOOK_CACHE_DIR, "pppn-source.json")
         if os.path.isfile(path) and os.path.getsize(path) > 200 and self._playbook_cache_matches(boot_ast, "pppn-source.json"):
             return True
-        try:
-            os.remove(marker)                    # a failed/replaced export must not retain a valid stamp
-            os.remove(path)                       # don't let an older CSV masquerade as this export
-        except OSError:
-            pass
+        for stale in (marker, path):
+            try:
+                os.remove(stale)                  # a failed/replaced export must not retain old cache data
+            except OSError:
+                pass
         try:
             res = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PPPN", "--require-fields", "BOKL,PLYL,PPPM", "--require-rows",
                                          "--out-dir", PLAYBOOK_CACHE_DIR])
