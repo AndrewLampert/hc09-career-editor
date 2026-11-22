@@ -10,7 +10,8 @@ function makeArchive(entries) {
     const headerSize = 0x30;
     const rowSize = 25; // separator + 4 + 8 + 4 + 4 + 4 byte fields
     const tocLength = entries.length * rowSize;
-    const tocOffset = 0x40;\n    const dataStart = tocOffset + tocLength;
+    const tocOffset = 0x40;
+    const dataStart = tocOffset + tocLength;
     const header = Buffer.alloc(headerSize);
     header.write('BGFA1.05', 0, 'latin1');
     header.writeInt32LE(entries.length, 12);
