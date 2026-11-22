@@ -102,10 +102,12 @@ class XdvdfsReaderTests(unittest.TestCase):
         )
 
     def test_entry_tree_stops_on_cycles_and_ignores_out_of_range_links(self):
-        entries = directory_entry("first", 10, 1, left=4, right=0x1234)
-        entries += directory_entry("second", 11, 1, left=0)
+        entries = directory_entry("a", 10, 1, right=4)
+        entries += directory_entry("b", 11, 1, left=8)
+        entries += directory_entry("c", 12, 1, right=4)
+        entries += directory_entry("unreachable", 13, 1)
         found = hc09_iso._entries(entries)
-        self.assertEqual({item["name"] for item in found}, {"a", "b"})
+        self.assertEqual({item["name"] for item in found}, {"a", "b", "c"})
 
 
 if __name__ == "__main__":
