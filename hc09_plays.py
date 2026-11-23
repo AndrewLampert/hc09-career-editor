@@ -825,6 +825,37 @@ def rename_rows(rows, renames, expect=None):
     return out, renamed, skipped
 
 
+def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name):
+    """Set a custom playbook's own PPPN name for one linked play.
+
+    Custom playbook ids 1..10 belong to the save namespace, not the shipped
+    game-file PPPN namespace. This helper is deliberately save-only: it never
+    edits a stock playbook's row. Returns (rows, changed, created).
+    """
+    name = clean_play_name(name)
+    book_id, play_id = int(book_id), int(play_id)
+    if not 1 <= book_id <= 10:
+        raise ValueError("A custom playbook id must be from 1 to 10.")
+    if not any(int(r.get("BOKL", -1)) == book_id and int(r.get("PLYL", -1)) == play_id
+               for r in pgpl_rows):
+        raise ValueError("That play is not linked into the selected custom playbook in this save.")
+    matches = [i for i, r in enumerate(pppn_rows)
+               if int(r.get("BOKL", -1)) == book_id and int(r.get("PLYL", -1)) == play_id]
+    if len(matches) > 1:
+        raise ValueError("The save has duplicate PPPN rows for this custom-book play; no name was changed.")
+    out = [dict(r) for r in pppn_rows]
+    if matches:
+        i = matches[0]
+        if "PPPM" not in out[i]:
+            raise ValueError("The save's PPPN table has no PPPM name field.")
+        if str(out[i].get("PPPM", "")) == name:
+            return out, False, False
+        out[i]["PPPM"] = name
+        return out, True, False
+    out.append({"BOKL": str(book_id), "PLYL": str(play_id), "PPPM": name})
+    return out, True, True
+
+
 CPU_GROUPS = {4: (40, 20, 1), 102: (36, 8, 20), 13: (6, 38, 17)}      # the groups the game gave plays of these types (PLYT)
 CPU_WEIGHT = 5
 
