@@ -118,5 +118,58 @@ class EveryoneBooksTests(unittest.TestCase):
         self.assertEqual(left_out, [(7, "it has no offense formation group to put the formation in")])
 
 
+class PlaybookLinkIntegrityTests(unittest.TestCase):
+    def test_valid_playbook_links_pass(self):
+        tables = {
+            "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
+            "PGSL": [{"BOKL": "7", "SETL": "471", "PBFM": "26"}],
+            "PGFM": [{"BOKL": "7", "PBFM": "26"}],
+        }
+        self.assertEqual(hc09_addplay.playbook_link_issues(tables), [])
+
+    def test_play_without_set_formation_link_is_reported(self):
+        tables = {
+            "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
+            "PGSL": [],
+            "PGFM": [{"BOKL": "7", "PBFM": "26"}],
+        }
+        issues = hc09_addplay.playbook_link_issues(tables)
+        self.assertEqual([x["kind"] for x in issues], ["play_without_formation_link"])
+        self.assertEqual((issues[0]["book"], issues[0]["set"]), (7, 471))
+
+    def test_set_formation_missing_from_book_is_reported(self):
+        tables = {
+            "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
+            "PGSL": [{"BOKL": "7", "SETL": "471", "PBFM": "26"}],
+            "PGFM": [],
+        }
+        issues = hc09_addplay.playbook_link_issues(tables)
+        self.assertEqual([x["kind"] for x in issues], ["formation_not_in_playbook"])
+        self.assertEqual((issues[0]["book"], issues[0]["formation"]), (7, 26))
+
+    def test_one_set_can_legitimately_link_to_multiple_formations(self):
+        tables = {
+            "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
+            "PGSL": [
+                {"BOKL": "7", "SETL": "471", "PBFM": "26"},
+                {"BOKL": "7", "SETL": "471", "PBFM": "27"},
+            ],
+            "PGFM": [
+                {"BOKL": "7", "PBFM": "26"},
+                {"BOKL": "7", "PBFM": "27"},
+            ],
+        }
+        self.assertEqual(hc09_addplay.playbook_link_issues(tables), [])
+
+    def test_same_formation_id_in_another_book_does_not_validate_link(self):
+        tables = {
+            "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
+            "PGSL": [{"BOKL": "7", "SETL": "471", "PBFM": "26"}],
+            "PGFM": [{"BOKL": "8", "PBFM": "26"}],
+        }
+        issues = hc09_addplay.playbook_link_issues(tables)
+        self.assertEqual([x["kind"] for x in issues], ["formation_not_in_playbook"])
+
+
 if __name__ == "__main__":
     unittest.main()
