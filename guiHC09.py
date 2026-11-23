@@ -5383,7 +5383,7 @@ def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=
         out = os.path.join(tmp, "in")
         os.makedirs(out)
         with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f, lineterminator="\\r\\n")
+            w = csv.writer(f, lineterminator="\r\n")
             w.writerow(headers)
             for row in rows:
                 w.writerow([row[h] for h in headers])
