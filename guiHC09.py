@@ -10986,17 +10986,47 @@ class PlaybookData:
                     tf = target_formation(f)
                     if tf not in mapped:
                         mapped.append(tf)
-            # A special-teams set must stay under a special-teams formation.
-            # The optional "put new sets under..." choice used to allow (for
-            # example) a Kickoff set to be linked under Split Backs. The playbook
-            # stayed structurally valid, but the game displayed the play in the
-            # wrong formation. Apply the same category check to existing links
-            # too, so a later copy cannot silently extend a bad mapping.
-            source_special = self.set_is_special(src, setl)
-            for tf in mapped:
+            # Check the category of each source formation, not just the set
+            # as a whole. A set with one bad cross-category link must not make
+            # its other (correct) links look like the set's intended category.
+            def formation_is_special(book, formation, srfm=""):
+                name = self.formation_name.get(formation) or self.formation_name.get(srfm)
+                return not name or name.lower() in PLAYBOOK_SPECIAL_FORMATIONS
+
+            source_forms = ([only_formation] if only_formation is not None else
+                            [f for f in self.set_formations.get((src, setl), [])
+                             if f not in PLAYBOOK_CREATED_FORMATIONS])
+            source_categories = {formation_is_special(
+                src, sf, self.formation_srfm.get((src, sf), "")) for sf in source_forms}
+            target_categories = set()
+            target_pairs = []
+            if not set_is_new:
+                # Existing target links are deliberately left untouched. Still
+                # refuse to add plays when their category profile disagrees
+                # with the source set's profile.
+                target_pairs = [(None, tf) for tf in mapped]
+                target_categories = {formation_is_special(
+                    tgt, tf, self.formation_srfm.get((tgt, tf), "")) for tf in mapped}
+                if source_categories and target_categories and source_categories != target_categories:
+                    plan["error"] = (
+                        f'"{self.set_label(setl)}" has source formation categories that do not '
+                        "match the target's existing formation links. The copy was not applied."
+                    )
+                    return
+            else:
+                # New sets retain their source-to-target formation mapping.
+                source_to_target = []
+                if into_formation is not None:
+                    source_to_target = [(sf, into_formation) for sf in source_forms]
+                else:
+                    source_to_target = list(zip(source_forms, mapped))
+                target_pairs = source_to_target
+            for sf, tf in target_pairs:
+                source_special = (formation_is_special(
+                    src, sf, self.formation_srfm.get((src, sf), "")) if sf is not None
+                    else next(iter(source_categories), True))
                 target_srfm = self.formation_srfm.get((tgt, tf), planned_forms.get(tf, ""))
-                target_name = self.formation_name.get(tf) or self.formation_name.get(target_srfm)
-                target_special = not target_name or target_name.lower() in PLAYBOOK_SPECIAL_FORMATIONS
+                target_special = formation_is_special(tgt, tf, target_srfm)
                 if source_special != target_special:
                     source_kind = "special-teams" if source_special else "ordinary"
                     target_kind = "special-teams" if target_special else "ordinary"
