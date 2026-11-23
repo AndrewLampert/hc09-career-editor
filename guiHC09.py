@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, mounted_play_id_for_link, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -15416,14 +15416,14 @@ class App(tk.Tk):
                     career = self.model.db_path or ""
                     if career and os.path.isfile(career):
                         pgpl = self._export_tables(career, ["PGPL"])["PGPL"][1]
-                        original_to_mounted = {int(info["plyl"]): mounted for mounted, info in lib.custom.items()}
                         for row in pgpl:
                             try:
-                                bokl, plyl = int(row["BOKL"]), int(row["PLYL"])
+                                bokl, setl, plyl = int(row["BOKL"]), int(row["SETL"]), int(row["PLYL"])
                             except (KeyError, TypeError, ValueError):
                                 continue
                             if 1 <= bokl <= 10:
-                                custom_book_plays.setdefault(bokl, set()).add(original_to_mounted.get(plyl, plyl))
+                                mounted = mounted_play_id_for_link(lib.custom, setl, plyl)
+                                custom_book_plays.setdefault(bokl, set()).add(mounted)
                 except Exception:
                     # The stock Play Creator remains usable if the profile/career custom-book data cannot be read.
                     custom_books, custom_book_plays = {}, {}
