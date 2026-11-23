@@ -384,5 +384,26 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
                     )
                 write.assert_not_called()
 
+
+    def test_custom_book_name_rows_supports_career_ppnn_schema(self):
+        rows, changed, created = guiHC09.custom_book_name_rows(
+            [],
+            [{"BOKL": "3", "SETL": "5", "PLYL": "10", "PLTP": "4"}],
+            3, 10, "Career name",
+            pppn_fields=["BOKL", "PLYL", "PPNN"],
+        )
+        self.assertTrue(changed)
+        self.assertTrue(created)
+        self.assertEqual(rows, [{"BOKL": "3", "PLYL": "10", "PPNN": "Career name"}])
+
+        updated, changed, created = guiHC09.custom_book_name_rows(
+            [{"BOKL": "3", "PLYL": "10", "PPNN": "Old"}],
+            [{"BOKL": "3", "SETL": "5", "PLYL": "10", "PLTP": "4"}],
+            3, 10, "New",
+        )
+        self.assertTrue(changed)
+        self.assertFalse(created)
+        self.assertEqual(updated[0]["PPNN"], "New")
+
 if __name__ == "__main__":
     unittest.main()
