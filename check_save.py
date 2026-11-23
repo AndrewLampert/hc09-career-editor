@@ -131,6 +131,71 @@ def playbook_link_diagnostics(path, counts, node=None):
         lines.append(f"  ...and {len(issues) - 20} more.")
     return lines
 
+
+CUSTOM_PLAY_TABLES = ("PBPL", "SETL", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM")
+
+
+def custom_play_diagnostics(path, counts, node=None):
+    """Read-only integrity check of the custom-play definitions in a profile save."""
+    if counts.get("PBPL", 0) <= 0:
+        return ["Custom play check: no custom plays to validate."]
+    missing = [name for name in CUSTOM_PLAY_TABLES if name not in counts]
+    if missing:
+        return ["Custom play check skipped: required table(s) missing: " + ", ".join(missing) + "."]
+    node = node or find_node()
+    if not node:
+        raise CheckError("Node.js 18 or newer is not installed; custom plays could not be checked.")
+    with tempfile.TemporaryDirectory(prefix="hc09-custom-play-check-") as folder:
+        try:
+            result = subprocess.run(
+                [node, BRIDGE_JS, "export", "--db", path, "--out", folder,
+                 "--tables", ",".join(CUSTOM_PLAY_TABLES)],
+                capture_output=True, text=True, timeout=180,
+                creationflags=D.NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            raise CheckError("Exporting the custom-play definitions took more than three minutes.")
+        except OSError as e:
+            raise CheckError(f"Node.js could not export the custom-play definitions: {e}")
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "no message").strip().splitlines()
+            raise CheckError("The custom-play definitions could not be checked: " + detail[0][:400])
+        tables = {}
+        for name in CUSTOM_PLAY_TABLES:
+            csv_path = os.path.join(folder, name.lower() + ".csv")
+            if not os.path.isfile(csv_path):
+                raise CheckError(f"The bridge did not export {name}; custom plays could not be checked.")
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                tables[name] = list(csv.DictReader(f))
+    issues = AP.custom_play_issues(tables)
+    if not issues:
+        return ["Custom play check: no broken references or incomplete 11-slot definitions found."]
+    lines = [f"Custom play check: {len(issues)} issue(s) found (read-only; nothing was changed)."]
+    for issue in issues[:20]:
+        kind = issue["kind"]
+        if kind == "play_set_missing":
+            lines.append(f"  Custom play {issue['play']} references missing set {issue['set']}.")
+        elif kind in ("set_slots_invalid", "play_slots_invalid"):
+            subject = "set" if kind == "set_slots_invalid" else "play"
+            lines.append(f"  Custom {subject} {issue['owner']} has {issue['rows']} slot rows; expected positions 0 through 10 exactly once.")
+        elif kind == "alignment_slot_missing":
+            lines.append(f"  SETG references missing SETP slot {issue['slot']}.")
+        elif kind == "alignment_group_missing":
+            lines.append(f"  SETG references missing SGFF group {issue['group']}.")
+        elif kind == "alignment_set_mismatch":
+            lines.append(f"  SETG slot {issue['slot']} and group {issue['group']} belong to different sets.")
+        elif kind == "detail_play_missing":
+            lines.append(f"  {issue['table']} references missing custom play {issue['play']}.")
+        elif kind == "duplicate_play_id":
+            lines.append(f"  PBPL has duplicate play id {issue['id']}.")
+        elif kind == "duplicate_set_id":
+            lines.append(f"  SETL has duplicate set id {issue['id']}.")
+        else:
+            lines.append(f"  Invalid {issue.get('table', 'custom-play')} id field {issue.get('field', '')}.")
+    if len(issues) > 20:
+        lines.append(f"  ...and {len(issues) - 20} more.")
+    return lines
+
 def saves_in(path):
     """The save files a path stands for: the file itself, or the saves inside a folder (a package folder holds one file of its own name). Newest first."""
     if os.path.isfile(path):
@@ -283,6 +348,12 @@ def report(path, node=None):
             lines += playbook_link_diagnostics(path, counts, node)
         except CheckError as e:
             lines += ["", f"Playbook link check skipped: {e}"]
+    if kind == "profile" and counts.get("PBPL", 0) > 0:
+        try:
+            lines += [""]
+            lines += custom_play_diagnostics(path, counts, node)
+        except CheckError as e:
+            lines += ["", f"Custom play check skipped: {e}"]
     full = [f"  {name:<8}{rows_:>9,}" for name, rows_ in counts.items()]
     return lines, [f"All {len(counts)} tables of {path}:"] + full
 
