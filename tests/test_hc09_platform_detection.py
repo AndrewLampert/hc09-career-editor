@@ -17,6 +17,33 @@ def mc02_save(table_count, padding=detect.MIN_SAVE_SIZE):
 
 
 class PlatformDetectionTests(unittest.TestCase):
+    def test_rpcs3_ps3_usr_data_header_is_detected_without_decryption(self):
+        # HC09Helper uses uint32be(header) + 4 as the database start.
+        database = (
+            detect.TDB_SIGNATURE + b"\\x00" * 8
+            + (208).to_bytes(4, "big")
+        )
+        prefix_size = 0x100
+        prefix = bytearray(prefix_size)
+        prefix[:4] = (prefix_size - 4).to_bytes(4, "big")
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "USR-DATA")
+            with open(path, "wb") as f:
+                f.write(prefix + database)
+
+            self.assertEqual(detect.ps3_db_start(path), prefix_size)
+            self.assertEqual(detect.db_table_count(path), 208)
+            self.assertEqual(detect.classify_save(path), ("career", 208))
+            self.assertFalse(detect.is_xbox_save(path))
+
+    def test_ps3_detection_rejects_unrelated_offset_header(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "not-a-save")
+            with open(path, "wb") as f:
+                f.write((0x100 - 4).to_bytes(4, "big") + b"\\x00" * 0x200)
+            self.assertIsNone(detect.ps3_db_start(path))
+            self.assertEqual(detect.classify_save(path), ("other", None))
+
     def test_xenia_save_is_found_only_under_the_hc09_title_folder(self):
         with tempfile.TemporaryDirectory() as folder:
             xenia = os.path.join(folder, "Xenia")
