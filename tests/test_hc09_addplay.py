@@ -34,10 +34,11 @@ class FormationGroupTests(unittest.TestCase):
 
     def test_family_alias_maps_gun_to_shotgun(self):
         groups = hc09_addplay.FormationGroups(
-            [{"BOKL": "20", "SETL": "50", "PBFM": "8"}],
+            [{"BOKL": "20", "SETL": "50", "PBFM": "10"}],
             [
                 {"PBFM": "8", "name": "Shotgun", "FTYP": "1", "ord_": "1"},
                 {"PBFM": "9", "name": "Splitbacks", "FTYP": "1", "ord_": "2"},
+                {"PBFM": "10", "name": "Gun", "FTYP": "1", "ord_": "3"},
             ],
             [{"BOKL": "7", "PBFM": "8"}, {"BOKL": "7", "PBFM": "9"}],
         )
@@ -91,7 +92,6 @@ class EveryoneBooksTests(unittest.TestCase):
             return {100: "offense", 200: "other"}[plyl]
 
     def test_special_teams_play_does_not_consume_offense_playbook_capacity(self):
-        groups = unittest.mock.Mock() if hasattr(unittest, "mock") else None
         class Groups:
             @staticmethod
             def pick(_book, _like):
@@ -100,9 +100,9 @@ class EveryoneBooksTests(unittest.TestCase):
         books, targets, left_out = hc09_addplay.everyone_books(
             self.Library(), [7], Groups(), 50, cap=1
         )
-        self.assertEqual(books, [])
-        self.assertEqual(targets, {})
-        self.assertEqual(left_out, [(7, "it already has 1 offense plays (the game's limit is 1)")])
+        self.assertEqual(books, [7])
+        self.assertEqual(targets, {7: 4})
+        self.assertEqual(left_out, [])
 
     def test_special_only_group_is_reported_as_no_placement_target(self):
         class Groups:
