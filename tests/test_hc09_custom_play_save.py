@@ -306,8 +306,8 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
                 out = args[args.index("--out") + 1]
                 with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
                     w = csv.writer(f)
-                    w.writerow(["BOKL", "PLYL", "PPPM"])
-                    w.writerow(["252", "10", "Stock name"])
+                    w.writerow(["BOKL", "PLYL", "PPPM", "FLAG"])
+                    w.writerow(["252", "10", "Stock name", "1"])
                 with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
                     w = csv.writer(f)
                     w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
@@ -331,9 +331,9 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
             self.assertEqual(captured["tables"], ["PPPN"])
             self.assertEqual(captured["kwargs"]["allow_append"], ["PPPN"])
             self.assertEqual(captured["rows"], [
-                ["BOKL", "PLYL", "PPPM"],
-                ["252", "10", "Stock name"],
-                ["3", "10", "Custom name"],
+                ["BOKL", "PLYL", "PPPM", "FLAG"],
+                ["252", "10", "Stock name", "1"],
+                ["3", "10", "Custom name", ""],
             ])
 
     def test_custom_book_name_save_updates_existing_row_without_appending(self):
@@ -344,8 +344,8 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
                 out = args[args.index("--out") + 1]
                 with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
                     w = csv.writer(f)
-                    w.writerow(["BOKL", "PLYL", "PPPM"])
-                    w.writerow(["3", "10", "Old custom name"])
+                    w.writerow(["BOKL", "PLYL", "PPPM", "FLAG"])
+                    w.writerow(["3", "10", "Old custom name", "1"])
                 with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
                     w = csv.writer(f)
                     w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
@@ -365,7 +365,7 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
             self.assertTrue(changed)
             self.assertFalse(created)
             self.assertEqual(captured["kwargs"]["allow_append"], ())
-            self.assertEqual(captured["rows"][1], ["3", "10", "New custom name"])
+            self.assertEqual(captured["rows"][1], ["3", "10", "New custom name", "1"])
 
     def test_custom_book_name_save_refuses_unlinked_play_before_write(self):
         with tempfile.TemporaryDirectory() as folder:
