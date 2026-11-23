@@ -175,6 +175,7 @@ class ConvertMineSafetyTests(unittest.TestCase):
     def test_special_teams_play_is_rejected_before_formation_group_selection(self):
         class Library:
             plays = {6709: {"name": "Onside Kick"}}
+            tables = {"PSLO": [], "ARTO": []}
 
             @staticmethod
             def detail(_base):
