@@ -448,5 +448,57 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
                     )
                 write.assert_not_called()
 
+
+class CustomPlaybookRenameTests(unittest.TestCase):
+    def test_custom_playbook_rename_updates_profile_and_career_plab(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profile = os.path.join(folder, "profile", "USR-DATA")
+            career = os.path.join(folder, "career", "USR-DATA")
+            for path in (profile, career):
+                os.makedirs(os.path.dirname(path))
+                with open(path, "wb") as f:
+                    f.write(b"save")
+            tables = {
+                profile: (["PBGI", "BGID", "BOFF", "BNAM"], [
+                    {"PBGI": "8", "BGID": "53", "BOFF": "1", "BNAM": "ZONE BLOCK"},
+                    {"PBGI": "9", "BGID": "54", "BOFF": "1", "BNAM": "Modern"},
+                ]),
+                career: (["PBGI", "BGID", "BOFF", "BNAM"], [
+                    {"PBGI": "8", "BGID": "53", "BOFF": "1", "BNAM": "ZONE BLOCK"},
+                ]),
+            }
+            app = bare_app()
+            app._export_tables = lambda path, _tables: {"PLAB": (
+                list(tables[path][0]), [dict(r) for r in tables[path][1]]
+            )}
+            written = {}
+            def write(_model, path, out, _names, **_kwargs):
+                with open(os.path.join(out, "plab.csv"), newline="", encoding="utf-8") as f:
+                    written[path] = list(csv.DictReader(f))
+            with mock.patch.object(guiHC09, "backup_save", side_effect=lambda path: path + ".bak"), \
+                 mock.patch.object(guiHC09, "write_tables_in_save", side_effect=write):
+                count = app.rename_custom_playbooks_in_saves(profile, career, {(53, 1): "ZONE POWER"})
+            self.assertEqual(count, 2)
+            self.assertEqual(written[profile][0]["BNAM"], "ZONE POWER")
+            self.assertEqual(written[career][0]["BNAM"], "ZONE POWER")
+            self.assertEqual(written[profile][1]["BNAM"], "Modern")
+
+    def test_custom_playbook_rename_requires_matching_profile_row(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profile = os.path.join(folder, "profile", "USR-DATA")
+            os.makedirs(os.path.dirname(profile))
+            with open(profile, "wb") as f:
+                f.write(b"save")
+            app = bare_app()
+            app._export_tables = lambda _path, _tables: {"PLAB": (
+                ["PBGI", "BGID", "BOFF", "BNAM"], []
+            )}
+            with mock.patch.object(guiHC09, "backup_save") as backup, \
+                 mock.patch.object(guiHC09, "write_tables_in_save") as write:
+                with self.assertRaisesRegex(RuntimeError, "no longer contains"):
+                    app.rename_custom_playbooks_in_saves(profile, "", {(53, 1): "ZONE POWER"})
+                backup.assert_not_called()
+                write.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
