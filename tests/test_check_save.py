@@ -188,7 +188,9 @@ class CheckSaveReportTests(unittest.TestCase):
         self.assertIn("Readable career saves checked: 1 of 1.", lines)
 
     def test_custom_play_batch_report_handles_no_rpc3_saves(self):
-        with mock.patch.object(check_save, "find_saves", return_value=([], [], False)):
+        with (mock.patch.object(check_save.D, "candidate_rpcs3_dirs", return_value=[]),
+              mock.patch.object(check_save.D, "savedata_roots", return_value=[]),
+              mock.patch.object(check_save.D, "list_saves", return_value=[])):
             self.assertEqual(
                 check_save.custom_play_batch_report(),
                 ["No RPCS3 career saves were found in the usual RPCS3 save locations."],
