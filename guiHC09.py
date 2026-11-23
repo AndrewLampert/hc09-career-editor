@@ -9357,8 +9357,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             if getattr(app, "dirty", False):
                 messagebox.showerror("Rename in playbooks", "The open career has unsaved changes. Save it first, then try again.", parent=self)
                 return
-            if profile and os.path.isfile(profile) and os.path.abspath(profile) != os.path.abspath(db):
-                save_paths.append(("career", db))
+            save_paths.append(("career", db))
             if profile and os.path.isfile(profile) and os.path.abspath(profile) != os.path.abspath(db):
                 save_paths.append(("profile", profile))
 
