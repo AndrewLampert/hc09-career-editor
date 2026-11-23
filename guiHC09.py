@@ -5355,7 +5355,7 @@ def rename_plays_in_save(model, db_path, renames, expect=None, backup=True):
 
 
 def custom_book_play_names_from_save(model, db_path):
-    """Read the career's per-playbook custom names: {(BOKL, PLYL): PPPM}."""
+    """Read the career's per-playbook custom names: {(BOKL, PLYL): PPNN (or PPPM)}."""
     if not db_path or "-PROFILE-" in str(db_path).upper():
         return {}
     tmp = tempfile.mkdtemp(prefix="hc09_custom_book_names_read_")
@@ -5368,7 +5368,7 @@ def custom_book_play_names_from_save(model, db_path):
         for row in read_csv_dicts(path):
             try:
                 book, play = int(row["BOKL"]), int(row["PLYL"])
-                value = str(row.get("PPPM", "")).strip()
+                value = str(row.get("PPNN", row.get("PPPM", ""))).strip()
             except (KeyError, TypeError, ValueError):
                 continue
             if 1 <= book <= 10 and value:
@@ -5397,9 +5397,10 @@ def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=
             raise RuntimeError("This career save has no PGPL playbook links; the custom-book play cannot be verified.")
         with open(pppn_path, newline="", encoding="utf-8-sig") as f:
             headers = next(csv.reader(f))
-        required = {"BOKL", "PLYL", "PPPM"}
+        name_field = "PPNN" if "PPNN" in headers else "PPPM"
+        required = {"BOKL", "PLYL", name_field}
         if not required.issubset(headers) or len(headers) != len(set(headers)):
-            raise RuntimeError("The career's PPPN table is missing a required BOKL, PLYL or PPPM field; no name was written.")
+            raise RuntimeError("The career's PPPN table is missing a required BOKL, PLYL or name field; no name was written.")
         rows, changed, created = custom_book_name_rows(
             read_csv_dicts(pppn_path), read_csv_dicts(pgpl_path), book_id, plyl, name,
             pppn_fields=headers
