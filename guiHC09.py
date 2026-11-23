@@ -9079,7 +9079,7 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Rename playbooks")
         self.transient(app)
-        self.geometry("820x640")
+        self.resizable(True, True)
         self.app, self.boot, self.books = app, boot, books
         self.profile_path, self.career_path = profile_path, career_path
         self.custom_keys = set(custom_keys)
@@ -9127,6 +9127,14 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
         self.btn_set.pack(side="left")
         self.btn_undo = ttk.Button(form, text="Undo", command=self._unstage, state="disabled")
         self.btn_undo.pack(side="left", padx=(6, 0))
+        # Keep the save action in the main content area.  On Windows, the
+        # bottom-packed action row can fall below the visible client area at
+        # high display scaling even when the window is maximized.
+        actions = ttk.Frame(self)
+        actions.pack(fill="x", padx=14, pady=(4, 2))
+        self.btn_apply = ttk.Button(actions, text="Write the names to the game files", style="Accent.TButton", command=self._apply, state="disabled")
+        self.btn_apply.pack(side="left")
+        ttk.Button(actions, text="Put the names back...", command=self._restore).pack(side="left", padx=(8, 0))
         self.lbl_info = ttk.Label(self, wraplength=780, justify="left", padding=(14, 2, 14, 2))
         self.lbl_info.pack(anchor="w")
         self.lbl_result = ttk.Label(self, wraplength=780, justify="left", foreground="gray", padding=(14, 2, 14, 4))
@@ -9134,11 +9142,23 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
         btn = ttk.Frame(self)
         btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
         ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
-        self.btn_apply = ttk.Button(btn, text="Write the names to the game files", style="Accent.TButton", command=self._apply, state="disabled")
-        self.btn_apply.pack(side="right", padx=(0, 8))
-        ttk.Button(btn, text="Put the names back...", command=self._restore).pack(side="left")
+        self.bind("<Control-s>", lambda e: self._apply())
+        self.bind("<Control-S>", lambda e: self._apply())
         self.bind("<Escape>", lambda e: self.destroy())
         self._fill()
+
+        # Start large enough to show the controls without requiring the user
+        # to resize the dialog.  Cap the initial size to the available screen
+        # area (with margins), then center it.  Keep it resizable afterward.
+        self.update_idletasks()
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        width = min(max(980, self.winfo_reqwidth()), max(600, screen_w - 80))
+        height = min(max(760, self.winfo_reqheight()), max(480, screen_h - 100))
+        self.minsize(min(760, width), min(520, height))
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     @staticmethod
     def _iid(book):
