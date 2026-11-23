@@ -9079,7 +9079,7 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             self.configure(background=p["bg"])
         self.title("Rename playbooks")
         self.transient(app)
-        self.geometry("820x640")
+        self.resizable(True, True)
         self.app, self.boot, self.books = app, boot, books
         self.profile_path, self.career_path = profile_path, career_path
         self.custom_keys = set(custom_keys)
@@ -9146,6 +9146,19 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
         self.bind("<Control-S>", lambda e: self._apply())
         self.bind("<Escape>", lambda e: self.destroy())
         self._fill()
+
+        # Start large enough to show the controls without requiring the user
+        # to resize the dialog.  Cap the initial size to the available screen
+        # area (with margins), then center it.  Keep it resizable afterward.
+        self.update_idletasks()
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        width = min(max(980, self.winfo_reqwidth()), max(600, screen_w - 80))
+        height = min(max(760, self.winfo_reqheight()), max(480, screen_h - 100))
+        self.minsize(min(760, width), min(520, height))
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     @staticmethod
     def _iid(book):
