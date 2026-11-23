@@ -87,7 +87,9 @@ async function main() {
     const scanDir = path.join(tempRoot, 'scan');
     const editedDir = path.join(tempRoot, 'edited');
     const copies = originals.map((file, i) => {
-        const dest = path.join(tempRoot, i + '_' + path.basename(file));
+        const archiveDir = path.join(tempRoot, String(i));
+        fs.mkdirSync(archiveDir);
+        const dest = path.join(archiveDir, path.basename(file));
         fs.copyFileSync(file, dest);
         return dest;
     });
