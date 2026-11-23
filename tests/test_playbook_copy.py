@@ -237,5 +237,56 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
         ])
 
 
+    def test_removing_one_play_preserves_shared_set_and_all_formation_links(self):
+        data = self.make_data()
+        # The same ordinary set is linked to two formations and contains two plays.
+        data.tables["PGFM"].append({"BOKL": "1", "PBFM": "200", "SRFM": "200"})
+        data.tables["PGSL"].append({"BOKL": "1", "SETL": "50", "PBFM": "200"})
+        data.tables["PGPL"].append({
+            "BOKL": "1", "SETL": "50", "PLYL": "501", "PLTP": "1",
+        })
+        data._index_structure()
+
+        first = data.plan_remove("1", [("50", "500")])
+        self.assertIsNone(first["error"])
+        self.assertEqual(first["sets"], [])
+        self.assertEqual(first["rows"]["PGSL"], [])
+        self.assertEqual(first["rows"]["PGSS"], [])
+        self.assertEqual(data.apply_removal(first), 1)
+
+        self.assertEqual(
+            [r["PLYL"] for r in data.tables["PGPL"] if r["BOKL"] == "1" and r["SETL"] == "50"],
+            ["501"],
+        )
+        self.assertEqual(
+            {(r["SETL"], r["PBFM"]) for r in data.tables["PGSL"] if r["BOKL"] == "1"},
+            {("50", "201"), ("50", "200"), ("471", "100")},
+        )
+        self.assertIn({"BOKL": "1", "SETL": "50"}, data.tables["PGSS"])
+
+        # Removing the final play removes both formation links, but only the
+        # formations that have no other sets.
+        final = data.plan_remove("1", [("50", "501")])
+        self.assertIsNone(final["error"])
+        self.assertEqual(set(final["rows"]["PGSL"]), {
+            ("1", "50", "201"), ("1", "50", "200"),
+        })
+        self.assertEqual(set(final["rows"]["PGFM"]), {
+            ("1", "201"), ("1", "200"),
+        })
+        self.assertEqual(data.apply_removal(final), 1)
+        self.assertFalse(any(r["BOKL"] == "1" and r["SETL"] == "50" for r in data.tables["PGSL"]))
+        self.assertFalse(any(r["BOKL"] == "1" and r["SETL"] == "50" for r in data.tables["PGSS"]))
+        self.assertFalse(any(r["BOKL"] == "1" and r["PBFM"] in {"201", "200"} for r in data.tables["PGFM"]))
+
+    def test_special_teams_play_is_not_removed(self):
+        data = self.make_data()
+        plan = data.plan_remove("1", [("471", "6709")])
+
+        self.assertIn(("471", "6709"), plan["special"])
+        self.assertIsNotNone(plan["error"])
+        self.assertEqual(plan["rows"]["PGPL"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
