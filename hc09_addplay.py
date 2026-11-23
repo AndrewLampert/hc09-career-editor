@@ -608,11 +608,22 @@ def playbook_link_issues(tables):
     """
     pgpl = tables.get("PGPL", [])
     pgsl = tables.get("PGSL", [])
+    pgss = tables.get("PGSS", [])
     pgfm = tables.get("PGFM", [])
     set_links = {(int(r["BOKL"]), int(r["SETL"])) for r in pgsl}
+    indexed_sets = {(int(r["BOKL"]), int(r["SETL"])) for r in pgss}
     formation_links = {(int(r["BOKL"]), int(r["PBFM"])) for r in pgfm}
     issues = []
     seen_missing = set()
+    seen_unindexed = set()
+    for row in pgpl + pgsl:
+        pair = (int(row["BOKL"]), int(row["SETL"]))
+        if pair not in indexed_sets and pair not in seen_unindexed:
+            issues.append({
+                "kind": "set_not_in_playbook",
+                "book": pair[0], "set": pair[1],
+            })
+            seen_unindexed.add(pair)
     for index, row in enumerate(pgpl):
         pair = (int(row["BOKL"]), int(row["SETL"]))
         if pair not in set_links and pair not in seen_missing:
