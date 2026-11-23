@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import guiHC09
 
@@ -46,6 +47,17 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
             ],
         }
         return guiHC09.PlaybookData(game, save, [])
+
+    def test_applied_copy_records_exact_playbook_link_rows(self):
+        data = self.make_data()
+        data.formation_sets[("1", "100")] = ["471"]
+        plan = data.plan_copy("1", "2", "formation", "100")
+
+        self.assertIsNone(plan["error"])
+        with mock.patch.object(guiHC09.CRASH, "log_playbook_rows") as audit:
+            data.apply_plan(plan)
+
+        audit.assert_called_once_with("copy applied", plan["rows"])
 
     def test_copy_entire_kickoff_formation_preserves_special_teams_link(self):
         data = self.make_data()
