@@ -825,7 +825,7 @@ def rename_rows(rows, renames, expect=None):
     return out, renamed, skipped
 
 
-def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name):
+def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fields=None):
     """Set a custom playbook's own PPPN name for one linked play.
 
     Custom playbook ids 1..10 belong to the save namespace, not the shipped
@@ -852,7 +852,12 @@ def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name):
             return out, False, False
         out[i]["PPPM"] = name
         return out, True, False
-    out.append({"BOKL": str(book_id), "PLYL": str(play_id), "PPPM": name})
+    fields = list(pppn_fields or (list(out[0]) if out else ("BOKL", "PLYL", "PPPM")))
+    # The bridge zeroes a new record before importing. Blank values leave
+    # numeric extra fields at zero and clear any optional text fields.
+    new_row = {field: "" for field in fields}
+    new_row.update({"BOKL": str(book_id), "PLYL": str(play_id), "PPPM": name})
+    out.append(new_row)
     return out, True, True
 
 
