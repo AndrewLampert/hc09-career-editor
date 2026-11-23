@@ -9083,6 +9083,7 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
         self.app, self.boot, self.books = app, boot, books
         self.profile_path, self.career_path = profile_path, career_path
         self.custom_keys = set(custom_keys)
+        self.original_books = [dict(b) for b in books]
         self.staged = {}                                  # (BGID, BOFF) -> the new name waiting to be written
         ttk.Label(self, text="Rename the game's playbooks", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=780, justify="left", padding=(14, 0, 14, 6),
