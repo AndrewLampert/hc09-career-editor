@@ -6754,7 +6754,7 @@ class PlayDesignerDialog(tk.Toplevel):
     game's assignments (including the option reads the in-game editor does not offer), and make a custom play of it in copies of your profile and career saves.
     Nothing is written to the game's files or to your saves here."""
 
-    def __init__(self, app, lib, custom_books=None, custom_book_plays=None, profile_path=""):
+    def __init__(self, app, lib, custom_books=None, custom_book_plays=None, profile_path="", custom_book_names=None):
         super().__init__(app)
         p = getattr(app, "_ui_palette", None)
         if p:
@@ -6779,7 +6779,8 @@ class PlayDesignerDialog(tk.Toplevel):
         self.detail = None
         self.my_profile = profile_path or None  # profile whose custom plays are mounted in the library
         self.custom_books = dict(custom_books or {})  # {profile PBGI 1-10: name}
-        self.custom_book_plays = {int(k): set(v) for k, v in (custom_book_plays or {}).items()}  # {PBGI: mounted PLYL ids from the open career}
+        self.custom_book_plays = {int(k): set(v) for k, v in (custom_book_plays or {}).items()}  # {PBGI: mounted PLYL ids linked in profile or career}
+        self.custom_book_names = {(int(b), int(p)): str(n) for (b, p), n in (custom_book_names or {}).items()}  # {(PBGI, original PLYL): career PPPN name override}
         self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
         self.books = self._read_books()
 
@@ -7119,7 +7120,11 @@ class PlayDesignerDialog(tk.Toplevel):
                 continue
             if self.opt_var.get() and not r["option"]:
                 continue
-            shown_name = self.lib.name_in_book(r["plyl"], want_book) if want_book is not None else r["name"]
+            if custom_book:
+                original_plyl = original_play_id_for_mounted(self.lib.custom, r["plyl"])
+                shown_name = self.custom_book_names.get((selected_book[1], original_plyl), r["name"])
+            else:
+                shown_name = self.lib.name_in_book(r["plyl"], want_book) if want_book is not None else r["name"]
             if text and text not in r["name"].lower() and text not in shown_name.lower() and text not in r["set"].lower() and text not in r["form"].lower():
                 continue
             self.tree.insert("", tk.END, iid=str(r["plyl"]), values=(shown_name, r["form"], r["set"], "yes" if r["option"] else ""))
@@ -15410,32 +15415,44 @@ class App(tk.Tk):
             lib = self.load_play_library(archives)
             lib._ui_art = self.load_play_art(boot)
             profile = self.default_save_targets().get("profile") or ""
-            custom_books, custom_book_plays = {}, {}
+            custom_books, custom_book_plays, custom_book_names = {}, {}, {}
             if profile and os.path.isfile(profile):
                 try:
                     custom_books = self.profile_custom_books(profile)
                     self.load_my_plays(lib, profile)      # mount custom plays so a custom book can show both stock and user-made plays
+                    # A playbook link may be present in the profile before it has been copied to
+                    # the career. Include both saves so the designer and Rename in Playbooks
+                    # agree about which custom books contain a play.
+                    profile_pgpl = self._export_tables(profile, ["PGPL"])["PGPL"][1]
                     career = self.model.db_path or ""
-                    if career and os.path.isfile(career):
-                        pgpl = self._export_tables(career, ["PGPL"])["PGPL"][1]
-                        for row in pgpl:
-                            try:
-                                bokl, setl, plyl = int(row["BOKL"]), int(row["SETL"]), int(row["PLYL"])
-                            except (KeyError, TypeError, ValueError):
-                                continue
-                            if 1 <= bokl <= 10:
-                                mounted = mounted_play_id_for_link(lib.custom, setl, plyl)
-                                custom_book_plays.setdefault(bokl, set()).add(mounted)
+                    career_tables = self._export_tables(career, ["PGPL", "PPPN"]) if career and os.path.isfile(career) else {}
+                    linked_rows = list(profile_pgpl) + list(career_tables.get("PGPL", ([], []))[1])
+                    for row in linked_rows:
+                        try:
+                            bokl, setl, plyl = int(row["BOKL"]), int(row["SETL"]), int(row["PLYL"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if 1 <= bokl <= 10:
+                            mounted = mounted_play_id_for_link(lib.custom, setl, plyl)
+                            custom_book_plays.setdefault(bokl, set()).add(mounted)
+                    for row in career_tables.get("PPPN", ([], []))[1]:
+                        try:
+                            key = (int(row["BOKL"]), int(row["PLYL"]))
+                            value = str(row.get("PPNN", row.get("PPPM", ""))).strip()
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if 1 <= key[0] <= 10 and value:
+                            custom_book_names[key] = value
                 except Exception:
-                    # The stock Play Creator remains usable if the profile/career custom-book data cannot be read.
-                    custom_books, custom_book_plays = {}, {}
-            return lib, profile, custom_books, custom_book_plays
+                    # Keep the stock Play Creator usable if custom-save data cannot be read.
+                    custom_books, custom_book_plays, custom_book_names = {}, {}, {}
+            return lib, profile, custom_books, custom_book_plays, custom_book_names
 
         def done(result):
-            lib, profile, custom_books, custom_book_plays = result
+            lib, profile, custom_books, custom_book_plays, custom_book_names = result
             self.ui_prefs["boot_ast_path"] = boot
             save_ui_prefs(self.ui_prefs)
-            PlayDesignerDialog(self, lib, custom_books, custom_book_plays, profile)
+            PlayDesignerDialog(self, lib, custom_books, custom_book_plays, profile, custom_book_names)
 
         self.run_in_thread_with_busy("Reading the game's plays...", work, done, error_title="Play creator")
 
