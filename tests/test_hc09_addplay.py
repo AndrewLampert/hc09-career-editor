@@ -150,16 +150,14 @@ class PlaybookLinkIntegrityTests(unittest.TestCase):
         self.assertEqual([x["kind"] for x in issues], ["formation_not_in_playbook"])
         self.assertEqual((issues[0]["book"], issues[0]["formation"]), (7, 26))
 
-    def test_playbook_set_missing_from_pgss_is_reported_once(self):
+    def test_playbook_set_without_quick_sub_package_need_not_be_in_pgss(self):
         tables = {
             "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
             "PGSS": [],
             "PGSL": [{"BOKL": "7", "SETL": "471", "PBFM": "26"}],
             "PGFM": [{"BOKL": "7", "PBFM": "26"}],
         }
-        issues = hc09_addplay.playbook_link_issues(tables)
-        self.assertEqual([x["kind"] for x in issues], ["set_not_in_playbook"])
-        self.assertEqual((issues[0]["book"], issues[0]["set"]), (7, 471))
+        self.assertEqual(hc09_addplay.playbook_link_issues(tables), [])
 
     def test_one_set_can_legitimately_link_to_multiple_formations(self):
         tables = {
