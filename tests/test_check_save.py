@@ -148,8 +148,8 @@ class CheckSaveReportTests(unittest.TestCase):
                 with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
                     f.write(rows)
             completed = SimpleNamespace(returncode=0, stdout="", stderr="")
-            with mock.patch.object(check_save.tempfile, "TemporaryDirectory") as tempdir, \\
-                 mock.patch.object(check_save.subprocess, "run", return_value=completed):
+            with (mock.patch.object(check_save.tempfile, "TemporaryDirectory") as tempdir,
+                  mock.patch.object(check_save.subprocess, "run", return_value=completed)):
                 tempdir.return_value.__enter__.return_value = folder
                 tempdir.return_value.__exit__.return_value = False
                 lines = check_save.playbook_link_diagnostics("career.usr",
