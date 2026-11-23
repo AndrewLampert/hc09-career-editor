@@ -120,7 +120,7 @@ def playbook_link_diagnostics(path, counts, node=None):
                 tables[name] = list(csv.DictReader(f))
     issues = AP.playbook_link_issues(tables)
     if not issues:
-        return ["Playbook link check: no missing PGPL-to-PGSL or PGSL-to-PGFM links found."]
+        return ["Playbook link check: no missing PGPL-to-PGSS, PGPL-to-PGSL or PGSL-to-PGFM links found."]
     lines = [f"Playbook link check: {len(issues)} broken reference(s) found (read-only; nothing was changed)."]
     for issue in issues[:20]:
         if issue["kind"] == "play_without_formation_link":
