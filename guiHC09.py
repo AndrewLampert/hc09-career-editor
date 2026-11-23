@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, mounted_play_id_for_link, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, mounted_play_id_for_link, original_play_id_for_mounted, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -7526,7 +7526,7 @@ class PlayDesignerDialog(tk.Toplevel):
         AddPlayDialog(self.app, self)
 
     def _open_rename_in_books(self):
-        if self.detail is None or self.is_mine() or GF is None:
+        if self.detail is None or GF is None:
             return
         RenameInBooksDialog(self.app, self)
 
@@ -9427,8 +9427,9 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             for bokl in custom_targets:
                 for label, path in save_paths:
                     try:
+                        career_plyl = original_play_id_for_mounted(lib.custom, plyl)
                         changed, created = rename_custom_book_play_in_save(
-                            app.model, path, bokl, plyl, name
+                            app.model, path, bokl, career_plyl, name
                         )
                         out["custom"].append((label, path, bokl, changed, created, None))
                     except Exception as e:
