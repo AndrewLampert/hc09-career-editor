@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -4183,7 +4183,7 @@ PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
 PROFILE_RETRY_SECONDS = 120              # a profile save that could not be read is not tried again for this long (unless the file changes)
 PLAYBOOK_PLAYNAMES_FILE = "pppn.csv"     # the names each playbook gives its plays (PPPN); optional: without it the master names are shown
-PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM"]
+PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "PPPN", "SETL", "PLAB", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM"]
 PLAYBOOK_LINK_TABLES = ("PGPL", "PGSL", "PGSS", "PGFM")        # what puts plays and formations into a career's playbooks: without them the Playbooks tab has nothing to list
 
 
@@ -5352,6 +5352,50 @@ def rename_plays_in_save(model, db_path, renames, expect=None, backup=True):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+
+
+def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=True):
+    """Give one linked play a custom-playbook-only name in a profile/career save.
+
+    PPPN in qkl_boot.ast is the shipped-book namespace. Custom books use BOKL
+    1..10 in the save namespace, so these rows must be written to the save's
+    PPPN table, never to the game's qkl_boot.ast entry. New rows use the
+    bridge's explicitly allowed PPPN spare capacity. Returns (changed, created).
+    """
+    tmp = tempfile.mkdtemp(prefix="hc09_custom_book_name_")
+    try:
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PPPN,PGPL"])
+        pppn_path = os.path.join(tmp, "pppn.csv")
+        pgpl_path = os.path.join(tmp, "pgpl.csv")
+        if not os.path.isfile(pppn_path):
+            raise RuntimeError("This save has no PPPN table; custom-book play names cannot be written here.")
+        if not os.path.isfile(pgpl_path):
+            raise RuntimeError("This save has no PGPL playbook links; the custom-book play cannot be verified.")
+        with open(pppn_path, newline="", encoding="utf-8-sig") as f:
+            headers = next(csv.reader(f))
+        if set(headers) != {"BOKL", "PLYL", "PPPM"}:
+            raise RuntimeError("The save's PPPN table has an unexpected layout; no name was written.")
+        rows, changed, created = custom_book_name_rows(
+            read_csv_dicts(pppn_path), read_csv_dicts(pgpl_path), book_id, plyl, name
+        )
+        if not changed:
+            return False, False
+        out = os.path.join(tmp, "in")
+        os.makedirs(out)
+        with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, lineterminator="\\r\\n")
+            w.writerow(headers)
+            for row in rows:
+                w.writerow([row[h] for h in headers])
+        write_tables_in_save(
+            model, db_path, out, ["PPPN"],
+            allow_append=["PPPN"] if created else (),
+            backup=backup, wrote="the custom playbook's play name",
+            after="the custom playbook's play name",
+        )
+        return True, created
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 def _bridge_config(config):
     """The JSON file the bridge's entry-patch reads its targets from: a temporary file of its own name (two calls never share one), which the caller removes."""
