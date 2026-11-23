@@ -116,7 +116,7 @@ class CheckSaveReportTests(unittest.TestCase):
                 tempdir.return_value.__exit__.return_value = False
                 lines = check_save.playbook_link_diagnostics("career.usr",
                     {"PGPL": 1, "PGSL": 1, "PGSS": 1, "PGFM": 1}, "node")
-            self.assertIn("no missing PGPL-to-PGSL or PGSL-to-PGFM links", lines[0])
+            self.assertIn("no orphan PGSL-to-PGFM formation links", lines[0])
 
     def test_playbook_link_diagnostics_does_not_require_pgss_row(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -135,28 +135,27 @@ class CheckSaveReportTests(unittest.TestCase):
                 tempdir.return_value.__exit__.return_value = False
                 lines = check_save.playbook_link_diagnostics(
                     "career.usr", {"PGPL": 1, "PGSL": 1, "PGSS": 0, "PGFM": 1}, "node")
-            self.assertIn("no missing PGPL-to-PGSL or PGSL-to-PGFM links", lines[0])
+            self.assertIn("no orphan PGSL-to-PGFM formation links", lines[0])
 
-    def test_playbook_link_diagnostics_reports_missing_link(self):
+    def test_playbook_link_diagnostics_reports_orphan_formation(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, rows in {
-                "pgpl": "BOKL,SETL,PLYL\n7,471,6709\n",
-                "pgss": "BOKL,SETL\n7,471\n",
-                "pgsl": "BOKL,SETL,PBFM\n",
-                "pgfm": "BOKL,PBFM\n7,26\n",
+                "pgpl": "BOKL,SETL,PLYL\\n7,471,6709\\n",
+                "pgss": "BOKL,SETL\\n7,471\\n",
+                "pgsl": "BOKL,SETL,PBFM\\n7,471,27\\n",
+                "pgfm": "BOKL,PBFM\\n7,26\\n",
             }.items():
                 with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
                     f.write(rows)
             completed = SimpleNamespace(returncode=0, stdout="", stderr="")
-            with mock.patch.object(check_save.tempfile, "TemporaryDirectory") as tempdir, \
+            with mock.patch.object(check_save.tempfile, "TemporaryDirectory") as tempdir, \\
                  mock.patch.object(check_save.subprocess, "run", return_value=completed):
                 tempdir.return_value.__enter__.return_value = folder
                 tempdir.return_value.__exit__.return_value = False
                 lines = check_save.playbook_link_diagnostics("career.usr",
                     {"PGPL": 1, "PGSL": 1, "PGSS": 1, "PGFM": 1}, "node")
             self.assertIn("1 broken reference(s) found", lines[0])
-            self.assertIn("Book 7, set 471", lines[1])
-
+            self.assertIn("Book 7, formation 27", lines[1])
 
     def test_custom_play_diagnostics_reports_clean_profile(self):
         with tempfile.TemporaryDirectory() as folder:
