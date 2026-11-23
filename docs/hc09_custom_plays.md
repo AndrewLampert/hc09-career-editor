@@ -43,7 +43,7 @@ The 14 custom plays in the example are each in a set named `Created`, which sits
 
 The Playbooks tab finds the profile next to the career (`<TITLE>-PROFILE-*`, choosing the one whose custom plays match the career's links), reads `PLAB`, `SETL` and `PBPL` from it, **read-only**, and uses those names only for ids the game does not already name. **Profile save...** points it at a profile by hand. Nothing is written to the profile.
 
-Add plays still refuses to copy custom sets, plays and formations: a reporter found that copying them broke flipping and put punts in the Gun.
+Add plays still refuses to copy custom sets, plays and formations: a reporter found that copying them broke flipping and put punts in the Gun. The copy window also keeps stock special-teams sets under special-teams formations: it refuses to place a kickoff, punt or return set under an ordinary formation (or an ordinary set under a special-teams formation).
 
 ## Idea: making custom plays outside the game
 
