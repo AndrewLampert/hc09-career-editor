@@ -47,6 +47,32 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
         }
         return guiHC09.PlaybookData(game, save, [])
 
+    def test_copy_entire_kickoff_formation_preserves_special_teams_link(self):
+        data = self.make_data()
+        data.formation_sets[("1", "100")] = ["471"]
+        plan = data.plan_copy("1", "2", "formation", "100")
+
+        self.assertIsNone(plan["error"])
+        self.assertEqual(plan["rows"]["PGFM"], [
+            {"BOKL": "2", "PBFM": "100", "SRFM": "100"}
+        ])
+        self.assertEqual(plan["rows"]["PGSL"], [
+            {"BOKL": "2", "SETL": "471", "PBFM": "100"}
+        ])
+        self.assertEqual(plan["rows"]["PGPL"], [
+            {"BOKL": "2", "SETL": "471", "PLYL": "6709", "PLTP": "21"}
+        ])
+
+    def test_entire_formation_copy_rejects_wrong_category_override(self):
+        data = self.make_data()
+        data.formation_sets[("1", "100")] = ["471"]
+        plan = data.plan_copy("1", "2", "formation", "100", into_formation="200")
+
+        self.assertIn("special-teams set", plan["error"])
+        self.assertIn("Split Backs", plan["error"])
+        self.assertEqual(plan["rows"]["PGSL"], [])
+        self.assertEqual(plan["rows"]["PGPL"], [])
+
     def test_stock_set_category_outlier_is_reported_read_only(self):
         data = self.make_data()
         for book in ("3", "4", "5"):
