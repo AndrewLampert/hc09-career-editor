@@ -164,6 +164,28 @@ def previous_report():
     return _state.get("previous")
 
 
+def log_playbook_rows(action, tables):
+    """Log only the playbook link rows changed by a validated editor operation (IDs only, never player data)."""
+    columns = {
+        "PGFM": ("BOKL", "PBFM", "SRFM"),
+        "PGSS": ("BOKL", "SETL"),
+        "PGSL": ("BOKL", "SETL", "PBFM"),
+        "PGPL": ("BOKL", "SETL", "PLYL", "PLTP"),
+    }
+    total = 0
+    limit = 500
+    for table in ("PGFM", "PGSS", "PGSL", "PGPL"):
+        keys = columns[table]
+        for row in (tables or {}).get(table, []):
+            if total >= limit:
+                log_write(f"playbook {action}: audit row limit {limit} reached; remaining rows omitted")
+                return
+            values = ([row.get(key, "") for key in keys] if isinstance(row, dict) else list(row))
+            detail = " ".join(f"{key}={str(value)[:32]}" for key, value in zip(keys, values))
+            log_write(f"playbook {action} {table} {detail}")
+            total += 1
+
+
 def log_write(text):
     """Something the editor wrote to the game files or to a save (and how it went): kept in memory and, once install() has run, in the write log file next to the reports."""
     text = " ".join(str(text).split())                       # one line per record, whatever the text holds (an error message with line breaks)
