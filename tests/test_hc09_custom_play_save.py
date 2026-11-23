@@ -336,6 +336,70 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
                 ["3", "10", "Custom name", ""],
             ])
 
+    def test_custom_book_name_save_uses_career_ppnn_field_for_new_row(self):
+        with tempfile.TemporaryDirectory() as folder:
+            captured = {}
+
+            def bridge(args):
+                out = args[args.index("--out") + 1]
+                with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["PPNN", "BOKL", "PLYL"])
+                with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
+                    w.writerow(["3", "5", "10", "4"])
+                return {}
+
+            def write(_model, _db, out, tables, **kwargs):
+                captured["kwargs"] = kwargs
+                with open(os.path.join(out, "pppn.csv"), newline="", encoding="utf-8") as f:
+                    captured["rows"] = list(csv.reader(f))
+
+            with mock.patch.object(guiHC09, "write_tables_in_save", side_effect=write):
+                changed, created = guiHC09.rename_custom_book_play_in_save(
+                    FakeBridgeModel(bridge), os.path.join(folder, "career.usr"), 3, 10, "Career name"
+                )
+
+            self.assertTrue(changed)
+            self.assertTrue(created)
+            self.assertEqual(captured["kwargs"]["allow_append"], ["PPPN"])
+            self.assertEqual(captured["rows"], [
+                ["PPNN", "BOKL", "PLYL"],
+                ["Career name", "3", "10"],
+            ])
+
+    def test_custom_book_name_save_updates_existing_ppnn_row(self):
+        with tempfile.TemporaryDirectory() as folder:
+            captured = {}
+
+            def bridge(args):
+                out = args[args.index("--out") + 1]
+                with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["PPNN", "BOKL", "PLYL"])
+                    w.writerow(["Old career name", "3", "10"])
+                with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
+                    w.writerow(["3", "5", "10", "4"])
+                return {}
+
+            def write(_model, _db, out, tables, **kwargs):
+                captured["kwargs"] = kwargs
+                with open(os.path.join(out, "pppn.csv"), newline="", encoding="utf-8") as f:
+                    captured["rows"] = list(csv.reader(f))
+
+            with mock.patch.object(guiHC09, "write_tables_in_save", side_effect=write):
+                changed, created = guiHC09.rename_custom_book_play_in_save(
+                    FakeBridgeModel(bridge), os.path.join(folder, "career.usr"), 3, 10, "New career name"
+                )
+
+            self.assertTrue(changed)
+            self.assertFalse(created)
+            self.assertEqual(captured["kwargs"]["allow_append"], ())
+            self.assertEqual(captured["rows"][1], ["New career name", "3", "10"])
+
     def test_custom_book_name_save_updates_existing_row_without_appending(self):
         with tempfile.TemporaryDirectory() as folder:
             captured = {}
