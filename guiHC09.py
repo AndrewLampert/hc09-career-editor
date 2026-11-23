@@ -4183,7 +4183,7 @@ PLAYBOOK_CACHE_DIR = os.path.join(GAMEDATA_CACHE, "playbooks")
 PLAYBOOK_NAME_FILES = ("plab.csv", "pbfm.csv", "setl.csv", "pbpl.csv")
 PROFILE_RETRY_SECONDS = 120              # a profile save that could not be read is not tried again for this long (unless the file changes)
 PLAYBOOK_PLAYNAMES_FILE = "pppn.csv"     # the names each playbook gives its plays (PPPN); optional: without it the master names are shown
-PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "PPPN", "SETL", "PLAB", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM"]
+PLAYBOOK_SAVE_TABLES = ["PGPL", "PGFM", "PGSS", "PGSL", "PBPL", "SETL", "PLAB", "SETP", "SETG", "SGFF", "PLYS", "PLPD", "PLRD", "PLCM"]
 PLAYBOOK_LINK_TABLES = ("PGPL", "PGSL", "PGSS", "PGFM")        # what puts plays and formations into a career's playbooks: without them the Playbooks tab has nothing to list
 
 
@@ -9321,7 +9321,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         if self._custom_books:
             self.lbl_result.configure(
                 text="Custom books are listed separately from shipped books. Their names are written to PPPN in the profile/career save, not qkl_boot.ast. "
-                     "This save-level route is experimental and still needs an in-game check. A .bak copy is kept beside each save before it is changed."
+                     "This save-level route is experimental and still needs an in-game check. A .bak copy is kept beside each save before it is changed; the Put the game files back button below does not restore save changes."
             )
         elif available - set(self._books):
             self.lbl_result.configure(
@@ -9358,8 +9358,9 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 messagebox.showerror("Rename in playbooks", "The open career has unsaved changes. Save it first, then try again.", parent=self)
                 return
             if profile and os.path.isfile(profile) and os.path.abspath(profile) != os.path.abspath(db):
+                save_paths.append(("career", db))
+            if profile and os.path.isfile(profile) and os.path.abspath(profile) != os.path.abspath(db):
                 save_paths.append(("profile", profile))
-            save_paths.append(("career", db))
 
         archives = None
         if everywhere or picked_stock:
