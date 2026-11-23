@@ -150,6 +150,26 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
             {"BOKL": "2", "SETL": "471", "PBFM": "101"}
         ])
 
+    def test_mixed_stock_set_links_are_reported_even_without_consensus(self):
+        data = self.make_data()
+        data.tables["PGSL"].append({"BOKL": "1", "SETL": "471", "PBFM": "200"})
+        data._index_structure()
+
+        warnings = data.stock_set_category_warnings()
+
+        mixed = [w for w in warnings if w.get("kind") == "mixed-links"]
+        self.assertEqual(len(mixed), 1)
+        self.assertEqual(mixed[0]["book"], "1")
+        self.assertEqual(mixed[0]["set"], "471")
+        self.assertEqual(mixed[0]["actual"], "mixed")
+        self.assertEqual(set(mixed[0]["formations"]), {"Kickoff", "Split Backs"})
+        # Diagnostics are read-only.
+        self.assertEqual(
+            [r for r in data.tables["PGSL"] if r["BOKL"] == "1" and r["SETL"] == "471"],
+            [{"BOKL": "1", "SETL": "471", "PBFM": "100"},
+             {"BOKL": "1", "SETL": "471", "PBFM": "200"}],
+        )
+
     def test_stock_set_category_outlier_is_reported_read_only(self):
         data = self.make_data()
         for book in ("3", "4", "5"):
