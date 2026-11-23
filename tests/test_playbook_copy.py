@@ -47,6 +47,25 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
         }
         return guiHC09.PlaybookData(game, save, [])
 
+    def test_stock_set_category_outlier_is_reported_read_only(self):
+        data = self.make_data()
+        for book in ("3", "4", "5"):
+            data.book_side[book] = "Offense"
+            data.book_names[book] = [f"Book {book}"]
+            data.tables["PGFM"].append({"BOKL": book, "PBFM": "100", "SRFM": "100"})
+            data.tables["PGSL"].append({"BOKL": book, "SETL": "471", "PBFM": "100"})
+        data.tables["PGSL"].append({"BOKL": "2", "SETL": "471", "PBFM": "200"})
+        data._index_structure()
+
+        warnings = data.stock_set_category_warnings()
+
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["book"], "2")
+        self.assertEqual(warnings[0]["set"], "471")
+        self.assertEqual(warnings[0]["expected"], "special-teams")
+        self.assertEqual(warnings[0]["actual"], "ordinary")
+        self.assertEqual(warnings[0]["formations"], ["Split Backs"])
+
     def test_special_teams_play_cannot_be_put_under_split_backs(self):
         data = self.make_data()
         plan = data.plan_copy("1", "2", "play", ("471", "6709"), into_formation="200")
