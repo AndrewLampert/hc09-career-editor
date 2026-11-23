@@ -106,6 +106,18 @@ class PlayDataHelperTests(unittest.TestCase):
         self.assertEqual(rows[1]["name"], "Other copy")
 
 
+    def test_mounted_play_id_for_link_uses_set_and_play_ids_to_avoid_stock_collisions(self):
+        custom = {
+            100028: {"setl": 66, "plyl": 28, "name": "Custom A"},
+            100029: {"setl": 67, "plyl": 28, "name": "Custom B"},
+        }
+
+        self.assertEqual(hc09_plays.mounted_play_id_for_link(custom, 66, 28), 100028)
+        self.assertEqual(hc09_plays.mounted_play_id_for_link(custom, 67, 28), 100029)
+        # A stock play may reuse PLYL 28; its different SETL must keep its stock id.
+        self.assertEqual(hc09_plays.mounted_play_id_for_link(custom, 99, 28), 28)
+
+
     def test_custom_book_name_rows_adds_save_scoped_override_only_for_linked_play(self):
         pppn = [{"BOKL": "252", "PLYL": "10", "PPPM": "Stock name"}]
         pgpl = [{"BOKL": "3", "PLYL": "10"}, {"BOKL": "252", "PLYL": "10"}]
