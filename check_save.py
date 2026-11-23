@@ -363,6 +363,47 @@ def report(path, node=None):
     return lines, [f"All {len(counts)} tables of {path}:"] + full
 
 
+
+def custom_play_batch_report(node=None):
+    """Check every RPCS3 career save discovered in the standard emulator locations."""
+    saves, _searched, _timed_out = find_saves(search=False)
+    rpc_saves = [save for save in saves if save.get("platform") == "RPCS3" and save.get("kind") == "career"]
+    if not rpc_saves:
+        return ["No RPCS3 career saves were found in the usual RPCS3 save locations."]
+    lines = [f"RPCS3 custom-play scan: {len(rpc_saves)} career save(s) found.", ""]
+    checked = 0
+    for save in rpc_saves:
+        path = save["path"]
+        name = save.get("name") or os.path.basename(os.path.dirname(path))
+        try:
+            kind, table_count = D.classify_save(path)
+            if kind != "career" or table_count is None:
+                lines.append(f"{name}: not recognized as a readable career save; skipped.")
+                continue
+            counts = table_counts(path, node)
+            present = [table for table in CUSTOM_PLAY_TABLES if table in counts]
+            if not present:
+                lines.append(f"{name}: {table_count} tables; custom-play tables not present.")
+            else:
+                values = ", ".join(f"{table}={counts[table]:,}" for table in present)
+                plays = counts.get("PBPL", 0)
+                sets = counts.get("SETL", 0)
+                lines.append(f"{name}: {table_count} tables; PBPL={plays:,} custom plays, SETL={sets:,} custom sets.")
+                if plays:
+                    try:
+                        details = custom_play_diagnostics(path, counts, node)
+                        lines.extend("  " + item for item in details)
+                    except CheckError as error:
+                        lines.append(f"  Custom-play validation skipped: {error}")
+                elif any(counts.get(table, 0) for table in CUSTOM_PLAY_TABLES if table != "PBPL"):
+                    lines.append("  Note: supporting custom-play tables contain rows despite PBPL being empty; inspect the full table counts.")
+            checked += 1
+        except CheckError as error:
+            lines.append(f"{name}: CHECK FAILED — {error}")
+    lines += ["", f"Readable career saves checked: {checked} of {len(rpc_saves)}."]
+    return lines
+
+
 def main(argv):
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -371,6 +412,16 @@ def main(argv):
             pass
     args = [a for a in argv[1:] if not a.startswith("--")]
     write_file = "--no-file" not in argv
+    if "--custom-play-batch" in argv:
+        lines = custom_play_batch_report()
+        text = "\\n".join(lines).rstrip() + "\\n"
+        print(text)
+        if write_file:
+            target = os.path.join(HERE, "custom_play_batch_report.txt")
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(text)
+            print(f"Batch report saved to {target}")
+        return 0 if any(line.startswith("Readable career saves checked:") for line in lines) else 1
     if not args:
         picked = choose_save()
         args = [picked] if picked else []
