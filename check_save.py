@@ -348,7 +348,12 @@ def report(path, node=None):
             lines += playbook_link_diagnostics(path, counts, node)
         except CheckError as e:
             lines += ["", f"Playbook link check skipped: {e}"]
-    if kind == "profile" and counts.get("PBPL", 0) > 0:
+    custom_tables_present = [name for name in CUSTOM_PLAY_TABLES if name in counts]
+    if kind == "career" and custom_tables_present:
+        lines += ["", "Custom-play table counts: " + ", ".join(
+            f"{name}={counts[name]:,}" for name in custom_tables_present
+        ) + "."]
+    if kind in ("career", "profile") and counts.get("PBPL", 0) > 0:
         try:
             lines += [""]
             lines += custom_play_diagnostics(path, counts, node)
