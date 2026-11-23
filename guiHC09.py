@@ -11098,6 +11098,40 @@ class PlaybookData:
             bases.add(self.formation_base(f, srfm))
         return self._is_special(bases)
 
+    def stock_set_category_warnings(self):
+        """Find stock sets whose special/ordinary category disagrees with most other playbooks.
+
+        This is a read-only heuristic, not proof of corruption: only sets present in
+        at least four playbooks with an 80% category consensus are reported. Custom
+        sets are excluded because their intended category is not known.
+        """
+        by_set = defaultdict(list)
+        for (bokl, setl), formations in self.set_formations.items():
+            if setl not in self.stock_sets or not formations:
+                continue
+            special = self.set_is_special(bokl, setl)
+            names = [self.formation_base(f, self.formation_srfm.get((bokl, f), "")) for f in formations]
+            by_set[setl].append((bokl, special, names))
+        warnings = []
+        for setl, books in by_set.items():
+            if len(books) < 4:
+                continue
+            special_count = sum(1 for _b, special, _names in books if special)
+            ordinary_count = len(books) - special_count
+            expected_special = special_count > ordinary_count
+            consensus = max(special_count, ordinary_count) / len(books)
+            if consensus < 0.8:
+                continue
+            for bokl, actual_special, names in books:
+                if actual_special != expected_special:
+                    warnings.append({
+                        "book": bokl, "set": setl, "name": self.set_label(setl),
+                        "formations": names, "expected": "special-teams" if expected_special else "ordinary",
+                        "actual": "special-teams" if actual_special else "ordinary",
+                        "support": max(special_count, ordinary_count), "books": len(books),
+                    })
+        return sorted(warnings, key=lambda w: (int(w["book"]), int(w["set"])))
+
     def plan_remove(self, bokl, keys):
         """What taking plays out of a playbook would remove. keys: [(SETL, PLYL)]. The plan's "rows" say which rows of PGPL go, and, so that the playbook keeps the structure every stock playbook has
         (every set has plays, every formation has sets), the PGSS / PGSL rows of a set left with no plays and the PGFM row of a formation left with no sets. Special teams plays are never removed
@@ -13302,6 +13336,17 @@ class App(tk.Tk):
         elif unnamed:
             notes.append(f"{unnamed} playbooks have no name (custom ones are named in your profile save - use Profile save...)")
         notes.extend(self._playbook_problems)
+        category_warnings = data.stock_set_category_warnings()
+        if category_warnings:
+            sample = category_warnings[:3]
+            notes.append(
+                f"{len(category_warnings)} possible stock-set formation-category mismatch(es) "
+                "(read-only; based on other playbooks: " +
+                "; ".join(f"{w['name']} in {data.book_label(w['book'])} under {', '.join(w['formations'])}"
+                          for w in sample) +
+                (f"; and {len(category_warnings) - len(sample)} more" if len(category_warnings) > len(sample) else "") +
+                ")"
+            )
         self.lbl_playbook_status.configure(
             text=f"{len(tree.get_children())} {shown_side.lower()} playbooks, {len(data.play_info)} named plays" + "".join(" - " + n for n in notes))
         self._finish_tree_refresh(tree, keep)
