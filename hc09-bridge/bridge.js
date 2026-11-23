@@ -1501,7 +1501,7 @@ const ADD_PLAY_PLACE = {                       // per role: table -> { sort: the
     },
     42: { PBPL: { sort: ['PLYL'], unique: ['PLYL'] }, PLYS: { sort: ['PLYL', 'poso'], unique: ['PLYL', 'poso'] }, SETP: { sort: ['SETL', 'poso'], unique: ['SETL', 'poso'] } },
     46: { PPPN: { sort: ['BOKL', 'PLYL'], unique: ['BOKL', 'PLYL'] } },
-    47: { PGPL: { sort: ['BOKL', 'SETL', 'PLYL'], unique: ['BOKL', 'SETL', 'PLYL'] }, PGSL: { sort: ['BOKL'], unique: ['BOKL', 'SETL'] }, PGSS: { sort: ['BOKL', 'SETL'], unique: ['BOKL', 'SETL'] } },
+    47: { PGPL: { sort: ['BOKL', 'SETL', 'PLYL'], unique: ['BOKL', 'SETL', 'PLYL'] }, PGSL: { sort: ['BOKL'], unique: ['BOKL', 'SETL', 'PBFM'] }, PGSS: { sort: ['BOKL', 'SETL'], unique: ['BOKL', 'SETL'] } },
 };
 
 const ADD_PLAY_MIN_ROWS = 100;                  // the templates (a career's or a profile's own) have the same tables with none or a few rows; the game's own play data has thousands
