@@ -9072,7 +9072,7 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
     """Rename playbooks: the game's default playbooks (89: 46 offense, 43 defense) listed with their names; give any of them a new name (21 characters), then write the names into the game's own file
     (qkl_boot.ast, table PLAB). The first time, the changed file entry is backed up and Put the names back restores it. The Playbooks tab shows the new names after a refresh."""
 
-    def __init__(self, app, boot, books):
+    def __init__(self, app, boot, books, profile_path="", career_path="", custom_keys=()):
         super().__init__(app)
         p = getattr(app, "_ui_palette", None)
         if p:
@@ -9081,10 +9081,13 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
         self.transient(app)
         self.geometry("820x640")
         self.app, self.boot, self.books = app, boot, books
+        self.profile_path, self.career_path = profile_path, career_path
+        self.custom_keys = set(custom_keys)
+        self.original_books = [dict(b) for b in books]
         self.staged = {}                                  # (BGID, BOFF) -> the new name waiting to be written
-        ttk.Label(self, text="Rename the game's playbooks", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, text="Rename game and custom playbooks", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=780, justify="left", padding=(14, 0, 14, 6),
-                  text="Pick a playbook, type its new name (up to 21 characters) and press Set name; do that for as many as you like, then Write the names to the game files. Close RPCS3 first. "
+                  text="Pick a playbook, type its new name (up to 21 characters) and press Set name; do that for as many as you like, then Write the names. Stock names go to the game files; custom names go to your profile and career saves. Close RPCS3 first. "
                        "The first time, the changed file entry is saved in Documents\\hc09-game-file-backup, and Put the names back restores it (Put the game files back in the play windows restores it too). "
                        "Ten playbooks are listed twice, once under the coach's name and once as \"<coach>'s Plays\"; each row has its own name.").pack(anchor="w")
         top = ttk.Frame(self)
@@ -9219,38 +9222,70 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             messagebox.showerror("Rename playbooks", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
             return
         n = len(self.staged)
-        if not messagebox.askyesno("Rename playbooks", f"Write {n} new playbook name{'s' if n != 1 else ''} into the game files?\n\nThis writes into qkl_boot.ast of your game. The first time, the changed "
-                                   "entry is saved in Documents\\hc09-game-file-backup and Put the names back restores it.", parent=self):
+        if not messagebox.askyesno("Rename playbooks", f"Save {n} new playbook name{'s' if n != 1 else ''}?\n\nStock playbook names are written to qkl_boot.ast. Custom playbook names are written to your profile save and the open career copy. Save backups are made automatically.", parent=self):
             return
         renames = dict(self.staged)
 
+        stock_renames = {k: v for k, v in renames.items() if k not in self.custom_keys}
+        custom_renames = {k: v for k, v in renames.items() if k in self.custom_keys}
+
         def work():
-            return app.rename_playbooks_apply(self.boot, renames)
+            stock_count, stock_rows = (0, None)
+            if stock_renames:
+                stock_count, stock_rows = app.rename_playbooks_apply(self.boot, stock_renames)
+            custom_count = app.rename_custom_playbooks_in_saves(self.profile_path, self.career_path, custom_renames) if custom_renames else 0
+            return stock_count, stock_rows, custom_count
 
         def done(result):
-            count, rows = result
+            stock_count, stock_rows, custom_count = result
             if not self.winfo_exists():
                 return
-            self.books = PN.books_from_rows(rows)
+            if stock_rows is not None:
+                refreshed = PN.books_from_rows(stock_rows)
+                by_key = {b["key"]: b for b in refreshed}
+                for b in self.books:
+                    if b["key"] in by_key:
+                        b.update(by_key[b["key"]])
+            for b in self.books:
+                if b["key"] in renames:
+                    b["name"] = renames[b["key"]]
+                    b["raw"] = renames[b["key"]]
             self.staged = {}
             self._fill()
-            self.lbl_result.configure(text=f"Done: {count} playbook name{'s' if count != 1 else ''} written. Start the game and look at the playbook screen; the Playbooks tab shows them after Load / Refresh.")
-            messagebox.showinfo("Rename playbooks", f"Done: {count} playbook name{'s' if count != 1 else ''} written to the game files.\n\nPut the names back (this window) restores the file as it was.", parent=self)
-            app._apply_book_renames(renames)
+            count = stock_count + custom_count
+            self.lbl_result.configure(text=f"Done: {count} playbook name{'s' if count != 1 else ''} saved ({stock_count} game-file, {custom_count} custom-save).")
+            messagebox.showinfo("Rename playbooks", f"Done: {count} playbook name{'s' if count != 1 else ''} saved.\n\nStock names were written to the game files; custom names were written to the profile save and the career copy when present.", parent=self)
+            if stock_renames:
+                app._apply_book_renames(stock_renames)
 
         self._start_write("Writing the playbook names...", work, done, "Rename playbooks")
 
     def _restore(self):
         app = self.app
+        original_custom = {b["key"]: b["name"] for b in self.original_books if b["key"] in self.custom_keys}
+
+        def work():
+            restored, rows = app.rename_playbooks_restore(self.boot)
+            custom_count = app.rename_custom_playbooks_in_saves(
+                self.profile_path, self.career_path, original_custom
+            ) if original_custom and self.profile_path else 0
+            return restored, rows, custom_count
 
         def done(result):
-            restored, rows = result
+            restored, rows, custom_count = result
             if not self.winfo_exists():
                 return
-            self.books = PN.books_from_rows(rows)
+            refreshed = PN.books_from_rows(rows)
+            by_key = {b["key"]: b for b in refreshed}
+            for b in self.books:
+                if b["key"] in by_key:
+                    b.update(by_key[b["key"]])
+                elif b["key"] in original_custom:
+                    b["name"] = original_custom[b["key"]]
+                    b["raw"] = original_custom[b["key"]]
             self.staged = {}
             self._fill()
-            text = "Put back: the playbook names are as they were before the first rename." if restored else "Nothing to put back: no playbook was renamed (there is no backup of the names)."
+            text = f"Restored stock names: {bool(restored)}; restored {custom_count} custom-book name entries to their original names."
             self.lbl_result.configure(text=text)
             messagebox.showinfo("Put the names back", text, parent=self)
             try:
@@ -9258,8 +9293,8 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             except Exception:
                 pass
 
-        self._put_back("Put the names back", "Put the playbook names back as they were before the first rename?\n\nThe backup is in Documents\\hc09-game-file-backup.",
-                       lambda _archives: app.rename_playbooks_restore(self.boot), done, busy_text="Putting the playbook names back...", find_archives=False)
+        self._put_back("Put the names back", "Restore stock playbook names and the custom playbook names that were changed in this window?",
+                       lambda _archives: work(), done, busy_text="Putting the names back...", find_archives=False)
 
 
 def plain_bridge_error(e):
@@ -15844,16 +15879,77 @@ class App(tk.Tk):
         if not archives:
             return
         boot = archives[0]
+        targets = self.default_save_targets()
+        profile_path = targets.get("profile") if targets.get("sure") else getattr(self, "_playbook_profile", "")
+        career_path = self.model.db_path or ""
 
         def work():
-            return self.playbook_rows_for_rename(boot)[0]
+            stock_rows = self.playbook_rows_for_rename(boot)[0]
+            custom_rows = []
+            if profile_path and os.path.isfile(profile_path):
+                custom_rows = self._export_tables(profile_path, ["PLAB"])["PLAB"][1]
+                custom_rows = [r for r in custom_rows if safe_int(r.get("PBGI")) is not None and 1 <= safe_int(r.get("PBGI")) <= 10 and safe_int(r.get("BGID")) is not None and 46 <= safe_int(r.get("BGID")) <= 55 and safe_int(r.get("BOFF")) in (0, 1)]
+            return stock_rows, custom_rows
 
-        def done(rows):
+        def done(result):
+            stock_rows, custom_rows = result
             self.ui_prefs["boot_ast_path"] = boot
             save_ui_prefs(self.ui_prefs)
-            RenamePlaybooksDialog(self, boot, PN.books_from_rows(rows))
+            books = PN.books_from_rows(stock_rows + custom_rows)
+            custom_keys = {b["key"] for b in PN.books_from_rows(custom_rows)}
+            RenamePlaybooksDialog(self, boot, books, profile_path, career_path, custom_keys)
 
-        self.run_in_thread_with_busy("Reading the game's playbooks...", work, done, error_title="Rename playbooks")
+        self.run_in_thread_with_busy("Reading the game's and custom playbooks...", work, done, error_title="Rename playbooks")
+
+    def rename_custom_playbooks_in_saves(self, profile_path, career_path, renames):
+        """Write custom playbook PLAB.BNAM names to the profile and its career copy, with verified backups."""
+        if not profile_path or not os.path.isfile(profile_path):
+            raise RuntimeError("Choose the correct profile save on the Playbooks tab before renaming custom playbooks.")
+        wanted = {tuple(map(int, key)): PN.clean_name(value) for key, value in renames.items()}
+        paths = [profile_path] + ([career_path] if career_path and os.path.isfile(career_path) else [])
+        pending = {}
+        for path in paths:
+            headers, rows = self._export_tables(path, ["PLAB"])["PLAB"]
+            if not {"PBGI", "BGID", "BOFF", "BNAM"}.issubset(headers):
+                raise RuntimeError(f"{os.path.basename(os.path.dirname(path))} PLAB table is missing required custom-playbook fields.")
+            changed, found = 0, set()
+            for row in rows:
+                try:
+                    key, pbgi = (int(row["BGID"]), int(row["BOFF"])), int(row["PBGI"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if 1 <= pbgi <= 10:
+                    found.add(key)
+                    if key in wanted:
+                        row["BNAM"] = wanted[key]
+                        changed += 1
+            if path == profile_path and set(wanted) - found:
+                raise RuntimeError("The selected profile no longer contains all selected custom playbooks.")
+            if changed:
+                pending[path] = (headers, rows, changed)
+        if profile_path not in pending:
+            raise RuntimeError("No custom playbook names changed in the profile.")
+        backups = {}
+        try:
+            for path in pending:
+                backups[path] = backup_save(path)
+            for path, (headers, rows, _count) in pending.items():
+                tmp = tempfile.mkdtemp(prefix="hc09_custom_book_rename_")
+                try:
+                    with open(os.path.join(tmp, "plab.csv"), "w", newline="", encoding="utf-8") as f:
+                        w = csv.writer(f, lineterminator="\r\n")
+                        w.writerow(headers)
+                        for row in rows:
+                            w.writerow([row.get(h, "") for h in headers])
+                    write_tables_in_save(self.model, path, tmp, ["PLAB"], backup=False, wrote="the custom playbook names", after="the custom playbook names")
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+        except Exception as e:
+            for path, backup in backups.items():
+                if os.path.isfile(backup):
+                    restore_backup(backup, path, e)
+            raise
+        return sum(v[2] for v in pending.values())
 
     def playbook_name_map(self, boot_ast):
         """{playbook id (BOKL): its name} from the game's PLAB (read once into the cache)."""
