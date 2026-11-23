@@ -73,6 +73,23 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
         self.assertEqual(plan["rows"]["PGSL"], [])
         self.assertEqual(plan["rows"]["PGPL"], [])
 
+    def test_copy_into_existing_mislinked_set_is_rejected_without_rows(self):
+        data = self.make_data()
+        # Target already owns this set, but has it linked to an ordinary formation.
+        data.tables["PGSS"].append({"BOKL": "2", "SETL": "471"})
+        data.tables["PGSL"].append({"BOKL": "2", "SETL": "471", "PBFM": "200"})
+        data.tables["PGPL"].append({"BOKL": "2", "SETL": "471", "PLYL": "6709", "PLTP": "21"})
+        data._index_structure()
+
+        plan = data.plan_copy("1", "2", "play", ("471", "6709"))
+
+        self.assertIn("special-teams set", plan["error"])
+        self.assertIn("Split Backs", plan["error"])
+        self.assertEqual(plan["rows"]["PGFM"], [])
+        self.assertEqual(plan["rows"]["PGSS"], [])
+        self.assertEqual(plan["rows"]["PGSL"], [])
+        self.assertEqual(plan["rows"]["PGPL"], [])
+
     def test_copy_entire_ordinary_formation_maps_to_ordinary_target(self):
         data = self.make_data()
         data.formation_sets[("1", "201")] = ["50"]
