@@ -73,6 +73,32 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
         self.assertEqual(plan["rows"]["PGSL"], [])
         self.assertEqual(plan["rows"]["PGPL"], [])
 
+    def test_copy_entire_ordinary_formation_maps_to_ordinary_target(self):
+        data = self.make_data()
+        data.formation_sets[("1", "201")] = ["50"]
+        plan = data.plan_copy("1", "2", "formation", "201")
+
+        self.assertIsNone(plan["error"])
+        self.assertEqual(plan["rows"]["PGFM"], [
+            {"BOKL": "2", "PBFM": "201", "SRFM": "201"}
+        ])
+        self.assertEqual(plan["rows"]["PGSL"], [
+            {"BOKL": "2", "SETL": "50", "PBFM": "201"}
+        ])
+        self.assertEqual(plan["rows"]["PGPL"], [
+            {"BOKL": "2", "SETL": "50", "PLYL": "500", "PLTP": "1"}
+        ])
+
+    def test_copy_entire_kick_return_formation_is_allowed(self):
+        data = self.make_data()
+        data.formation_sets[("1", "101")] = ["471"]
+        plan = data.plan_copy("1", "2", "formation", "101")
+
+        self.assertIsNone(plan["error"])
+        self.assertEqual(plan["rows"]["PGSL"], [
+            {"BOKL": "2", "SETL": "471", "PBFM": "101"}
+        ])
+
     def test_stock_set_category_outlier_is_reported_read_only(self):
         data = self.make_data()
         for book in ("3", "4", "5"):
