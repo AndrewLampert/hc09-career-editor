@@ -9221,8 +9221,7 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             messagebox.showerror("Rename playbooks", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
             return
         n = len(self.staged)
-        if not messagebox.askyesno("Rename playbooks", f"Write {n} new playbook name{'s' if n != 1 else ''} into the game files?\n\nThis writes into qkl_boot.ast of your game. The first time, the changed "
-                                   "entry is saved in Documents\\hc09-game-file-backup and Put the names back restores it.", parent=self):
+        if not messagebox.askyesno("Rename playbooks", f"Save {n} new playbook name{'s' if n != 1 else ''}?\n\nStock playbook names are written to qkl_boot.ast. Custom playbook names are written to your profile save and the open career copy. Save backups are made automatically.", parent=self):
             return
         renames = dict(self.staged)
 
@@ -9262,15 +9261,30 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
 
     def _restore(self):
         app = self.app
+        original_custom = {b["key"]: b["name"] for b in self.original_books if b["key"] in self.custom_keys}
+
+        def work():
+            restored, rows = app.rename_playbooks_restore(self.boot)
+            custom_count = app.rename_custom_playbooks_in_saves(
+                self.profile_path, self.career_path, original_custom
+            ) if original_custom and self.profile_path else 0
+            return restored, rows, custom_count
 
         def done(result):
-            restored, rows = result
+            restored, rows, custom_count = result
             if not self.winfo_exists():
                 return
-            self.books = PN.books_from_rows(rows)
+            refreshed = PN.books_from_rows(rows)
+            by_key = {b["key"]: b for b in refreshed}
+            for b in self.books:
+                if b["key"] in by_key:
+                    b.update(by_key[b["key"]])
+                elif b["key"] in original_custom:
+                    b["name"] = original_custom[b["key"]]
+                    b["raw"] = original_custom[b["key"]]
             self.staged = {}
             self._fill()
-            text = "Put back: the playbook names are as they were before the first rename." if restored else "Nothing to put back: no playbook was renamed (there is no backup of the names)."
+            text = f"Restored stock names: {bool(restored)}; restored {custom_count} custom-book name entries to their original names."
             self.lbl_result.configure(text=text)
             messagebox.showinfo("Put the names back", text, parent=self)
             try:
@@ -9278,8 +9292,8 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             except Exception:
                 pass
 
-        self._put_back("Put the names back", "Put the playbook names back as they were before the first rename?\n\nThe backup is in Documents\\hc09-game-file-backup.",
-                       lambda _archives: app.rename_playbooks_restore(self.boot), done, busy_text="Putting the playbook names back...", find_archives=False)
+        self._put_back("Put the names back", "Restore stock playbook names and the custom playbook names that were changed in this window?",
+                       lambda _archives: work(), done, busy_text="Putting the names back...", find_archives=False)
 
 
 def plain_bridge_error(e):
@@ -15865,7 +15879,7 @@ class App(tk.Tk):
             return
         boot = archives[0]
         targets = self.default_save_targets()
-        profile_path = targets.get("profile") if targets.get("sure") else ""
+        profile_path = targets.get("profile") if targets.get("sure") else getattr(self, "_playbook_profile", "")
         career_path = self.model.db_path or ""
 
         def work():
