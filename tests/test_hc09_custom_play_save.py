@@ -372,9 +372,9 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
             def bridge(args):
                 out = args[args.index("--out") + 1]
                 with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
-                    f.write("BOKL,PLYL,PPPM\\n")
+                    f.write("BOKL,PLYL,PPPM\n")
                 with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
-                    f.write("BOKL,SETL,PLYL,PLTP\\n")
+                    f.write("BOKL,SETL,PLYL,PLTP\n")
                 return {}
 
             with mock.patch.object(guiHC09, "write_tables_in_save") as write:
