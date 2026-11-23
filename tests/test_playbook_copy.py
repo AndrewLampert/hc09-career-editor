@@ -97,8 +97,8 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
 
         plan = data.plan_copy("1", "2", "play", ("471", "6709"))
 
-        self.assertIn("special-teams set", plan["error"])
-        self.assertIn("Split Backs", plan["error"])
+        self.assertIn("source formation categories", plan["error"])
+        self.assertIn("target's existing formation links", plan["error"])
         self.assertEqual(plan["rows"]["PGFM"], [])
         self.assertEqual(plan["rows"]["PGSS"], [])
         self.assertEqual(plan["rows"]["PGSL"], [])
