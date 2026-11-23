@@ -11000,11 +11000,13 @@ class PlaybookData:
                 if source_special != target_special:
                     source_kind = "special-teams" if source_special else "ordinary"
                     target_kind = "special-teams" if target_special else "ordinary"
+                    source_article = "a" if source_special else "an"
+                    target_article = "a" if target_special else "an"
                     target_label = self.formation_base(tf, target_srfm)
                     plan["error"] = (
-                        f'"{self.set_label(setl)}" is an {source_kind} set and cannot be placed '
-                        f'under the {target_kind} formation "{target_label}". Choose a '
-                        "formation from the same category instead."
+                        f'"{self.set_label(setl)}" is {source_article} {source_kind} set and cannot '
+                        f'be placed under {target_article} {target_kind} formation "{target_label}". '
+                        "Choose a formation from the same category instead."
                     )
                     return
 
