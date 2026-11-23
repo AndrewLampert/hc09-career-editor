@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -5353,6 +5353,50 @@ def rename_plays_in_save(model, db_path, renames, expect=None, backup=True):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=True):
+    """Give one linked play a custom-playbook-only name in a profile/career save.
+
+    PPPN in qkl_boot.ast is the shipped-book namespace. Custom books use BOKL
+    1..10 in the save namespace, so these rows must be written to the save's
+    PPPN table, never to the game's qkl_boot.ast entry. New rows use the
+    bridge's explicitly allowed PPPN spare capacity. Returns (changed, created).
+    """
+    tmp = tempfile.mkdtemp(prefix="hc09_custom_book_name_")
+    try:
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PPPN,PGPL"])
+        pppn_path = os.path.join(tmp, "pppn.csv")
+        pgpl_path = os.path.join(tmp, "pgpl.csv")
+        if not os.path.isfile(pppn_path):
+            raise RuntimeError("This save has no PPPN table; custom-book play names cannot be written here.")
+        if not os.path.isfile(pgpl_path):
+            raise RuntimeError("This save has no PGPL playbook links; the custom-book play cannot be verified.")
+        with open(pppn_path, newline="", encoding="utf-8-sig") as f:
+            headers = next(csv.reader(f))
+        if set(headers) != {"BOKL", "PLYL", "PPPM"}:
+            raise RuntimeError("The save's PPPN table has an unexpected layout; no name was written.")
+        rows, changed, created = custom_book_name_rows(
+            read_csv_dicts(pppn_path), read_csv_dicts(pgpl_path), book_id, plyl, name
+        )
+        if not changed:
+            return False, False
+        out = os.path.join(tmp, "in")
+        os.makedirs(out)
+        with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, lineterminator="\r\n")
+            w.writerow(headers)
+            for row in rows:
+                w.writerow([row[h] for h in headers])
+        write_tables_in_save(
+            model, db_path, out, ["PPPN"],
+            allow_append=["PPPN"] if created else (),
+            backup=backup, wrote="the custom playbook's play name",
+            after="the custom playbook's play name",
+        )
+        return True, created
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
 def _bridge_config(config):
     """The JSON file the bridge's entry-patch reads its targets from: a temporary file of its own name (two calls never share one), which the caller removes."""
     handle, path = tempfile.mkstemp(prefix="hc09_personnel_", suffix=".json")
@@ -9249,28 +9293,40 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
 
     def _fill_books(self):
         lib, d = self.designer.lib, self.designer
-        keep = [self._books[i] for i in self.lst.curselection()] if self._books else []
-        # PPPN in qkl_boot.ast contains the game's shipped playbooks only. Custom
-        # playbooks occupy BOKL 1..10 in a save/profile; those numbers must never be
-        # treated as the same-numbered shipped book in PPPN. In particular, writing
-        # a rename against those colliding IDs changes an unrelated stock book and
-        # cannot rename the custom book. Custom-playbook play names live in the save's
-        # PBPL definitions, not in this game-file table.
+        self._custom_current_names = getattr(self, "_custom_current_names", {})
+        keep = [self._entries[i] for i in self.lst.curselection()] if getattr(self, "_entries", None) else []
         available = set(lib.books_of_play.get(self.plyl, ()))
-        def book_name(b):                                  # a book the names table does not have (no PLAB entry, or no names cache yet) is still listed, as 'playbook N' like everywhere else
+
+        def book_name(b):
             return d.books.get(b, (f"playbook {b}", ""))[0]
-        self._books = sorted((b for b in available if int(b) not in range(1, 11)), key=lambda b: book_name(b).lower())
+
+        self._books = sorted((b for b in available if int(b) not in range(1, 11)),
+                             key=lambda b: book_name(b).lower())
+        self._custom_books = sorted(
+            b for b, plays in d.custom_book_plays.items()
+            if 1 <= int(b) <= 10 and self.plyl in plays
+        )
+        self._entries = [("stock", b) for b in self._books] + [("custom", b) for b in self._custom_books]
         self.lst.delete(0, "end")
-        for b in self._books:
-            self.lst.insert("end", f"{book_name(b)}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
-        for i, b in enumerate(self._books):
-            if b in keep:
+        for kind, b in self._entries:
+            if kind == "stock":
+                self.lst.insert("end", f"{book_name(b)}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
+            else:
+                custom_name = d.custom_books.get(b, f"Custom playbook {b}")
+                shown = self._custom_current_names.get((b, self.plyl), lib.plays[self.plyl]["name"])
+                self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)")
+        for i, entry in enumerate(self._entries):
+            if entry in keep:
                 self.lst.selection_set(i)
-        if available - set(self._books):
+        if self._custom_books:
             self.lbl_result.configure(
-                text="Custom playbooks are not listed here: this tool edits the game's shipped PPPN names only. "
-                     "For a custom play, use Rename my plays... to change its PBPL name in the profile/career. "
-                     "A custom book's individual play-name overrides are not supported.")
+                text="Custom books are listed separately from shipped books. Their names are written to PPPN in the profile/career save, not qkl_boot.ast. "
+                     "This save-level route is experimental and still needs an in-game check. A .bak copy is kept beside each save before it is changed; the Put the game files back button below does not restore save changes."
+            )
+        elif available - set(self._books):
+            self.lbl_result.configure(
+                text="Some custom-book links are not available in the open career. Shipped-book names are written to the game files; custom-book names, when linked in the career, are written to the save."
+            )
 
     def _apply(self):
         app, d = self.app, self.designer
@@ -9280,47 +9336,117 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             messagebox.showerror("Rename in playbooks", str(e), parent=self)
             return
         everywhere = self.scope_var.get() == "all"
-        picked = [self._books[i] for i in self.lst.curselection()]
+        picked = [self._entries[i] for i in self.lst.curselection()]
         if not everywhere and not picked:
             messagebox.showinfo("Rename in playbooks", "Select the playbooks (Ctrl+click or Shift+click for several, or Select all), or choose Everywhere.", parent=self)
             return
+        picked_stock = [b for kind, b in picked if kind == "stock"]
+        picked_custom = [b for kind, b in picked if kind == "custom"]
+        custom_targets = list(self._custom_books) if everywhere else picked_custom
         if app._rpcs3_running():
             messagebox.showerror("Rename in playbooks", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
             return
-        archives = app._personnel_archives()
-        if not archives:
+
+        db = getattr(app.model, "db_path", None)
+        profile = d.my_profile or app.default_save_targets().get("profile")
+        save_paths = []
+        if custom_targets:
+            if not db or "-PROFILE-" in db.upper():
+                messagebox.showerror("Rename in playbooks", "Open the career save that contains these custom playbooks before renaming one.", parent=self)
+                return
+            if getattr(app, "dirty", False):
+                messagebox.showerror("Rename in playbooks", "The open career has unsaved changes. Save it first, then try again.", parent=self)
+                return
+            save_paths.append(("career", db))
+            if profile and os.path.isfile(profile) and os.path.abspath(profile) != os.path.abspath(db):
+                save_paths.append(("profile", profile))
+
+        archives = None
+        if everywhere or picked_stock:
+            archives = app._personnel_archives()
+            if not archives:
+                return
+
+        stock_count = len(picked_stock) if not everywhere else len(self._books)
+        custom_count = len(custom_targets)
+        total = stock_count + custom_count
+        where = "everywhere" if everywhere else f"in {total} selected playbook{'s' if total != 1 else ''}"
+        details = []
+        if everywhere or picked_stock:
+            details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
+        if custom_targets:
+            details.append("Custom-book names are written to the PPPN table in your profile and career saves. A .bak backup is made beside each save. This save-level feature has not yet been confirmed in a game.")
+        if not messagebox.askyesno(
+            "Rename in playbooks",
+            f"Rename {d.lib.plays[self.plyl]['name']} to {name} {where}?\n\n" + "\n\n".join(details),
+            parent=self,
+        ):
             return
-        where = "everywhere (the play's own name and every playbook that has it)" if everywhere else f"in {len(picked)} playbook{'s' if len(picked) != 1 else ''}"
-        if not messagebox.askyesno("Rename in playbooks", f"Rename {d.lib.plays[self.plyl]['name']} to {name} {where}?\n\nThis writes into qkl_boot.ast of your game. The first time, the changed entry is saved in "
-                                   "Documents\\hc09-game-file-backup and Put the game files back restores it.", parent=self):
-            return
+
         lib, plyl = d.lib, self.plyl
 
         def work():
-            try:
-                return app.game_file_rename(lib, plyl, name, None if everywhere else picked, archives)
-            except RuntimeError as e:
-                raise RuntimeError(plain_bridge_error(e)) from None
+            out = {"stock": None, "stock_error": None, "custom": []}
+            if everywhere or picked_stock:
+                try:
+                    out["stock"] = app.game_file_rename(
+                        lib, plyl, name, None if everywhere else picked_stock, archives
+                    )
+                except Exception as e:
+                    out["stock_error"] = plain_bridge_error(e)
+            for bokl in custom_targets:
+                for label, path in save_paths:
+                    try:
+                        changed, created = rename_custom_book_play_in_save(
+                            app.model, path, bokl, plyl, name
+                        )
+                        out["custom"].append((label, path, bokl, changed, created, None))
+                    except Exception as e:
+                        out["custom"].append((label, path, bokl, False, False, str(e)))
+            return out
 
         def done(result):
-            _targets, report, missing, rows = result
             if not self.winfo_exists():
                 return
-            if rows:
-                lib.set_book_play_names(rows)
-            if everywhere:
-                lib.plays[plyl]["name"] = name
-                if d.detail is not None and d.plyl == plyl:
-                    d.detail["play"]["name"] = name
+            lines = []
+            stock = result["stock"]
+            career_changed = False
+            if stock is not None:
+                _targets, report, missing, rows = stock
+                if rows:
+                    lib.set_book_play_names(rows)
+                if everywhere:
+                    lib.plays[plyl]["name"] = name
+                    if d.detail is not None and d.plyl == plyl:
+                        d.detail["play"]["name"] = name
+                n = sum(v for _name, v in report)
+                lines.append(f"Shipped books: {n} name row(s) written.")
+                if missing:
+                    lines.append(f"Shipped books without a name row: {len(missing)}.")
+            elif result["stock_error"]:
+                lines.append(f"Shipped books: NOT changed ({result['stock_error']}).")
+            for label, path, bokl, changed, created, error in result["custom"]:
+                if error:
+                    lines.append(f"Custom book {bokl} ({label}): NOT changed ({error}).")
+                elif changed:
+                    self._custom_current_names[(bokl, plyl)] = name
+                    lines.append(f"Custom book {bokl} ({label}): {'new PPPN row added' if created else 'name updated'}.")
+                    career_changed = career_changed or (path == db)
+                else:
+                    lines.append(f"Custom book {bokl} ({label}): already called \"{name}\".")
+            if career_changed:
+                try:
+                    app.model.load_all_from_db(db)
+                    app._on_load_db_path_success(db)
+                except Exception as e:
+                    lines.append(f"The career was written, but the editor could not reload it: {e}")
             if d.winfo_exists():
                 d._fill()
                 if d.detail is not None and d.plyl == plyl:
                     d._show()
             self._fill_books()
-            n = sum(v for _name, v in report)
-            self.lbl_result.configure(text=f"Done: {n} name{'s' if n != 1 else ''} written ({'; '.join(f'{rep}: {v}' for rep, v in report)}). Start the game and look at the play-call screen; "
-                                           "Put the game files back restores the names." + (f" {len(missing)} playbook(s) had no name row for the play." if missing else ""))
-            messagebox.showinfo("Rename in playbooks", f"Done. {name} is the play's name {where}.\n\nPut the game files back (this window) restores the names as they were.", parent=self)
+            self.lbl_result.configure(text="\n".join(lines) + "\n\nThe custom-book PPPN change still needs an in-game check.")
+            messagebox.showinfo("Rename in playbooks", "\n".join(lines), parent=self)
 
         self._start_write("Renaming the play...", work, done, "Rename in playbooks")
 
