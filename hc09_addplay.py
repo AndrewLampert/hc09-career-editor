@@ -610,12 +610,23 @@ def playbook_link_issues(tables):
     formation_links = {(int(r["BOKL"]), int(r["PBFM"])) for r in pgfm}
     issues = []
     seen_orphan = set()
+    seen_links = {}
     for index, row in enumerate(pgsl):
-        pair = (int(row["BOKL"]), int(row["PBFM"]))
+        book, set_id, formation = (int(row["BOKL"]), int(row["SETL"]), int(row["PBFM"]))
+        identity = (book, set_id, formation)
+        if identity in seen_links:
+            issues.append({
+                "kind": "duplicate_set_formation_link",
+                "book": book, "set": set_id, "formation": formation,
+                "row": index, "first_row": seen_links[identity],
+            })
+        else:
+            seen_links[identity] = index
+        pair = (book, formation)
         if pair not in formation_links and pair not in seen_orphan:
             issues.append({
                 "kind": "formation_not_in_playbook",
-                "book": pair[0], "formation": pair[1], "row": index,
+                "book": book, "formation": formation, "row": index,
             })
             seen_orphan.add(pair)
     return issues
