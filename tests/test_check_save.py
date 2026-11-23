@@ -181,9 +181,13 @@ class CheckSaveReportTests(unittest.TestCase):
               mock.patch.object(check_save.D, "savedata_roots", return_value=["savedata"]),
               mock.patch.object(check_save.D, "list_saves", return_value=rpc_saves),
               mock.patch.object(check_save.D, "classify_save", return_value=("career", 208)),
-              mock.patch.object(check_save, "table_counts", return_value=counts) as inspect):
+              mock.patch.object(check_save, "table_counts", return_value=counts) as inspect,
+              mock.patch.object(check_save, "playbook_link_diagnostics",
+                                 return_value=["Playbook link check: clean."]) as book_check):
             lines = check_save.custom_play_batch_report("node")
         inspect.assert_called_once_with("test.usr", "node")
+        book_check.assert_called_once_with("test.usr", counts, "node")
+        self.assertIn("  Playbook link check: clean.", lines)
         self.assertTrue(any("CAREER-TEST: 208 tables; PBPL=0 custom plays, SETL=0 custom sets." in line for line in lines))
         self.assertIn("Readable career saves checked: 1 of 1.", lines)
 
