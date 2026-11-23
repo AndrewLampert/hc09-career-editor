@@ -139,5 +139,34 @@ class CheckSaveReportTests(unittest.TestCase):
             self.assertIn("Book 7, set 471", lines[1])
 
 
+    def test_custom_play_diagnostics_reports_clean_profile(self):
+        with tempfile.TemporaryDirectory() as folder:
+            headers = {
+                "pbpl": "PLYL,SETL\\n9,5\\n", "setl": "SETL\\n5\\n",
+                "setp": "SETL,SETP,poso\\n" + "".join(f"5,{100+i},{i}\\n" for i in range(11)),
+                "plys": "PLYL,poso\\n" + "".join(f"9,{i}\\n" for i in range(11)),
+                "setg": "SETP,SGF_\\n" + "".join(f"{100+i},20\\n" for i in range(11)),
+                "sgff": "SETL,SGF_,dflt\\n5,20,1\\n",
+                "plpd": "PLYL\\n", "plrd": "PLYL\\n", "plcm": "PLYL\\n",
+            }
+            for name, body in headers.items():
+                with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
+                    f.write(body)
+            completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+            with mock.patch.object(check_save.tempfile, "TemporaryDirectory") as tempdir, \\
+                 mock.patch.object(check_save.subprocess, "run", return_value=completed):
+                tempdir.return_value.__enter__.return_value = folder
+                tempdir.return_value.__exit__.return_value = False
+                lines = check_save.custom_play_diagnostics("profile.usr",
+                    {name: 1 for name in check_save.CUSTOM_PLAY_TABLES}, "node")
+            self.assertIn("no broken references or incomplete 11-slot definitions", lines[0])
+
+    def test_custom_play_diagnostics_skips_when_profile_has_no_custom_plays(self):
+        self.assertEqual(
+            check_save.custom_play_diagnostics("profile.usr", {"PBPL": 0}),
+            ["Custom play check: no custom plays to validate."],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
