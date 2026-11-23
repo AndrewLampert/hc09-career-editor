@@ -103,6 +103,7 @@ class CheckSaveReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             for name, rows in {
                 "pgpl": "BOKL,SETL,PLYL\n7,471,6709\n",
+                "pgss": "BOKL,SETL\n7,471\n",
                 "pgsl": "BOKL,SETL,PBFM\n7,471,26\n",
                 "pgfm": "BOKL,PBFM\n7,26\n",
             }.items():
@@ -121,6 +122,7 @@ class CheckSaveReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             for name, rows in {
                 "pgpl": "BOKL,SETL,PLYL\n7,471,6709\n",
+                "pgss": "BOKL,SETL\n7,471\n",
                 "pgsl": "BOKL,SETL,PBFM\n",
                 "pgfm": "BOKL,PBFM\n7,26\n",
             }.items():
