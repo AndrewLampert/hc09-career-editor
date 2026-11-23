@@ -598,6 +598,40 @@ def links_of(plays):
     return out
 
 
+
+def playbook_link_issues(tables):
+    """Find broken references among PGPL, PGSL and PGFM without changing rows.
+
+    A play's (BOKL, SETL) must have a formation link in PGSL, and every
+    PGSL formation must be listed for that book in PGFM. A set may have
+    more than one PGSL formation link, so those are not treated as duplicates.
+    """
+    pgpl = tables.get("PGPL", [])
+    pgsl = tables.get("PGSL", [])
+    pgfm = tables.get("PGFM", [])
+    set_links = {(int(r["BOKL"]), int(r["SETL"])) for r in pgsl}
+    formation_links = {(int(r["BOKL"]), int(r["PBFM"])) for r in pgfm}
+    issues = []
+    seen_missing = set()
+    for index, row in enumerate(pgpl):
+        pair = (int(row["BOKL"]), int(row["SETL"]))
+        if pair not in set_links and pair not in seen_missing:
+            issues.append({
+                "kind": "play_without_formation_link",
+                "book": pair[0], "set": pair[1], "row": index,
+            })
+            seen_missing.add(pair)
+    seen_orphan = set()
+    for index, row in enumerate(pgsl):
+        pair = (int(row["BOKL"]), int(row["PBFM"]))
+        if pair not in formation_links and pair not in seen_orphan:
+            issues.append({
+                "kind": "formation_not_in_playbook",
+                "book": pair[0], "formation": pair[1], "row": index,
+            })
+            seen_orphan.add(pair)
+    return issues
+
 def insert_rows(rows, new, keys, identity=None):
     """A link table's rows (dicts of strings) with the new rows added: one that is there is not added twice (identity: the columns that make two rows the same link, default `keys`). The game's own rows
     come first in sorted order and the player's own after them; a new row goes into the sorted block. Returns (rows, number added)."""
