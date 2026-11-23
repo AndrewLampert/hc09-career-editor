@@ -140,10 +140,10 @@ class CheckSaveReportTests(unittest.TestCase):
     def test_playbook_link_diagnostics_reports_orphan_formation(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, rows in {
-                "pgpl": "BOKL,SETL,PLYL\\n7,471,6709\\n",
-                "pgss": "BOKL,SETL\\n7,471\\n",
-                "pgsl": "BOKL,SETL,PBFM\\n7,471,27\\n",
-                "pgfm": "BOKL,PBFM\\n7,26\\n",
+                "pgpl": "BOKL,SETL,PLYL\n7,471,6709\n",
+                "pgss": "BOKL,SETL\n7,471\n",
+                "pgsl": "BOKL,SETL,PBFM\n7,471,27\n",
+                "pgfm": "BOKL,PBFM\n7,26\n",
             }.items():
                 with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
                     f.write(rows)
