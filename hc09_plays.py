@@ -834,6 +834,10 @@ def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fie
     """
     name = clean_play_name(name)
     book_id, play_id = int(book_id), int(play_id)
+    fields = list(pppn_fields or (list(pppn_rows[0]) if pppn_rows else ("BOKL", "PLYL", "PPPM")))
+    name_field = "PPNN" if "PPNN" in fields else "PPPM"
+    if not {"BOKL", "PLYL", name_field}.issubset(fields):
+        raise ValueError("The save PPPN table has no recognized name field.")
     if not 1 <= book_id <= 10:
         raise ValueError("A custom playbook id must be from 1 to 10.")
     if not any(int(r.get("BOKL", -1)) == book_id and int(r.get("PLYL", -1)) == play_id
@@ -846,17 +850,16 @@ def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fie
     out = [dict(r) for r in pppn_rows]
     if matches:
         i = matches[0]
-        if "PPPM" not in out[i]:
-            raise ValueError("The save's PPPN table has no PPPM name field.")
-        if str(out[i].get("PPPM", "")) == name:
+        if name_field not in out[i]:
+            raise ValueError("The save PPPN table has no recognized name field.")
+        if str(out[i].get(name_field, "")) == name:
             return out, False, False
-        out[i]["PPPM"] = name
+        out[i][name_field] = name
         return out, True, False
-    fields = list(pppn_fields or (list(out[0]) if out else ("BOKL", "PLYL", "PPPM")))
     # The bridge zeroes a new record before importing. Blank values leave
     # numeric extra fields at zero and clear any optional text fields.
     new_row = {field: "" for field in fields}
-    new_row.update({"BOKL": str(book_id), "PLYL": str(play_id), "PPPM": name})
+    new_row.update({"BOKL": str(book_id), "PLYL": str(play_id), name_field: name})
     out.append(new_row)
     return out, True, True
 
