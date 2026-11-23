@@ -148,8 +148,13 @@ def candidate_rpcs3_dirs(recent_paths=(), extra_dirs=(), search_roots=(), search
     for d in common_rpcs3_dirs():
         if d not in out:
             out.append(d)
-    if not out:
-        out = search_rpcs3_dirs(search_roots, budget=search_budget)
+    # A standard RPCS3 install may exist in AppData while the user's actual
+    # portable emulator (and saves) lives elsewhere, e.g. under C:\\Emulators.
+    # Search the bounded roots as well; do not skip them just because another
+    # RPCS3 installation was found.
+    for found in search_rpcs3_dirs(search_roots, budget=search_budget):
+        if found not in out:
+            out.append(found)
     return out
 
 
