@@ -289,7 +289,7 @@ class FormationGroups:
             for g in groups:
                 if self._norm(self.name[g]) == fam:
                     return g
-        plain = [g for g in groups if self.name[g].lower() not in SPECIAL_GROUPS] or groups
+        plain = [g for g in groups if self._norm(self.name[g]) not in SPECIAL_GROUPS]
         return max(plain, key=lambda g: (self.sets_in[g], -self.order.get(g, 0)), default=None)
 
 
