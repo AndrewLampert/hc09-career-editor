@@ -7388,7 +7388,7 @@ class PlayDesignerDialog(tk.Toplevel):
             self.btn_files.configure(text="Change defense...", state="normal" if not self.is_mine() and GF is not None and DEF is not None else "disabled")
         else:
             self.btn_files.configure(text="Make a game play...", state="normal" if state == "normal" and not self.is_mine() and GF is not None else "disabled")
-        self.btn_book_name.configure(state="normal" if d is not None and not self.is_mine() and GF is not None else "disabled")
+        self.btn_book_name.configure(state="normal" if d is not None and GF is not None else "disabled")
         self.btn_add.configure(state="normal" if state == "normal" and not self.is_mine() and GF is not None and AP is not None else "disabled")
         self.btn_convert.configure(state="normal" if getattr(self.lib, "custom", None) and GF is not None and AP is not None else "disabled")
         self.btn_cpu.configure(state="normal" if getattr(self.lib, "custom", None) and self.my_profile else "disabled")
@@ -9346,7 +9346,8 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 self.lst.insert("end", f"{book_name(b)}   -   called \"{lib.name_in_book(self.plyl, b)}\"")
             else:
                 custom_name = d.custom_books.get(b, f"Custom playbook {b}")
-                shown = self._custom_current_names.get((b, self.plyl), lib.plays[self.plyl]["name"])
+                career_plyl = original_play_id_for_mounted(lib.custom, self.plyl)
+                shown = self._custom_current_names.get((b, career_plyl), lib.plays[self.plyl]["name"])
                 self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)")
         for i, entry in enumerate(self._entries):
             if entry in keep:
@@ -9460,7 +9461,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 if error:
                     lines.append(f"Custom book {bokl} ({label}): NOT changed ({error}).")
                 elif changed:
-                    self._custom_current_names[(bokl, plyl)] = name
+                    self._custom_current_names[(bokl, original_play_id_for_mounted(lib.custom, plyl))] = name
                     lines.append(f"Custom book {bokl} ({label}): {'new PPPN row added' if created else 'name updated'}.")
                     career_changed = career_changed or (path == db)
                 else:
