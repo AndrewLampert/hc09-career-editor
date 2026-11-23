@@ -323,25 +323,54 @@ def _find_signature(f, limit=TDB_SEARCH_LIMIT, chunk=4 << 20):
 
 
 def _db_start_in(f):
-    """mc02_db_start for a file that is already open (read from its start)."""
+    """Database offset for a bare DB, an MC02 container, or a PS3 HC09 save header."""
     head = f.read(12)
-    if head[:2] == b"DB":
+    if head[:len(TDB_SIGNATURE)] == TDB_SIGNATURE:
         return 0
-    if head[:4] != MC02_MAGIC or len(head) < 12:
-        return None
-    start = MC02_HEADER_SIZE + int.from_bytes(head[8:12], "big")
-    f.seek(start)
-    if f.read(2) == b"DB":
-        return start
-    found = _find_signature(f)                      # the header does not point at a database: look for one (as the converter does)
-    return found if found >= 0 else None
+    if head[:4] == MC02_MAGIC and len(head) >= 12:
+        start = MC02_HEADER_SIZE + int.from_bytes(head[8:12], "big")
+        f.seek(start)
+        if f.read(len(TDB_SIGNATURE)) == TDB_SIGNATURE:
+            return start
+        found = _find_signature(f)                  # tolerate an incorrect MC02 metadata length, as the converter does
+        return found if found >= 0 else None
+    # HC09's PS3 USR-DATA has a four-byte offset header. HC09Helper reads
+    # uint32be(header) + 4 to locate the database; it is not encrypted in
+    # RPCS3's savedata directory. Validate the full database signature before
+    # accepting the offset so unrelated files are not misclassified.
+    if len(head) >= 4:
+        start = int.from_bytes(head[:4], "big") + 4
+        if 0 < start < os.fstat(f.fileno()).st_size:
+            f.seek(start)
+            if f.read(len(TDB_SIGNATURE)) == TDB_SIGNATURE:
+                return start
+    return None
 
 
 def mc02_db_start(path):
-    """Where the database starts in a save file: after the MC02 header and its metadata block; 0 for a bare database; None when the file holds neither."""
+    """Where the database starts inside an MC02 Xbox 360/Xenia save; None otherwise."""
     try:
         with open(path, "rb") as f:
+            if f.read(4) != MC02_MAGIC:
+                return None
+            f.seek(0)
             return _db_start_in(f)
+    except OSError:
+        return None
+
+
+def ps3_db_start(path):
+    """Where the database starts inside an HC09 PS3 USR-DATA save; None otherwise."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4)
+            if len(head) != 4 or head == TDB_SIGNATURE[:4] or head == MC02_MAGIC:
+                return None
+            start = int.from_bytes(head, "big") + 4
+            if start <= 4 or start >= os.fstat(f.fileno()).st_size:
+                return None
+            f.seek(start)
+            return start if f.read(len(TDB_SIGNATURE)) == TDB_SIGNATURE else None
     except OSError:
         return None
 
