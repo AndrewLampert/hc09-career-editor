@@ -116,15 +116,15 @@ class CheckSaveReportTests(unittest.TestCase):
                 tempdir.return_value.__exit__.return_value = False
                 lines = check_save.playbook_link_diagnostics("career.usr",
                     {"PGPL": 1, "PGSL": 1, "PGSS": 1, "PGFM": 1}, "node")
-            self.assertIn("no missing PGPL-to-PGSS, PGPL-to-PGSL or PGSL-to-PGFM links", lines[0])
+            self.assertIn("no missing PGPL-to-PGSL or PGSL-to-PGFM links", lines[0])
 
-    def test_playbook_link_diagnostics_reports_set_missing_from_playbook(self):
+    def test_playbook_link_diagnostics_does_not_require_pgss_row(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, rows in {
-                "pgpl": "BOKL,SETL,PLYL\n7,471,6709\n",
-                "pgss": "BOKL,SETL\n",
-                "pgsl": "BOKL,SETL,PBFM\n7,471,26\n",
-                "pgfm": "BOKL,PBFM\n7,26\n",
+                "pgpl": "BOKL,SETL,PLYL\\n7,471,6709\\n",
+                "pgss": "BOKL,SETL\\n",
+                "pgsl": "BOKL,SETL,PBFM\\n7,471,26\\n",
+                "pgfm": "BOKL,PBFM\\n7,26\\n",
             }.items():
                 with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
                     f.write(rows)
@@ -134,9 +134,8 @@ class CheckSaveReportTests(unittest.TestCase):
                 tempdir.return_value.__enter__.return_value = folder
                 tempdir.return_value.__exit__.return_value = False
                 lines = check_save.playbook_link_diagnostics(
-                    "career.usr", {"PGPL": 1, "PGSL": 1, "PGSS": 1, "PGFM": 1}, "node")
-            self.assertIn("1 broken reference(s) found", lines[0])
-            self.assertIn("set 471: PGPL or PGSL references a set absent from PGSS", lines[1])
+                    "career.usr", {"PGPL": 1, "PGSL": 1, "PGSS": 0, "PGFM": 1}, "node")
+            self.assertIn("no missing PGPL-to-PGSL or PGSL-to-PGFM links", lines[0])
 
     def test_playbook_link_diagnostics_reports_missing_link(self):
         with tempfile.TemporaryDirectory() as folder:
