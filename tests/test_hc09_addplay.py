@@ -171,5 +171,23 @@ class PlaybookLinkIntegrityTests(unittest.TestCase):
         self.assertEqual([x["kind"] for x in issues], ["formation_not_in_playbook"])
 
 
+class ConvertMineSafetyTests(unittest.TestCase):
+    def test_special_teams_play_is_rejected_before_formation_group_selection(self):
+        class Library:
+            plays = {6709: {"name": "Onside Kick"}}
+
+            @staticmethod
+            def detail(_base):
+                return {"side": "other"}
+
+        class Groups:
+            def pick(self, *_args):
+                raise AssertionError("special-teams plays must be rejected before group selection")
+
+        plays, skipped = hc09_addplay.convert_mine(Library(), [6709], [252], Groups())
+        self.assertEqual(plays, [])
+        self.assertEqual(skipped, [(6709, "Only offensive plays can be converted for now.")])
+
+
 if __name__ == "__main__":
     unittest.main()
