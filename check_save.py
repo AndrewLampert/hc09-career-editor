@@ -91,7 +91,7 @@ def table_counts(db_path, node=None):
 
 def playbook_link_diagnostics(path, counts, node=None):
     """Read-only check of the career's PGPL -> PGSL -> PGFM references."""
-    if any(counts.get(name, 0) <= 0 for name in PLAYBOOK_TABLES):
+    if any(counts.get(name, 0) <= 0 for name in ("PGPL", "PGSL", "PGFM")):
         return []
     node = node or find_node()
     if not node:
