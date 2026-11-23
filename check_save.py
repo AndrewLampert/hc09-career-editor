@@ -365,7 +365,7 @@ def report(path, node=None):
 
 
 def custom_play_batch_report(node=None):
-    """Check every RPCS3 career save discovered in the standard emulator locations."""
+    """Check playbook links and custom-play definitions in every discovered RPCS3 career save."""
     rpc_dirs = D.candidate_rpcs3_dirs([], [], D.emulator_search_roots())
     rpc_saves = [
         {"platform": "RPCS3", "name": save["name"], "path": save["path"], "kind": "career"}
@@ -373,7 +373,7 @@ def custom_play_batch_report(node=None):
     ]
     if not rpc_saves:
         return ["No RPCS3 career saves were found in the usual RPCS3 save locations."]
-    lines = [f"RPCS3 custom-play scan: {len(rpc_saves)} career save(s) found.", ""]
+    lines = [f"RPCS3 save integrity scan: {len(rpc_saves)} career save(s) found.", ""]
     checked = 0
     for save in rpc_saves:
         path = save["path"]
@@ -384,6 +384,15 @@ def custom_play_batch_report(node=None):
                 lines.append(f"{name}: not recognized as a readable career save; skipped.")
                 continue
             counts = table_counts(path, node)
+            if all(counts.get(table, 0) > 0 for table in PLAYBOOK_TABLES):
+                try:
+                    details = playbook_link_diagnostics(path, counts, node)
+                    lines.extend("  " + item for item in details)
+                except CheckError as error:
+                    lines.append(f"  Playbook-link validation skipped: {error}")
+            else:
+                missing = [table for table in PLAYBOOK_TABLES if counts.get(table, 0) <= 0]
+                lines.append("  Playbook-link validation skipped; empty or missing table(s): " + ", ".join(missing) + ".")
             present = [table for table in CUSTOM_PLAY_TABLES if table in counts]
             if not present:
                 lines.append(f"{name}: {table_count} tables; custom-play tables not present.")
