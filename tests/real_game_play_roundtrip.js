@@ -161,7 +161,7 @@ async function main() {
 
         console.log(JSON.stringify({
             ok: true,
-            archivesScanned: originals.map(path.basename),
+            archivesScanned: originals.map(file => path.basename(file)),
             playDatabaseCopiesFound: scan.copies.length,
             testedEntry: { archive: path.basename(master.ast), index: master.index },
             reversibleChange: { table: 'SETP', key: { SETL: row.SETL, poso: row.poso }, field: 'artx', before, temporaryValue: after },
