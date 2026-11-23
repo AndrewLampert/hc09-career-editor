@@ -178,6 +178,28 @@ class PlaybookLinkIntegrityTests(unittest.TestCase):
         }
         self.assertEqual(hc09_addplay.playbook_link_issues(tables), [])
 
+    def test_exact_duplicate_set_formation_link_is_reported_but_distinct_formations_are_valid(self):
+        tables = {
+            "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
+            "PGSS": [{"BOKL": "7", "SETL": "471"}],
+            "PGSL": [
+                {"BOKL": "7", "SETL": "471", "PBFM": "26"},
+                {"BOKL": "7", "SETL": "471", "PBFM": "27"},
+                {"BOKL": "7", "SETL": "471", "PBFM": "26"},
+            ],
+            "PGFM": [
+                {"BOKL": "7", "PBFM": "26"},
+                {"BOKL": "7", "PBFM": "27"},
+            ],
+        }
+        issues = hc09_addplay.playbook_link_issues(tables)
+        self.assertEqual([x["kind"] for x in issues], ["duplicate_set_formation_link"])
+        self.assertEqual(
+            (issues[0]["book"], issues[0]["set"], issues[0]["formation"]),
+            (7, 471, 26),
+        )
+        self.assertEqual((issues[0]["row"], issues[0]["first_row"]), (2, 0))
+
     def test_same_formation_id_in_another_book_does_not_validate_link(self):
         tables = {
             "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
