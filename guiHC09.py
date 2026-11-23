@@ -2023,6 +2023,9 @@ class CSVModel:
 
         tmp_dir = tempfile.mkdtemp(prefix="hc09_bridge_save_")
         pending = {t: rows for t, rows in self.pb_pending.items() if t in PLAYBOOK_TABLE_HEADERS}
+        if CRASH is not None and pending:
+            CRASH.log_write("playbook save started tables=" + ",".join(
+                f"{t}:{len(rows)}" for t, rows in sorted(pending.items())))
         # Playbook edits and a first special skill for someone add rows, which an ordinary import never does, so
         # growing is enabled for exactly the tables that grew.
         grown = list(pending) + (["PSSK"] if len(self.pssk) > self.pssk_stored else [])
@@ -2071,6 +2074,8 @@ class CSVModel:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         if pending:
             self.pb_pending = {}
+            if CRASH is not None:
+                CRASH.log_write("playbook save succeeded tables=" + ",".join(sorted(pending)))
         return backup_path
 
     def _check_playbook_save(self, import_result, pending, backup_path):
@@ -11117,6 +11122,8 @@ class PlaybookData:
             self.dirty_tables = dirty_before
             self._index_structure()
             raise ValueError("That change would break the playbook's structure and was not applied: " + "; ".join(f"{v[0]}" for v in sorted(new)[:3]))
+        if CRASH is not None:
+            CRASH.log_playbook_rows("copy applied", plan["rows"])
         return sum(len(r) for r in plan["rows"].values())
 
     REMOVE_KEYS = {"PGPL": ("BOKL", "SETL", "PLYL"), "PGSS": ("BOKL", "SETL"), "PGSL": ("BOKL", "SETL", "PBFM"), "PGFM": ("BOKL", "PBFM")}
@@ -11253,6 +11260,8 @@ class PlaybookData:
             self.dirty_tables = dirty_before
             self._index_structure()
             raise ValueError("That change would break the playbook's structure and was not applied: " + "; ".join(f"{v[0]}" for v in sorted(new)[:3]))
+        if CRASH is not None:
+            CRASH.log_playbook_rows("removal applied", plan["rows"])
         return len(plan["plays"])
 
     def set_usage(self, coaches):
