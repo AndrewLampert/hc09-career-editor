@@ -11046,6 +11046,9 @@ class PlaybookData:
             plan["error"] = f"Unknown kind {kind}"
             return plan
 
+        if plan.get("error"):
+            return plan
+
         plan["counted_before"] = self.counted_plays(tgt)
         plan["plays_after"] = plan["counted_before"] + new_counted
         if not any(plan["rows"].values()):
