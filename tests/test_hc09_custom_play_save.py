@@ -364,7 +364,7 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
 
             self.assertTrue(changed)
             self.assertFalse(created)
-            self.assertNotIn("allow_append", captured["kwargs"])
+            self.assertEqual(captured["kwargs"]["allow_append"], ())
             self.assertEqual(captured["rows"][1], ["3", "10", "New custom name"])
 
     def test_custom_book_name_save_refuses_unlinked_play_before_write(self):
