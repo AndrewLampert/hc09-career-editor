@@ -153,7 +153,7 @@ class CheckSaveReportTests(unittest.TestCase):
                 with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
                     f.write(body)
             completed = SimpleNamespace(returncode=0, stdout="", stderr="")
-            with mock.patch.object(check_save.tempfile, "TemporaryDirectory") as tempdir, \\
+            with mock.patch.object(check_save.tempfile, "TemporaryDirectory") as tempdir, \
                  mock.patch.object(check_save.subprocess, "run", return_value=completed):
                 tempdir.return_value.__enter__.return_value = folder
                 tempdir.return_value.__exit__.return_value = False
