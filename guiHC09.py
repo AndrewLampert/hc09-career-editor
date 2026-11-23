@@ -10986,6 +10986,28 @@ class PlaybookData:
                     tf = target_formation(f)
                     if tf not in mapped:
                         mapped.append(tf)
+            # A special-teams set must stay under a special-teams formation.
+            # The optional "put new sets under..." choice used to allow (for
+            # example) a Kickoff set to be linked under Split Backs. The playbook
+            # stayed structurally valid, but the game displayed the play in the
+            # wrong formation. Apply the same category check to existing links
+            # too, so a later copy cannot silently extend a bad mapping.
+            source_special = self.set_is_special(src, setl)
+            for tf in mapped:
+                target_srfm = self.formation_srfm.get((tgt, tf), planned_forms.get(tf, ""))
+                target_name = self.formation_name.get(tf) or self.formation_name.get(target_srfm)
+                target_special = not target_name or target_name.lower() in PLAYBOOK_SPECIAL_FORMATIONS
+                if source_special != target_special:
+                    source_kind = "special-teams" if source_special else "ordinary"
+                    target_kind = "special-teams" if target_special else "ordinary"
+                    target_label = self.formation_base(tf, target_srfm)
+                    plan["error"] = (
+                        f'"{self.set_label(setl)}" is an {source_kind} set and cannot be placed '
+                        f'under the {target_kind} formation "{target_label}". Choose a '
+                        "formation from the same category instead."
+                    )
+                    return
+
             if set_is_new and setl not in planned_sets:
                 planned_sets.add(setl)
                 plan["rows"]["PGSS"].append({"BOKL": tgt, "SETL": setl})
