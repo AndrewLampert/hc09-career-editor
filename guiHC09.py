@@ -15425,8 +15425,17 @@ class App(tk.Tk):
                     # agree about which custom books contain a play.
                     profile_pgpl = self._export_tables(profile, ["PGPL"])["PGPL"][1]
                     career = self.model.db_path or ""
-                    career_tables = self._export_tables(career, ["PGPL", "PPPN"]) if career and os.path.isfile(career) else {}
-                    linked_rows = list(profile_pgpl) + list(career_tables.get("PGPL", ([], []))[1])
+                    career_pgpl, career_pppn = [], []
+                    if career and os.path.isfile(career):
+                        try:
+                            career_pgpl = self._export_tables(career, ["PGPL"])["PGPL"][1]
+                        except Exception:
+                            pass
+                        try:
+                            career_pppn = self._export_tables(career, ["PPPN"])["PPPN"][1]
+                        except Exception:
+                            pass
+                    linked_rows = list(profile_pgpl) + list(career_pgpl)
                     for row in linked_rows:
                         try:
                             bokl, setl, plyl = int(row["BOKL"]), int(row["SETL"]), int(row["PLYL"])
@@ -15435,7 +15444,7 @@ class App(tk.Tk):
                         if 1 <= bokl <= 10:
                             mounted = mounted_play_id_for_link(lib.custom, setl, plyl)
                             custom_book_plays.setdefault(bokl, set()).add(mounted)
-                    for row in career_tables.get("PPPN", ([], []))[1]:
+                    for row in career_pppn:
                         try:
                             key = (int(row["BOKL"]), int(row["PLYL"]))
                             value = str(row.get("PPNN", row.get("PPPM", ""))).strip()
