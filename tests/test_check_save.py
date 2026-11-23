@@ -168,5 +168,29 @@ class CheckSaveReportTests(unittest.TestCase):
         )
 
 
+    def test_custom_play_batch_report_checks_only_rpc3s_careers(self):
+        saves = [
+            {"platform": "RPCS3", "kind": "career", "name": "CAREER-TEST", "path": "test.usr"},
+            {"platform": "Xenia", "kind": "career", "name": "XENIA", "path": "xenia"},
+            {"platform": "RPCS3", "kind": "profile", "name": "PROFILE", "path": "profile"},
+        ]
+        counts = {name: 0 for name in check_save.CUSTOM_PLAY_TABLES}
+        counts.update({"PGPL": 1, "PGSL": 1, "PGSS": 1, "PGFM": 1})
+        with mock.patch.object(check_save, "find_saves", return_value=(saves, [], False)), \\
+             mock.patch.object(check_save.D, "classify_save", return_value=("career", 208)), \\
+             mock.patch.object(check_save, "table_counts", return_value=counts) as inspect:
+            lines = check_save.custom_play_batch_report("node")
+        inspect.assert_called_once_with("test.usr", "node")
+        self.assertTrue(any("CAREER-TEST: 208 tables; PBPL=0 custom plays, SETL=0 custom sets." in line for line in lines))
+        self.assertIn("Readable career saves checked: 1 of 1.", lines)
+
+    def test_custom_play_batch_report_handles_no_rpc3_saves(self):
+        with mock.patch.object(check_save, "find_saves", return_value=([], [], False)):
+            self.assertEqual(
+                check_save.custom_play_batch_report(),
+                ["No RPCS3 career saves were found in the usual RPCS3 save locations."],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
