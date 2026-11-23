@@ -9085,9 +9085,9 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
         self.custom_keys = set(custom_keys)
         self.original_books = [dict(b) for b in books]
         self.staged = {}                                  # (BGID, BOFF) -> the new name waiting to be written
-        ttk.Label(self, text="Rename the game's playbooks", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, text="Rename game and custom playbooks", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=780, justify="left", padding=(14, 0, 14, 6),
-                  text="Pick a playbook, type its new name (up to 21 characters) and press Set name; do that for as many as you like, then Write the names to the game files. Close RPCS3 first. "
+                  text="Pick a playbook, type its new name (up to 21 characters) and press Set name; do that for as many as you like, then Write the names. Stock names go to the game files; custom names go to your profile and career saves. Close RPCS3 first. "
                        "The first time, the changed file entry is saved in Documents\\hc09-game-file-backup, and Put the names back restores it (Put the game files back in the play windows restores it too). "
                        "Ten playbooks are listed twice, once under the coach's name and once as \"<coach>'s Plays\"; each row has its own name.").pack(anchor="w")
         top = ttk.Frame(self)
@@ -9254,7 +9254,7 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
             self._fill()
             count = stock_count + custom_count
             self.lbl_result.configure(text=f"Done: {count} playbook name{'s' if count != 1 else ''} saved ({stock_count} game-file, {custom_count} custom-save).")
-            messagebox.showinfo("Rename playbooks", f"Done: {count} playbook name{'s' if count != 1 else ''} saved.\\n\\nStock names were written to the game files; custom names were written to the profile save and the career copy when present.", parent=self)
+            messagebox.showinfo("Rename playbooks", f"Done: {count} playbook name{'s' if count != 1 else ''} saved.\n\nStock names were written to the game files; custom names were written to the profile save and the career copy when present.", parent=self)
             if stock_renames:
                 app._apply_book_renames(stock_renames)
 
@@ -15937,7 +15937,7 @@ class App(tk.Tk):
                 tmp = tempfile.mkdtemp(prefix="hc09_custom_book_rename_")
                 try:
                     with open(os.path.join(tmp, "plab.csv"), "w", newline="", encoding="utf-8") as f:
-                        w = csv.writer(f, lineterminator="\\r\\n")
+                        w = csv.writer(f, lineterminator="\r\n")
                         w.writerow(headers)
                         for row in rows:
                             w.writerow([row.get(h, "") for h in headers])
