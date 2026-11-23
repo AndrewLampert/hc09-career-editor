@@ -11007,6 +11007,12 @@ class PlaybookData:
                 target_pairs = []
                 target_categories = {formation_is_special(
                     tgt, tf, self.formation_srfm.get((tgt, tf), "")) for tf in mapped}
+                if len(source_categories) > 1 or len(target_categories) > 1:
+                    plan["error"] = (
+                        f'"{self.set_label(setl)}" is linked across special-teams and ordinary '
+                        "formations. The copy was not applied because that mixed category is unsafe."
+                    )
+                    return
                 if source_categories and target_categories and source_categories != target_categories:
                     plan["error"] = (
                         f'"{self.set_label(setl)}" has source formation categories that do not '
