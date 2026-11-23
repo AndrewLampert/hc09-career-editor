@@ -5354,13 +5354,37 @@ def rename_plays_in_save(model, db_path, renames, expect=None, backup=True):
 
 
 
-def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=True):
-    """Give one linked play a custom-playbook-only name in a profile/career save.
+def custom_book_play_names_from_save(model, db_path):
+    """Read the career's per-playbook custom names: {(BOKL, PLYL): PPPM}."""
+    if not db_path or "-PROFILE-" in str(db_path).upper():
+        return {}
+    tmp = tempfile.mkdtemp(prefix="hc09_custom_book_names_read_")
+    try:
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PPPN"])
+        path = os.path.join(tmp, "pppn.csv")
+        if not os.path.isfile(path):
+            return {}
+        out = {}
+        for row in read_csv_dicts(path):
+            try:
+                book, play = int(row["BOKL"]), int(row["PLYL"])
+                value = str(row.get("PPPM", "")).strip()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 1 <= book <= 10 and value:
+                out[(book, play)] = value
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
-    PPPN in qkl_boot.ast is the shipped-book namespace. Custom books use BOKL
-    1..10 in the save namespace, so these rows must be written to the save's
-    PPPN table, never to the game's qkl_boot.ast entry. New rows use the
-    bridge's explicitly allowed PPPN spare capacity. Returns (changed, created).
+
+def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=True):
+    """Write a custom-book-only play name to the career's PPPN table.
+
+    The profile holds custom playbook definitions and links, not PPPN. The
+    career's PPPN schema may have additional fields beyond BOKL, PLYL and PPPM;
+    preserve them when updating and initialize them to zero/blank on append.
+    Returns (changed, created).
     """
     tmp = tempfile.mkdtemp(prefix="hc09_custom_book_name_")
     try:
@@ -5368,15 +5392,17 @@ def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=
         pppn_path = os.path.join(tmp, "pppn.csv")
         pgpl_path = os.path.join(tmp, "pgpl.csv")
         if not os.path.isfile(pppn_path):
-            raise RuntimeError("This save has no PPPN table; custom-book play names cannot be written here.")
+            raise RuntimeError("This career save has no PPPN table; custom-book play names cannot be written here.")
         if not os.path.isfile(pgpl_path):
-            raise RuntimeError("This save has no PGPL playbook links; the custom-book play cannot be verified.")
+            raise RuntimeError("This career save has no PGPL playbook links; the custom-book play cannot be verified.")
         with open(pppn_path, newline="", encoding="utf-8-sig") as f:
             headers = next(csv.reader(f))
-        if set(headers) != {"BOKL", "PLYL", "PPPM"}:
-            raise RuntimeError("The save's PPPN table has an unexpected layout; no name was written.")
+        required = {"BOKL", "PLYL", "PPPM"}
+        if not required.issubset(headers) or len(headers) != len(set(headers)):
+            raise RuntimeError("The career's PPPN table is missing a required BOKL, PLYL or PPPM field; no name was written.")
         rows, changed, created = custom_book_name_rows(
-            read_csv_dicts(pppn_path), read_csv_dicts(pgpl_path), book_id, plyl, name
+            read_csv_dicts(pppn_path), read_csv_dicts(pgpl_path), book_id, plyl, name,
+            pppn_fields=headers
         )
         if not changed:
             return False, False
@@ -9294,6 +9320,12 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
     def _fill_books(self):
         lib, d = self.designer.lib, self.designer
         self._custom_current_names = getattr(self, "_custom_current_names", {})
+        db_path = getattr(self.app.model, "db_path", None)
+        if db_path and "-PROFILE-" not in str(db_path).upper():
+            try:
+                self._custom_current_names.update(custom_book_play_names_from_save(self.app.model, db_path))
+            except Exception:
+                pass
         keep = [self._entries[i] for i in self.lst.curselection()] if getattr(self, "_entries", None) else []
         available = set(lib.books_of_play.get(self.plyl, ()))
 
@@ -9320,8 +9352,8 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 self.lst.selection_set(i)
         if self._custom_books:
             self.lbl_result.configure(
-                text="Custom books are listed separately from shipped books. Their names are written to PPPN in the profile/career save, not qkl_boot.ast. "
-                     "This save-level route is experimental and still needs an in-game check. A .bak copy is kept beside each save before it is changed; the Put the game files back button below does not restore save changes."
+                text="Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
+                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The custom-book name behavior still needs an in-game check."
             )
         elif available - set(self._books):
             self.lbl_result.configure(
@@ -9348,7 +9380,6 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             return
 
         db = getattr(app.model, "db_path", None)
-        profile = d.my_profile or app.default_save_targets().get("profile")
         save_paths = []
         if custom_targets:
             if not db or "-PROFILE-" in db.upper():
@@ -9358,8 +9389,6 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 messagebox.showerror("Rename in playbooks", "The open career has unsaved changes. Save it first, then try again.", parent=self)
                 return
             save_paths.append(("career", db))
-            if profile and os.path.isfile(profile) and os.path.abspath(profile) != os.path.abspath(db):
-                save_paths.append(("profile", profile))
 
         archives = None
         if everywhere or picked_stock:
@@ -9375,7 +9404,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         if everywhere or picked_stock:
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
-            details.append("Custom-book names are written to the PPPN table in your profile and career saves. A .bak backup is made beside each save. This save-level feature has not yet been confirmed in a game.")
+            details.append("Custom-book names are written only to the career save's PPPN table. A .bak backup is made for that save. This feature still needs an in-game check.")
         if not messagebox.askyesno(
             "Rename in playbooks",
             f"Rename {d.lib.plays[self.plyl]['name']} to {name} {where}?\n\n" + "\n\n".join(details),
