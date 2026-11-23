@@ -118,6 +118,15 @@ class PlayDataHelperTests(unittest.TestCase):
         self.assertEqual(hc09_plays.mounted_play_id_for_link(custom, 99, 28), 28)
 
 
+    def test_original_play_id_for_mounted_returns_profile_id_for_custom_play(self):
+        custom = {
+            100028: {"setl": 66, "plyl": 28, "name": "HB DIRECT"},
+        }
+
+        self.assertEqual(hc09_plays.original_play_id_for_mounted(custom, 100028), 28)
+        # Stock plays already use their career/game id and pass through unchanged.
+        self.assertEqual(hc09_plays.original_play_id_for_mounted(custom, 28), 28)
+
     def test_custom_book_name_rows_adds_save_scoped_override_only_for_linked_play(self):
         pppn = [{"BOKL": "252", "PLYL": "10", "PPPM": "Stock name"}]
         pgpl = [{"BOKL": "3", "PLYL": "10"}, {"BOKL": "252", "PLYL": "10"}]

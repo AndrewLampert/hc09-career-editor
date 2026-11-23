@@ -838,6 +838,17 @@ def mounted_play_id_for_link(custom, set_id, play_id):
     return play_id
 
 
+def original_play_id_for_mounted(custom, mounted_play_id):
+    """Return the profile's original PLYL for a mounted custom play id.
+
+    Career PGPL links and PPPN overrides use the original save id, while the
+    Play Designer uses the shifted mounted id to avoid collisions with stock
+    plays.
+    """
+    info = custom.get(int(mounted_play_id))
+    return int(info["plyl"]) if info is not None else int(mounted_play_id)
+
+
 def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fields=None):
     """Set a custom playbook's own PPPN name for one linked play.
 
