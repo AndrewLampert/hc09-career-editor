@@ -125,6 +125,8 @@ def playbook_link_diagnostics(path, counts, node=None):
     for issue in issues[:20]:
         if issue["kind"] == "formation_not_in_playbook":
             lines.append(f"  Book {issue['book']}, formation {issue['formation']}: PGSL references a formation absent from PGFM.")
+        elif issue["kind"] == "duplicate_set_formation_link":
+            lines.append(f"  Book {issue['book']}, set {issue['set']}, formation {issue['formation']}: duplicate PGSL link at row {issue['row']} (first at row {issue['first_row']}).")
         else:
             lines.append(f"  Unrecognized playbook-link issue: {issue}.")
     if len(issues) > 20:
