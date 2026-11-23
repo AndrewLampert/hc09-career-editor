@@ -825,6 +825,19 @@ def rename_rows(rows, renames, expect=None):
     return out, renamed, skipped
 
 
+def mounted_play_id_for_link(custom, set_id, play_id):
+    """Return a mounted custom PLYL only when both its original SETL and PLYL match.
+
+    Profile play ids can overlap with stock-game ids, so PLYL alone is not
+    enough to identify a profile custom play.
+    """
+    set_id, play_id = int(set_id), int(play_id)
+    for mounted, info in custom.items():
+        if int(info["setl"]) == set_id and int(info["plyl"]) == play_id:
+            return int(mounted)
+    return play_id
+
+
 def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fields=None):
     """Set a custom playbook's own PPPN name for one linked play.
 
