@@ -643,6 +643,86 @@ def playbook_link_issues(tables):
             seen_orphan.add(pair)
     return issues
 
+
+def custom_play_issues(tables):
+    """Find broken custom-play references and incomplete slot definitions (read-only).
+
+    The Create-a-Play data has one PBPL row per play, one SETL row per
+    custom set, and eleven position slots (0..10) in SETP and PLYS.
+    SETG alignment rows refer to both a SETP slot and an SGFF group.
+    """
+    issues = []
+
+    def number(row, field):
+        try:
+            return int(row[field])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def duplicates(rows, field, kind):
+        seen, reported = set(), set()
+        for row in rows:
+            value = number(row, field)
+            if value is None:
+                issues.append({"kind": "invalid_id", "table": kind, "field": field})
+            elif value in seen and value not in reported:
+                issues.append({"kind": kind, "id": value})
+                reported.add(value)
+            seen.add(value)
+
+    pbpl, setl = tables.get("PBPL", []), tables.get("SETL", [])
+    setp, plys = tables.get("SETP", []), tables.get("PLYS", [])
+    setg, sgff = tables.get("SETG", []), tables.get("SGFF", [])
+    duplicates(pbpl, "PLYL", "duplicate_play_id")
+    duplicates(setl, "SETL", "duplicate_set_id")
+
+    play_ids = {number(r, "PLYL") for r in pbpl}
+    set_ids = {number(r, "SETL") for r in setl}
+    play_ids.discard(None)
+    set_ids.discard(None)
+
+    for row in pbpl:
+        play, set_id = number(row, "PLYL"), number(row, "SETL")
+        if set_id is not None and set_id not in set_ids:
+            issues.append({"kind": "play_set_missing", "play": play, "set": set_id})
+
+    def check_slots(rows, owner_field, owner_ids, kind):
+        grouped = collections.defaultdict(list)
+        for row in rows:
+            owner, pos = number(row, owner_field), number(row, "poso")
+            if owner not in owner_ids:
+                issues.append({"kind": kind + "_owner_missing", "owner": owner})
+            else:
+                grouped[owner].append(pos)
+        for owner in sorted(owner_ids):
+            positions = grouped.get(owner, [])
+            if len(positions) != 11 or set(positions) != set(range(11)):
+                issues.append({"kind": kind + "_slots_invalid", "owner": owner,
+                               "rows": len(positions)})
+
+    check_slots(setp, "SETL", set_ids, "set")
+    check_slots(plys, "PLYL", play_ids, "play")
+
+    slot_owner = {number(r, "SETP"): number(r, "SETL") for r in setp
+                  if number(r, "SETP") is not None}
+    group_owner = {number(r, "SGF_"): number(r, "SETL") for r in sgff
+                   if number(r, "SGF_") is not None}
+    for row in setg:
+        slot, group = number(row, "SETP"), number(row, "SGF_")
+        if slot not in slot_owner:
+            issues.append({"kind": "alignment_slot_missing", "slot": slot})
+        if group not in group_owner:
+            issues.append({"kind": "alignment_group_missing", "group": group})
+        elif slot in slot_owner and group_owner[group] != slot_owner[slot]:
+            issues.append({"kind": "alignment_set_mismatch", "slot": slot, "group": group})
+
+    for table in ("PLPD", "PLRD", "PLCM"):
+        for row in tables.get(table, []):
+            play = number(row, "PLYL")
+            if play not in play_ids:
+                issues.append({"kind": "detail_play_missing", "table": table, "play": play})
+    return issues
+
 def insert_rows(rows, new, keys, identity=None):
     """A link table's rows (dicts of strings) with the new rows added: one that is there is not added twice (identity: the columns that make two rows the same link, default `keys`). The game's own rows
     come first in sorted order and the player's own after them; a new row goes into the sorted block. Returns (rows, number added)."""
