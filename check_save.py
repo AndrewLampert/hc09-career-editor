@@ -125,8 +125,12 @@ def playbook_link_diagnostics(path, counts, node=None):
     for issue in issues[:20]:
         if issue["kind"] == "play_without_formation_link":
             lines.append(f"  Book {issue['book']}, set {issue['set']}: play membership has no PGSL formation link.")
-        else:
+        elif issue["kind"] == "formation_not_in_playbook":
             lines.append(f"  Book {issue['book']}, formation {issue['formation']}: PGSL references a formation absent from PGFM.")
+        elif issue["kind"] == "set_not_in_playbook":
+            lines.append(f"  Book {issue['book']}, set {issue['set']}: PGPL or PGSL references a set absent from PGSS.")
+        else:
+            lines.append(f"  Unrecognized playbook-link issue: {issue}.")
     if len(issues) > 20:
         lines.append(f"  ...and {len(issues) - 20} more.")
     return lines
