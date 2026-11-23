@@ -150,6 +150,12 @@ class PlaybookLinkIntegrityTests(unittest.TestCase):
         self.assertEqual([x["kind"] for x in issues], ["formation_not_in_playbook"])
         self.assertEqual((issues[0]["book"], issues[0]["formation"]), (7, 26))
 
+    def test_stock_play_membership_does_not_require_pgsl_row(self):
+        tables = {
+            "PGPL": [{"BOKL": "460", "SETL": "218", "PLYL": "6709"}],
+            "PGSS": [], "PGSL": [], "PGFM": [{"BOKL": "460", "PBFM": "26"}],
+        }
+        self.assertEqual(hc09_addplay.playbook_link_issues(tables), [])
     def test_playbook_set_without_quick_sub_package_need_not_be_in_pgss(self):
         tables = {
             "PGPL": [{"BOKL": "7", "SETL": "471", "PLYL": "6709"}],
