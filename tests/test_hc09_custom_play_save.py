@@ -295,5 +295,94 @@ class CustomPlaySaveWriteTests(unittest.TestCase):
                 self.assertEqual(f.read(), b"original-save")
 
 
+
+    def test_custom_book_name_save_appends_only_the_custom_pppn_row(self):
+        with tempfile.TemporaryDirectory() as folder:
+            captured = {}
+
+            def bridge(args):
+                if args[0] != "export":
+                    raise AssertionError(args)
+                out = args[args.index("--out") + 1]
+                with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["BOKL", "PLYL", "PPPM"])
+                    w.writerow(["252", "10", "Stock name"])
+                with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
+                    w.writerow(["3", "5", "10", "4"])
+                return {}
+
+            def write(_model, _db, out, tables, **kwargs):
+                captured["tables"] = list(tables)
+                captured["kwargs"] = kwargs
+                with open(os.path.join(out, "pppn.csv"), newline="", encoding="utf-8") as f:
+                    captured["rows"] = list(csv.reader(f))
+
+            model = FakeBridgeModel(bridge)
+            with mock.patch.object(guiHC09, "write_tables_in_save", side_effect=write):
+                changed, created = guiHC09.rename_custom_book_play_in_save(
+                    model, os.path.join(folder, "career.usr"), 3, 10, "Custom name"
+                )
+
+            self.assertTrue(changed)
+            self.assertTrue(created)
+            self.assertEqual(captured["tables"], ["PPPN"])
+            self.assertEqual(captured["kwargs"]["allow_append"], ["PPPN"])
+            self.assertEqual(captured["rows"], [
+                ["BOKL", "PLYL", "PPPM"],
+                ["252", "10", "Stock name"],
+                ["3", "10", "Custom name"],
+            ])
+
+    def test_custom_book_name_save_updates_existing_row_without_appending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            captured = {}
+
+            def bridge(args):
+                out = args[args.index("--out") + 1]
+                with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["BOKL", "PLYL", "PPPM"])
+                    w.writerow(["3", "10", "Old custom name"])
+                with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["BOKL", "SETL", "PLYL", "PLTP"])
+                    w.writerow(["3", "5", "10", "4"])
+                return {}
+
+            def write(_model, _db, out, tables, **kwargs):
+                captured["kwargs"] = kwargs
+                with open(os.path.join(out, "pppn.csv"), newline="", encoding="utf-8") as f:
+                    captured["rows"] = list(csv.reader(f))
+
+            with mock.patch.object(guiHC09, "write_tables_in_save", side_effect=write):
+                changed, created = guiHC09.rename_custom_book_play_in_save(
+                    FakeBridgeModel(bridge), os.path.join(folder, "career.usr"), 3, 10, "New custom name"
+                )
+
+            self.assertTrue(changed)
+            self.assertFalse(created)
+            self.assertNotIn("allow_append", captured["kwargs"])
+            self.assertEqual(captured["rows"][1], ["3", "10", "New custom name"])
+
+    def test_custom_book_name_save_refuses_unlinked_play_before_write(self):
+        with tempfile.TemporaryDirectory() as folder:
+            def bridge(args):
+                out = args[args.index("--out") + 1]
+                with open(os.path.join(out, "pppn.csv"), "w", newline="", encoding="utf-8") as f:
+                    f.write("BOKL,PLYL,PPPM\\n")
+                with open(os.path.join(out, "pgpl.csv"), "w", newline="", encoding="utf-8") as f:
+                    f.write("BOKL,SETL,PLYL,PLTP\\n")
+                return {}
+
+            with mock.patch.object(guiHC09, "write_tables_in_save") as write:
+                with self.assertRaisesRegex(ValueError, "not linked"):
+                    guiHC09.rename_custom_book_play_in_save(
+                        FakeBridgeModel(bridge), os.path.join(folder, "career.usr"), 3, 10, "Name"
+                    )
+                write.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
