@@ -73,6 +73,20 @@ class PlaybookCopyFormationCategoryTests(unittest.TestCase):
         self.assertEqual(plan["rows"]["PGSL"], [])
         self.assertEqual(plan["rows"]["PGPL"], [])
 
+    def test_mixed_source_formation_links_cannot_hide_special_teams_mismatch(self):
+        data = self.make_data()
+        # The same stock set has a valid Kickoff link and a bad Split Backs link.
+        data.tables["PGSL"].append({"BOKL": "1", "SETL": "471", "PBFM": "200"})
+        data._index_structure()
+
+        plan = data.plan_copy("1", "2", "play", ("471", "6709"), into_formation="200")
+
+        self.assertIn("source formation categories", plan["error"])
+        self.assertEqual(plan["rows"]["PGFM"], [])
+        self.assertEqual(plan["rows"]["PGSS"], [])
+        self.assertEqual(plan["rows"]["PGSL"], [])
+        self.assertEqual(plan["rows"]["PGPL"], [])
+
     def test_copy_into_existing_mislinked_set_is_rejected_without_rows(self):
         data = self.make_data()
         # Target already owns this set, but has it linked to an ordinary formation.
