@@ -366,8 +366,11 @@ def report(path, node=None):
 
 def custom_play_batch_report(node=None):
     """Check every RPCS3 career save discovered in the standard emulator locations."""
-    saves, _searched, _timed_out = find_saves(search=False)
-    rpc_saves = [save for save in saves if save.get("platform") == "RPCS3" and save.get("kind") == "career"]
+    rpc_dirs = D.candidate_rpcs3_dirs([], [], D.emulator_search_roots())
+    rpc_saves = [
+        {"platform": "RPCS3", "name": save["name"], "path": save["path"], "kind": "career"}
+        for save in D.list_saves(D.savedata_roots(rpc_dirs))
+    ]
     if not rpc_saves:
         return ["No RPCS3 career saves were found in the usual RPCS3 save locations."]
     lines = [f"RPCS3 custom-play scan: {len(rpc_saves)} career save(s) found.", ""]
