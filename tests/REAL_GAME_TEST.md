@@ -37,3 +37,16 @@ node tests\real_game_roundtrip.js --save "C:\path\to\BLUS30128-CAREER-TEST" --as
 \`\`\`
 
 A successful run prints JSON with ok: true, the save helper type, number of tables checked, the reversible field edit and restore, and the number of populated play-set entries found. A failure prints the exact stage that failed. Do not use a save that is actively being changed by the game.
+
+## Stock-play archive write/restore test
+
+This separate opt-in test exercises the same entry-patch bridge used by the stock-play editor. It copies both supplied AST archives into a temporary directory, scans the copies, changes one numeric alignment value in the master play database, reads the changed value back, restores the saved entry, and verifies that both complete temporary archives have their original SHA-256 hashes. The supplied game archives are never passed to the writer.
+
+Run from the repository root in CMD or PowerShell, with the game and emulator closed:
+
+```cmd
+node tests\\real_game_play_roundtrip.js --asts "C:\\path\\to\\qkl_boot.ast,C:\\path\\to\\qkl_fe2ig.ast"
+```
+
+The test copies both large archives, so allow several gigabytes of free space and time for the scan and hash checks. It deletes its temporary copies when finished. It does not prove that the game accepts a changed play in gameplay; that still requires a separate RPCS3 test.
+
