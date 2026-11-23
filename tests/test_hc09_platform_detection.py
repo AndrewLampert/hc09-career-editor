@@ -20,7 +20,7 @@ class PlatformDetectionTests(unittest.TestCase):
     def test_rpcs3_ps3_usr_data_header_is_detected_without_decryption(self):
         # HC09Helper uses uint32be(header) + 4 as the database start.
         database = (
-            detect.TDB_SIGNATURE + b"\\x00" * 8
+            detect.TDB_SIGNATURE + b"\x00" * 8
             + (208).to_bytes(4, "big")
         )
         prefix_size = 0x100
@@ -40,7 +40,7 @@ class PlatformDetectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "not-a-save")
             with open(path, "wb") as f:
-                f.write((0x100 - 4).to_bytes(4, "big") + b"\\x00" * 0x200)
+                f.write((0x100 - 4).to_bytes(4, "big") + b"\x00" * 0x200)
             self.assertIsNone(detect.ps3_db_start(path))
             self.assertEqual(detect.classify_save(path), ("other", None))
 
