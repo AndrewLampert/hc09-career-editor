@@ -206,5 +206,50 @@ class ConvertMineSafetyTests(unittest.TestCase):
         self.assertEqual(skipped, [(6709, "Only offensive plays can be converted for now.")])
 
 
+
+class CustomPlayIntegrityTests(unittest.TestCase):
+    @staticmethod
+    def valid_tables():
+        slots = [{"SETL": "5", "SETP": str(100 + i), "poso": str(i)} for i in range(11)]
+        play_slots = [{"PLYL": "9", "poso": str(i)} for i in range(11)]
+        return {
+            "PBPL": [{"PLYL": "9", "SETL": "5"}],
+            "SETL": [{"SETL": "5"}],
+            "SETP": slots,
+            "PLYS": play_slots,
+            "SGFF": [{"SETL": "5", "SGF_": "20", "dflt": "1"}],
+            "SETG": [{"SETP": str(100 + i), "SGF_": "20"} for i in range(11)],
+            "PLPD": [], "PLRD": [], "PLCM": [],
+        }
+
+    def test_complete_custom_play_passes(self):
+        self.assertEqual(hc09_addplay.custom_play_issues(self.valid_tables()), [])
+
+    def test_missing_play_set_is_reported(self):
+        tables = self.valid_tables()
+        tables["PBPL"][0]["SETL"] = "77"
+        issues = hc09_addplay.custom_play_issues(tables)
+        self.assertIn("play_set_missing", [x["kind"] for x in issues])
+
+    def test_incomplete_or_duplicate_slot_positions_are_reported(self):
+        tables = self.valid_tables()
+        tables["SETP"].pop()
+        tables["PLYS"][-1]["poso"] = "9"
+        kinds = [x["kind"] for x in hc09_addplay.custom_play_issues(tables)]
+        self.assertIn("set_slots_invalid", kinds)
+        self.assertIn("play_slots_invalid", kinds)
+
+    def test_alignment_must_reference_a_slot_and_its_own_set_group(self):
+        tables = self.valid_tables()
+        tables["SETG"][0]["SETP"] = "999"
+        kinds = [x["kind"] for x in hc09_addplay.custom_play_issues(tables)]
+        self.assertIn("alignment_slot_missing", kinds)
+
+    def test_detail_rows_must_reference_a_custom_play(self):
+        tables = self.valid_tables()
+        tables["PLPD"] = [{"PLYL": "88"}]
+        issues = hc09_addplay.custom_play_issues(tables)
+        self.assertIn("detail_play_missing", [x["kind"] for x in issues])
+
 if __name__ == "__main__":
     unittest.main()
