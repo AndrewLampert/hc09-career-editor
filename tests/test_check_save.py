@@ -116,7 +116,7 @@ class CheckSaveReportTests(unittest.TestCase):
                 tempdir.return_value.__exit__.return_value = False
                 lines = check_save.playbook_link_diagnostics("career.usr",
                     {"PGPL": 1, "PGSL": 1, "PGSS": 1, "PGFM": 1}, "node")
-            self.assertIn("no missing PGPL-to-PGSL or PGSL-to-PGFM links", lines[0])
+            self.assertIn("no missing PGPL-to-PGSS, PGPL-to-PGSL or PGSL-to-PGFM links", lines[0])
 
     def test_playbook_link_diagnostics_reports_missing_link(self):
         with tempfile.TemporaryDirectory() as folder:
