@@ -11004,7 +11004,7 @@ class PlaybookData:
                 # Existing target links are deliberately left untouched. Still
                 # refuse to add plays when their category profile disagrees
                 # with the source set's profile.
-                target_pairs = [(None, tf) for tf in mapped]
+                target_pairs = []
                 target_categories = {formation_is_special(
                     tgt, tf, self.formation_srfm.get((tgt, tf), "")) for tf in mapped}
                 if source_categories and target_categories and source_categories != target_categories:
