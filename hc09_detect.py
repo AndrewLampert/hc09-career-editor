@@ -325,12 +325,12 @@ def _find_signature(f, limit=TDB_SEARCH_LIMIT, chunk=4 << 20):
 def _db_start_in(f):
     """Database offset for a bare DB, an MC02 container, or a PS3 HC09 save header."""
     head = f.read(12)
-    if head[:len(TDB_SIGNATURE)] == TDB_SIGNATURE:
+    if head[:2] == b"DB":
         return 0
     if head[:4] == MC02_MAGIC and len(head) >= 12:
         start = MC02_HEADER_SIZE + int.from_bytes(head[8:12], "big")
         f.seek(start)
-        if f.read(len(TDB_SIGNATURE)) == TDB_SIGNATURE:
+        if f.read(2) == b"DB":
             return start
         found = _find_signature(f)                  # tolerate an incorrect MC02 metadata length, as the converter does
         return found if found >= 0 else None
