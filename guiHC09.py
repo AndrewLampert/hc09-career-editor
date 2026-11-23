@@ -11019,7 +11019,7 @@ class PlaybookData:
                 if into_formation is not None:
                     source_to_target = [(sf, into_formation) for sf in source_forms]
                 else:
-                    source_to_target = list(zip(source_forms, mapped))
+                    source_to_target = [(sf, target_formation(sf)) for sf in source_forms]
                 target_pairs = source_to_target
             for sf, tf in target_pairs:
                 source_special = (formation_is_special(
