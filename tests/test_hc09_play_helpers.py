@@ -106,5 +106,49 @@ class PlayDataHelperTests(unittest.TestCase):
         self.assertEqual(rows[1]["name"], "Other copy")
 
 
+    def test_custom_book_name_rows_adds_save_scoped_override_only_for_linked_play(self):
+        pppn = [{"BOKL": "252", "PLYL": "10", "PPPM": "Stock name"}]
+        pgpl = [{"BOKL": "3", "PLYL": "10"}, {"BOKL": "252", "PLYL": "10"}]
+
+        rows, changed, created = hc09_plays.custom_book_name_rows(
+            pppn, pgpl, 3, 10, "Custom book name"
+        )
+
+        self.assertTrue(changed)
+        self.assertTrue(created)
+        self.assertEqual(rows[0], pppn[0])
+        self.assertEqual(rows[1], {
+            "BOKL": "3", "PLYL": "10", "PPPM": "Custom book name"
+        })
+
+    def test_custom_book_name_rows_updates_existing_override_without_touching_stock_row(self):
+        pppn = [
+            {"BOKL": "252", "PLYL": "10", "PPPM": "Stock name"},
+            {"BOKL": "3", "PLYL": "10", "PPPM": "Old custom name"},
+        ]
+        rows, changed, created = hc09_plays.custom_book_name_rows(
+            pppn, [{"BOKL": "3", "PLYL": "10"}], 3, 10, "New custom name"
+        )
+
+        self.assertTrue(changed)
+        self.assertFalse(created)
+        self.assertEqual(rows[0]["PPPM"], "Stock name")
+        self.assertEqual(rows[1]["PPPM"], "New custom name")
+
+    def test_custom_book_name_rows_requires_custom_book_and_existing_link(self):
+        with self.assertRaisesRegex(ValueError, "from 1 to 10"):
+            hc09_plays.custom_book_name_rows([], [], 252, 10, "Name")
+        with self.assertRaisesRegex(ValueError, "not linked"):
+            hc09_plays.custom_book_name_rows([], [], 3, 10, "Name")
+
+    def test_custom_book_name_rows_refuses_duplicate_override_rows(self):
+        pppn = [
+            {"BOKL": "3", "PLYL": "10", "PPPM": "First"},
+            {"BOKL": "3", "PLYL": "10", "PPPM": "Second"},
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicate PPPN"):
+            hc09_plays.custom_book_name_rows(pppn, [{"BOKL": "3", "PLYL": "10"}], 3, 10, "New")
+
+
 if __name__ == "__main__":
     unittest.main()
