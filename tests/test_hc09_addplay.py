@@ -98,7 +98,7 @@ class EveryoneBooksTests(unittest.TestCase):
                 return 4
 
         books, targets, left_out = hc09_addplay.everyone_books(
-            self.Library(), [7], Groups(), 50, cap=1
+            self.Library(), [7], Groups(), 50, cap=2
         )
         self.assertEqual(books, [7])
         self.assertEqual(targets, {7: 4})
