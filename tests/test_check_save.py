@@ -102,9 +102,9 @@ class CheckSaveReportTests(unittest.TestCase):
     def test_playbook_link_diagnostics_reports_clean_links(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, rows in {
-                "pgpl": "BOKL,SETL,PLYL\\n7,471,6709\\n",
-                "pgsl": "BOKL,SETL,PBFM\\n7,471,26\\n",
-                "pgfm": "BOKL,PBFM\\n7,26\\n",
+                "pgpl": "BOKL,SETL,PLYL\n7,471,6709\n",
+                "pgsl": "BOKL,SETL,PBFM\n7,471,26\n",
+                "pgfm": "BOKL,PBFM\n7,26\n",
             }.items():
                 with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
                     f.write(rows)
@@ -120,9 +120,9 @@ class CheckSaveReportTests(unittest.TestCase):
     def test_playbook_link_diagnostics_reports_missing_link(self):
         with tempfile.TemporaryDirectory() as folder:
             for name, rows in {
-                "pgpl": "BOKL,SETL,PLYL\\n7,471,6709\\n",
-                "pgsl": "BOKL,SETL,PBFM\\n",
-                "pgfm": "BOKL,PBFM\\n7,26\\n",
+                "pgpl": "BOKL,SETL,PLYL\n7,471,6709\n",
+                "pgsl": "BOKL,SETL,PBFM\n",
+                "pgfm": "BOKL,PBFM\n7,26\n",
             }.items():
                 with open(os.path.join(folder, name + ".csv"), "w", encoding="utf-8") as f:
                     f.write(rows)
