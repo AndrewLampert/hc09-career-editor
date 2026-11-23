@@ -385,7 +385,6 @@ def custom_play_batch_report(node=None):
             if not present:
                 lines.append(f"{name}: {table_count} tables; custom-play tables not present.")
             else:
-                values = ", ".join(f"{table}={counts[table]:,}" for table in present)
                 plays = counts.get("PBPL", 0)
                 sets = counts.get("SETL", 0)
                 lines.append(f"{name}: {table_count} tables; PBPL={plays:,} custom plays, SETL={sets:,} custom sets.")
