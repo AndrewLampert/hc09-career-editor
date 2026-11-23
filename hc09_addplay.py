@@ -600,26 +600,15 @@ def links_of(plays):
 
 
 def playbook_link_issues(tables):
-    """Find broken PGPL -> PGSL -> PGFM references without changing rows.
+    """Find orphan PGSL -> PGFM links without changing rows.
 
-    PGSS is only an optional quick-sub-package index: formations without
-    quick-sub packages legitimately have no PGSS row.
+    PGSL and PGSS are only written for plays whose set has its own
+    formation. Ordinary stock PGPL rows therefore need no PGSL row.
     """
-    pgpl = tables.get("PGPL", [])
     pgsl = tables.get("PGSL", [])
     pgfm = tables.get("PGFM", [])
-    set_links = {(int(r["BOKL"]), int(r["SETL"])) for r in pgsl}
     formation_links = {(int(r["BOKL"]), int(r["PBFM"])) for r in pgfm}
     issues = []
-    seen_missing = set()
-    for index, row in enumerate(pgpl):
-        pair = (int(row["BOKL"]), int(row["SETL"]))
-        if pair not in set_links and pair not in seen_missing:
-            issues.append({
-                "kind": "play_without_formation_link",
-                "book": pair[0], "set": pair[1], "row": index,
-            })
-            seen_missing.add(pair)
     seen_orphan = set()
     for index, row in enumerate(pgsl):
         pair = (int(row["BOKL"]), int(row["PBFM"]))
