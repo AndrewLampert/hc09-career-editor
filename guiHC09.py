@@ -11149,6 +11149,29 @@ class PlaybookData:
             names = [self.formation_base(f, self.formation_srfm.get((bokl, f), "")) for f in formations]
             by_set[setl].append((bokl, special, names))
         warnings = []
+        # A stock set linked to both special-teams and ordinary formations is
+        # suspicious on its own, even if other playbooks repeat the same bad
+        # structure. Report it separately from the cross-playbook consensus
+        # heuristic below; this diagnostic never changes save data.
+        for (bokl, setl), formations in self.set_formations.items():
+            if setl not in self.stock_sets or len(formations) < 2:
+                continue
+            categories = set()
+            for formation in formations:
+                srfm = self.formation_srfm.get((bokl, formation), "")
+                name = self.formation_name.get(formation) or self.formation_name.get(srfm)
+                if not name:
+                    categories.add(True)  # unknown formation: conservative special-teams classification
+                else:
+                    categories.add(name.lower() in PLAYBOOK_SPECIAL_FORMATIONS)
+            if len(categories) > 1:
+                warnings.append({
+                    "book": bokl, "set": setl, "name": self.set_label(setl),
+                    "formations": [self.formation_base(f, self.formation_srfm.get((bokl, f), ""))
+                                   for f in formations],
+                    "expected": "one formation category", "actual": "mixed",
+                    "support": 0, "books": 1, "kind": "mixed-links",
+                })
         for setl, books in by_set.items():
             if len(books) < 4:
                 continue
@@ -13376,8 +13399,8 @@ class App(tk.Tk):
         if category_warnings:
             sample = category_warnings[:3]
             notes.append(
-                f"{len(category_warnings)} possible stock-set formation-category mismatch(es) "
-                "(read-only; based on other playbooks: " +
+                f"{len(category_warnings)} possible stock-set formation-category issue(s) "
+                "(read-only; includes mixed links within a playbook and comparisons with other playbooks: " +
                 "; ".join(f"{w['name']} in {data.book_label(w['book'])} under {', '.join(w['formations'])}"
                           for w in sample) +
                 (f"; and {len(category_warnings) - len(sample)} more" if len(category_warnings) > len(sample) else "") +
