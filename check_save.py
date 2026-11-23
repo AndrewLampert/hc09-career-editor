@@ -6,6 +6,7 @@
 Why it exists: the editor can only show what the save has. When a tab is empty (Draft Picks, Playbooks) this says whether the save has the table at all (MISSING), has it with no rows (EMPTY), or has it
 filled (the row count), and writes the same report, with every table of the save, to check_save_report.txt next to this file so it can be sent on. It reads the save; it never changes it.
 """
+import csv
 import os
 import re
 import shutil
@@ -18,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import hc09_detect as D                                  # noqa: E402
+import hc09_addplay as AP                                # noqa: E402
 
 BRIDGE_JS = os.path.join(HERE, "hc09-bridge", "bridge.js")
 REPORT_NAME = "check_save_report.txt"
@@ -85,6 +87,49 @@ def table_counts(db_path, node=None):
         raise CheckError("The save was read but no tables were found in it.")
     return out
 
+
+
+def playbook_link_diagnostics(path, counts, node=None):
+    """Read-only check of the career's PGPL -> PGSL -> PGFM references."""
+    if any(counts.get(name, 0) <= 0 for name in PLAYBOOK_TABLES):
+        return []
+    node = node or find_node()
+    if not node:
+        raise CheckError("Node.js 18 or newer is not installed; playbook links could not be checked.")
+    with tempfile.TemporaryDirectory(prefix="hc09-playbook-check-") as folder:
+        try:
+            result = subprocess.run(
+                [node, BRIDGE_JS, "export", "--db", path, "--out", folder,
+                 "--tables", ",".join(PLAYBOOK_TABLES)],
+                capture_output=True, text=True, timeout=180,
+                creationflags=D.NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            raise CheckError("Exporting the playbook links took more than three minutes.")
+        except OSError as e:
+            raise CheckError(f"Node.js could not export the playbook links: {e}")
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "no message").strip().splitlines()
+            raise CheckError("The playbook links could not be checked: " + detail[0][:400])
+        tables = {}
+        for name in PLAYBOOK_TABLES:
+            csv_path = os.path.join(folder, name.lower() + ".csv")
+            if not os.path.isfile(csv_path):
+                raise CheckError(f"The bridge did not export {name}; playbook links could not be checked.")
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                tables[name] = list(csv.DictReader(f))
+    issues = AP.playbook_link_issues(tables)
+    if not issues:
+        return ["Playbook link check: no missing PGPL-to-PGSL or PGSL-to-PGFM links found."]
+    lines = [f"Playbook link check: {len(issues)} broken reference(s) found (read-only; nothing was changed)."]
+    for issue in issues[:20]:
+        if issue["kind"] == "play_without_formation_link":
+            lines.append(f"  Book {issue['book']}, set {issue['set']}: play membership has no PGSL formation link.")
+        else:
+            lines.append(f"  Book {issue['book']}, formation {issue['formation']}: PGSL references a formation absent from PGFM.")
+    if len(issues) > 20:
+        lines.append(f"  ...and {len(issues) - 20} more.")
+    return lines
 
 def saves_in(path):
     """The save files a path stands for: the file itself, or the saves inside a folder (a package folder holds one file of its own name). Newest first."""
@@ -232,6 +277,12 @@ def report(path, node=None):
     if kind == "career":
         lines += ["  (Healthy: the rows in one healthy career made by the Xbox game, for comparison.)", ""]
     lines += verdict(kind, rows)
+    if kind == "career" and all(counts.get(name, 0) > 0 for name in PLAYBOOK_TABLES):
+        try:
+            lines += [""]
+            lines += playbook_link_diagnostics(path, counts, node)
+        except CheckError as e:
+            lines += ["", f"Playbook link check skipped: {e}"]
     full = [f"  {name:<8}{rows_:>9,}" for name, rows_ in counts.items()]
     return lines, [f"All {len(counts)} tables of {path}:"] + full
 
