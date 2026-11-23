@@ -844,19 +844,24 @@ def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fie
     if len(matches) > 1:
         raise ValueError("The save has duplicate PPPN rows for this custom-book play; no name was changed.")
     out = [dict(r) for r in pppn_rows]
+    fields = list(pppn_fields or (list(out[0]) if out else ("BOKL", "PLYL", "PPPM")))
+    # Shipped PPPN calls the text column PPPM; the career-save table uses
+    # PPNN. Prefer the save's declared field, while retaining legacy support.
+    name_field = "PPNN" if "PPNN" in fields else "PPPM" if "PPPM" in fields else None
+    if name_field is None:
+        raise ValueError("The save's PPPN table has no PPNN/PPPM name field.")
     if matches:
         i = matches[0]
-        if "PPPM" not in out[i]:
-            raise ValueError("The save's PPPN table has no PPPM name field.")
-        if str(out[i].get("PPPM", "")) == name:
+        if name_field not in out[i]:
+            raise ValueError(f"The save's PPPN row has no {name_field} name field.")
+        if str(out[i].get(name_field, "")) == name:
             return out, False, False
-        out[i]["PPPM"] = name
+        out[i][name_field] = name
         return out, True, False
-    fields = list(pppn_fields or (list(out[0]) if out else ("BOKL", "PLYL", "PPPM")))
     # The bridge zeroes a new record before importing. Blank values leave
     # numeric extra fields at zero and clear any optional text fields.
     new_row = {field: "" for field in fields}
-    new_row.update({"BOKL": str(book_id), "PLYL": str(play_id), "PPPM": name})
+    new_row.update({"BOKL": str(book_id), "PLYL": str(play_id), name_field: name})
     out.append(new_row)
     return out, True, True
 
