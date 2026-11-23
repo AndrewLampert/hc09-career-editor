@@ -314,7 +314,7 @@ def describe_save(path):
         size, when = st.st_size, time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
     except OSError:
         size, when = 0, "?"
-    origin = "Xbox 360 save (the MC02 container Xenia and the PC versions use)" if D.is_xbox_save(path) else "PS3 save (a bare database)"
+    origin = "Xbox 360 save (the MC02 container Xenia and the PC versions use)" if D.is_xbox_save(path) else "PS3 save (HC09 offset header + database)" if D.ps3_db_start(path) is not None else "PS3 save (bare database)"
     root = D.recomp_install_of(path)
     if root:
         origin += ", in a recompiled PC install" + (" (HC27: today's rosters)" if "userdata-hc27" in path.lower().replace("/", "\\") else "")
