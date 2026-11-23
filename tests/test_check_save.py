@@ -176,7 +176,10 @@ class CheckSaveReportTests(unittest.TestCase):
         ]
         counts = {name: 0 for name in check_save.CUSTOM_PLAY_TABLES}
         counts.update({"PGPL": 1, "PGSL": 1, "PGSS": 1, "PGFM": 1})
-        with (mock.patch.object(check_save, "find_saves", return_value=(saves, [], False)),
+        rpc_saves = [saves[0]]
+        with (mock.patch.object(check_save.D, "candidate_rpcs3_dirs", return_value=["rpc"]),
+              mock.patch.object(check_save.D, "savedata_roots", return_value=["savedata"]),
+              mock.patch.object(check_save.D, "list_saves", return_value=rpc_saves),
               mock.patch.object(check_save.D, "classify_save", return_value=("career", 208)),
               mock.patch.object(check_save, "table_counts", return_value=counts) as inspect):
             lines = check_save.custom_play_batch_report("node")
