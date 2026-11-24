@@ -9568,7 +9568,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             text = "\n".join(lines)
             if wrote and not failed:
                 text = "Done. " + text
-            if custom_targets:
+            if any(not error for *_x, error in result["custom"]):            # only when a custom book's name is really in the career now (not when every custom write failed)
                 text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game (career playbook viewer): the new name shows for a play you made; it did not show for either shipped play tried (one its base playbook names itself, one it does not), so renaming a shipped play in a custom playbook may show nothing."
             elif stock is not None:
                 text += "\n\nStart the game and look at the play-call screen; Put the game files back restores the names."
