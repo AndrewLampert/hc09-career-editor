@@ -849,6 +849,20 @@ def original_play_id_for_mounted(custom, mounted_play_id):
     return int(info["plyl"]) if info is not None else int(mounted_play_id)
 
 
+def split_custom_book_targets(books, career_book_plays, play_id):
+    """(usable, skipped): of the custom playbooks a play's name was asked for, the ones the open career links the play into and the ones it does not.
+
+    A custom book's play names are written to the career's PPPN, and the career uses them only for plays its own PGPL links into the book; a play that is in the book in the PROFILE
+    but was never copied to this career (the career got its copy of the book before the play was added) has nothing to rename there. career_book_plays: {book: set of mounted play
+    ids} read from the career's own PGPL, or None when that is not known (nothing is skipped then)."""
+    books = [int(b) for b in books]
+    if career_book_plays is None:
+        return books, []
+    play_id = int(play_id)
+    usable = [b for b in books if play_id in career_book_plays.get(b, ())]
+    return usable, [b for b in books if b not in usable]
+
+
 def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fields=None):
     """Set a custom playbook's own PPPN name for one linked play.
 
