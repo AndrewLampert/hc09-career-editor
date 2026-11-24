@@ -863,22 +863,59 @@ def split_custom_book_targets(books, career_book_plays, play_id):
     return usable, [b for b in books if b not in usable]
 
 
-def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fields=None):
-    """Set a custom playbook's own PPPN name for one linked play.
+def career_parent_books(plab_rows):
+    """{custom playbook number (PBGI 1-10): the shipped playbook it is based on (PLAB.PBPR)} from the career's own PLAB rows.
 
-    Custom playbook ids 1..10 belong to the save namespace, not the shipped
-    game-file PPPN namespace. This helper is deliberately save-only: it never
-    edits a stock playbook's row. Returns (rows, changed, created).
+    The career playbook viewer asks for a custom book's play names with the id of that parent shipped book, not with the custom number (checked in the game 2026-11-24: a career PPPN row keyed by
+    the parent, 427 for the book "Collage", renamed the play in the viewer; rows keyed by the custom number, or by other ids, did nothing). A book that is listed with two different parents is left out."""
+    parents = {}
+    for r in plab_rows:
+        try:
+            book, parent = int(r["PBGI"]), int(r["PBPR"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 1 <= book <= 10 and parent > 10:
+            parents.setdefault(book, set()).add(parent)
+    return {book: next(iter(found)) for book, found in parents.items() if len(found) == 1}
+
+
+def custom_book_names_from_pppn(pppn_rows, plab_rows):
+    """{(custom playbook 1-10, play id): name} the career's PPPN rows give: a row is keyed by the shipped playbook a custom book is based on (see career_parent_books), so every custom playbook of
+    the career based on that book has it. Rows keyed by a custom number (written by earlier builds of the editor; the game does not show them) are not names."""
+    parents = career_parent_books(plab_rows)
+    out = {}
+    for r in pppn_rows:
+        try:
+            key, play = int(r["BOKL"]), int(r["PLYL"])
+            value = str(r.get("PPNN", r.get("PPPM", ""))).strip()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not value:
+            continue
+        for book, parent in parents.items():
+            if parent == key:
+                out[(book, play)] = value
+    return out
+
+
+def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fields=None, *, parent_id):
+    """Set the PPPN name of one play for a custom playbook of the career.
+
+    book_id (1 to 10) is the custom playbook as the career's PGPL links name it; the row is written under parent_id, the shipped playbook the custom one is based on (PLAB.PBPR, from
+    career_parent_books): that is the id the game's playbook viewer looks the name up with. Custom numbers 1..10 are not the shipped game-file PPPN's namespace and nothing is written
+    to qkl_boot.ast here. Several custom playbooks based on the same shipped book share the row. Returns (rows, changed, created).
     """
     name = clean_play_name(name)
-    book_id, play_id = int(book_id), int(play_id)
+    book_id, play_id, parent_id = int(book_id), int(play_id), int(parent_id)
     if not 1 <= book_id <= 10:
         raise ValueError("A custom playbook id must be from 1 to 10.")
+    if parent_id <= 10:
+        raise ValueError("The shipped playbook a custom playbook is based on must be a shipped playbook (above 10).")
     if not any(int(r.get("BOKL", -1)) == book_id and int(r.get("PLYL", -1)) == play_id
                for r in pgpl_rows):
         raise ValueError("That play is not linked into the selected custom playbook in this save.")
     matches = [i for i, r in enumerate(pppn_rows)
-               if int(r.get("BOKL", -1)) == book_id and int(r.get("PLYL", -1)) == play_id]
+               if int(r.get("BOKL", -1)) == parent_id and int(r.get("PLYL", -1)) == play_id]
     if len(matches) > 1:
         raise ValueError("The save has duplicate PPPN rows for this custom-book play; no name was changed.")
     out = [dict(r) for r in pppn_rows]
@@ -899,7 +936,7 @@ def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fie
     # The bridge zeroes a new record before importing. Blank values leave
     # numeric extra fields at zero and clear any optional text fields.
     new_row = {field: "" for field in fields}
-    new_row.update({"BOKL": str(book_id), "PLYL": str(play_id), name_field: name})
+    new_row.update({"BOKL": str(parent_id), "PLYL": str(play_id), name_field: name})
     out.append(new_row)
     return out, True, True
 

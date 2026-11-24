@@ -144,23 +144,23 @@ class PlayDataHelperTests(unittest.TestCase):
         pgpl = [{"BOKL": "3", "PLYL": "10"}, {"BOKL": "252", "PLYL": "10"}]
 
         rows, changed, created = hc09_plays.custom_book_name_rows(
-            pppn, pgpl, 3, 10, "Custom book name"
+            pppn, pgpl, 3, 10, "Custom book name", parent_id=427
         )
 
         self.assertTrue(changed)
         self.assertTrue(created)
         self.assertEqual(rows[0], pppn[0])
         self.assertEqual(rows[1], {
-            "BOKL": "3", "PLYL": "10", "PPPM": "Custom book name"
+            "BOKL": "427", "PLYL": "10", "PPPM": "Custom book name"
         })
 
     def test_custom_book_name_rows_updates_existing_override_without_touching_stock_row(self):
         pppn = [
             {"BOKL": "252", "PLYL": "10", "PPPM": "Stock name"},
-            {"BOKL": "3", "PLYL": "10", "PPPM": "Old custom name"},
+            {"BOKL": "427", "PLYL": "10", "PPPM": "Old custom name"},
         ]
         rows, changed, created = hc09_plays.custom_book_name_rows(
-            pppn, [{"BOKL": "3", "PLYL": "10"}], 3, 10, "New custom name"
+            pppn, [{"BOKL": "3", "PLYL": "10"}], 3, 10, "New custom name", parent_id=427
         )
 
         self.assertTrue(changed)
@@ -170,17 +170,30 @@ class PlayDataHelperTests(unittest.TestCase):
 
     def test_custom_book_name_rows_requires_custom_book_and_existing_link(self):
         with self.assertRaisesRegex(ValueError, "from 1 to 10"):
-            hc09_plays.custom_book_name_rows([], [], 252, 10, "Name")
+            hc09_plays.custom_book_name_rows([], [], 252, 10, "Name", parent_id=427)
         with self.assertRaisesRegex(ValueError, "not linked"):
-            hc09_plays.custom_book_name_rows([], [], 3, 10, "Name")
+            hc09_plays.custom_book_name_rows([], [], 3, 10, "Name", parent_id=427)
+        with self.assertRaisesRegex(ValueError, "above 10"):
+            hc09_plays.custom_book_name_rows([], [{"BOKL": "3", "PLYL": "10"}], 3, 10, "Name", parent_id=7)
 
     def test_custom_book_name_rows_refuses_duplicate_override_rows(self):
         pppn = [
-            {"BOKL": "3", "PLYL": "10", "PPPM": "First"},
-            {"BOKL": "3", "PLYL": "10", "PPPM": "Second"},
+            {"BOKL": "427", "PLYL": "10", "PPPM": "First"},
+            {"BOKL": "427", "PLYL": "10", "PPPM": "Second"},
         ]
         with self.assertRaisesRegex(ValueError, "duplicate PPPN"):
-            hc09_plays.custom_book_name_rows(pppn, [{"BOKL": "3", "PLYL": "10"}], 3, 10, "New")
+            hc09_plays.custom_book_name_rows(pppn, [{"BOKL": "3", "PLYL": "10"}], 3, 10, "New", parent_id=427)
+
+    def test_parent_books_come_from_the_careers_plab(self):
+        plab = [{"PBGI": "3", "PBPR": "427"}, {"PBGI": "4", "PBPR": "300"}, {"PBGI": "4", "PBPR": "301"},
+                {"PBGI": "427", "PBPR": "12"}, {"PBGI": "5", "PBPR": "x"}, {"PBGI": "6"}]
+        self.assertEqual(hc09_plays.career_parent_books(plab), {3: 427})        # 4 has two parents, 427 is not a custom book, the rest do not read
+
+    def test_names_are_found_through_the_parent_for_every_book_based_on_it(self):
+        plab = [{"PBGI": "3", "PBPR": "427"}, {"PBGI": "4", "PBPR": "427"}, {"PBGI": "5", "PBPR": "300"}]
+        pppn = [{"BOKL": "427", "PLYL": "10", "PPNN": "Shown"}, {"BOKL": "3", "PLYL": "11", "PPNN": "Not a name"},
+                {"BOKL": "300", "PLYL": "12", "PPNN": ""}, {"BOKL": "300", "PLYL": "13", "PPPM": "Legacy field"}]
+        self.assertEqual(hc09_plays.custom_book_names_from_pppn(pppn, plab), {(3, 10): "Shown", (4, 10): "Shown", (5, 13): "Legacy field"})
 
 
 if __name__ == "__main__":
