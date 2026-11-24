@@ -9101,7 +9101,8 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
                        "The first class of the new careers compared (a Bills and a Raiders career) is class 19 of the second table; that comes from their saved data, and the classes after it follow the "
                        "game's own rules as read from its code: neither was seen on a game screen. About 50 players of a class become free agents when the game loads it, and the game changes ratings "
                        "again over the seasons. Close RPCS3 first. The first time, the changed file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it. "
-                       "Not tried in the game yet.").pack(anchor="w")
+                       "The Put the game files back buttons of the play windows restore that file entry too (it also holds the playbooks' own play names), so they undo a draft class change; and while plays "
+                       "added with Add a play are in the game files the draft classes cannot be changed. Not tried in the game yet.").pack(anchor="w")
         top = ttk.Frame(self)
         top.pack(fill="x", padx=14, pady=(0, 4))
         ttk.Label(top, text="Class:").grid(row=0, column=0, sticky="w", pady=2)
@@ -16179,12 +16180,23 @@ class App(tk.Tk):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def _refuse_while_plays_added(self, boot_ast):
+        """Add a play puts relocated copies of some file entries (this one too) into the game files: a change or a put back of the original place would not reach the copy the game uses."""
+        try:
+            state = self.model.run_bridge(["add-play-state", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
+        except Exception:
+            state = {}
+        if state.get("active") and state.get("plays"):
+            raise RuntimeError("Plays added with Add a play are in the game files, and they keep a copy of the file entry that holds the draft classes. The draft classes cannot be changed or put back "
+                               "until the game files are put back with Put the game files back in the Add a play window (that takes the added plays out too). Nothing was changed.")
+
     def draft_class_apply(self, boot_ast, edits):
         """Write the edits of hc09_draftclass.plan() into the game files (bridge entry-patch: every edit is checked against the values that were read, the entry is checked before it is written
         and backed up the first time). Returns (players' values written, the rows read again). Raises when nothing would change, a row is not what was read, or the game is read from a disc image."""
         self._refuse_write_to_iso_copy(boot_ast)
         if not edits:
             raise RuntimeError("Nothing to change.")
+        self._refuse_while_plays_added(boot_ast)
         entry = self.draft_class_entry(boot_ast)
         apply_personnel_targets(self.model, [DC.target_for(entry, edits)], self._personnel_backup_dir())
         return len(edits), self.draft_class_rows(boot_ast)[0]
@@ -16192,6 +16204,7 @@ class App(tk.Tk):
     def draft_class_restore(self, boot_ast):
         """Put the entry that holds the draft classes back as it was before the first change made by any of the editor's game-file tools. Returns (True when a backup was put back, the rows read again)."""
         self._refuse_write_to_iso_copy(boot_ast)
+        self._refuse_while_plays_added(boot_ast)
         entry = self.draft_class_entry(boot_ast)
         res = apply_personnel_targets(self.model, [DC.restore_target_for(entry)], self._personnel_backup_dir(), mode="restore")
         self._forget_playbook_names()                              # this entry also holds the playbooks' own play names
