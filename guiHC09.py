@@ -9078,7 +9078,7 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
     write it into the game's file. Only careers made afterwards see it. The first time, the changed file entry is backed up (Documents\\hc09-game-file-backup) and Put the draft classes back restores
     it. All the planning is in hc09_draftclass.py."""
 
-    def __init__(self, app, boot, rows, veterans=()):
+    def __init__(self, app, boot, rows, veterans=(), career_class=None):
         super().__init__(app)
         p = getattr(app, "_ui_palette", None)
         if p:
@@ -9091,16 +9091,18 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
         self.app, self.boot, self.rows, self.veterans = app, boot, rows, list(veterans)
         self.plan = None
         self._refs = {}
-        self.choices = DC.class_choices(rows)
+        self.career_class = career_class                  # (DFCL, DCSI) of the open career's DCIC, or None
+        self.choices = DC.class_choices(rows, career_class)
         ttk.Label(self, text="Change a draft class", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=900, justify="left", padding=(14, 0, 14, 6),
                   text="The game keeps its draft classes in its own file: 61 classes of about 350 players. Pick a class, change the ratings of all its players (a rating and its maximum move together, "
                        "nothing goes below 0 or above 99) and write it into the game's file. Only careers made AFTER the change see it: a class that is already inside a save stays as it was. "
-                       "The first class of the new careers compared (a Bills and a Raiders career) is class 19 of the second table; that comes from their saved data, and the classes after it follow the "
-                       "game's own rules as read from its code: neither was seen on a game screen. About 50 players of a class become free agents when the game loads it, and the game changes ratings "
-                       "again over the seasons. Close RPCS3 first. The first time, the changed file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it. "
-                       "The Put the game files back buttons of the play windows restore that file entry too (it also holds the playbooks' own play names), so they undo a draft class change; and while plays "
-                       "added with Add a play are in the game files the draft classes cannot be changed. Not tried in the game yet.").pack(anchor="w")
+                       "A career moves on to a later class as it goes (read from the game's code); the class your open career holds now is marked in the list. In an in-game test a new career started with "
+                       "class 1 (the same copy in all four tables, all four are changed) and the change reached its 350 players exactly; the Bills and Raiders careers hold class 19 of the second table, "
+                       "so which class a new career starts with is not fixed and the rule is not known. Only class 1 was tried in the game, not the classes a career gets later. About 50 players of a class "
+                       "become free agents when the game loads it, and the game changes ratings again over the seasons. Close RPCS3 first. The first time, the changed file entry is saved in "
+                       "Documents\\hc09-game-file-backup, and Put the draft classes back restores it. The Put the game files back buttons of the play windows restore that file entry too (it also holds the "
+                       "playbooks' own play names), so they undo a draft class change; and while plays added with Add a play are in the game files the draft classes cannot be changed.").pack(anchor="w")
         top = ttk.Frame(self)
         top.pack(fill="x", padx=14, pady=(0, 4))
         ttk.Label(top, text="Class:").grid(row=0, column=0, sticky="w", pady=2)
@@ -9246,7 +9248,7 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
         if not messagebox.askyesno("Change a draft class", f"Change {plan['players']} players of {DC.class_label(table, dfcl)} in the game files?\n\n{plan['values']} values change"
                                    f"{' in each of ' + str(len(plan['tables'])) + ' copies' if len(plan['tables']) > 1 else ''}. This writes into qkl_boot.ast of your game. The first time, the changed "
                                    "file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it.\n\nOnly careers made after this see the change; a class that "
-                                   "is already in a save stays as it is. Not tried in the game yet.", parent=self):
+                                   "is already in a save stays as it is. In the game only class 1 was tried.", parent=self):
             return
         boot = archives[0]
 
@@ -16235,7 +16237,14 @@ class App(tk.Tk):
             save_ui_prefs(self.ui_prefs)
             pool_ids = {"1009", "1013", "1015"}
             veterans = [r for r in getattr(self.model, "players", []) if self.model.player_team_id(r) and self.model.player_team_id(r) not in pool_ids]
-            DraftClassDialog(self, boot, rows, veterans)
+            career_class = None
+            db = getattr(self.model, "db_path", None)
+            if db and os.path.isfile(db) and "-PROFILE-" not in str(db).upper():
+                try:
+                    career_class = DC.career_class_from_rows(self._export_tables(db, ["DCIC"])["DCIC"][1])        # the class the open career holds now
+                except Exception:
+                    career_class = None
+            DraftClassDialog(self, boot, rows, veterans, career_class)
 
         self.run_in_thread_with_busy("Reading the game's draft classes...", work, done, error_title="Change a draft class")
 
