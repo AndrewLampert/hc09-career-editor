@@ -9075,7 +9075,7 @@ class DefenseDialog(WriteGuard, tk.Toplevel):
 class DraftClassDialog(WriteGuard, tk.Toplevel):
     """Change a draft class: the game keeps its library of draft classes in four tables of its own file (DPL1 to DPL4 of qkl_boot.ast, 16 classes of about 350 players each; class 1 is the same copy in
     all four). Pick a class, change the ratings of all its players (a rating and its maximum move together) by a number or to the average of other players, see what that does to each position, and
-    write it into the game's file. Only careers made afterwards see it. The first time, the changed file entry is backed up (Documents\\hc09-game-file-backup) and Put the draft classes back restores
+    write it into the game's file. A class already inside a save does not change; a class a career has not loaded yet is read from the game files when it is loaded. The first time, the changed file entry is backed up (Documents\\hc09-game-file-backup) and Put the draft classes back restores
     it. All the planning is in hc09_draftclass.py."""
 
     def __init__(self, app, boot, rows, veterans=(), career_class=None):
@@ -9096,7 +9096,7 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
         ttk.Label(self, text="Change a draft class", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
         ttk.Label(self, wraplength=900, justify="left", padding=(14, 0, 14, 6),
                   text="The game keeps its draft classes in its own file: 61 classes of about 350 players. Pick a class, change the ratings of all its players (a rating and its maximum move together, "
-                       "nothing goes below 0 or above 99) and write it into the game's file. Only careers made AFTER the change see it: a class that is already inside a save stays as it was. "
+                       "nothing goes below 0 or above 99) and write it into the game's file. A class that is already inside a save stays as it was; a class a career has not loaded yet (a new career's first class, or an existing career's next one when its regular season starts) is read from the game files when it is loaded, so it shows the edit. "
                        "A career moves on to the next class of its tier when the regular season starts (seen in the game); the class your open career holds now is marked in the list. In an in-game test a new career started with "
                        "class 1 (the same copy in all four tables, all four are changed) and the change reached its 350 players exactly; the Bills and Raiders careers hold class 19 of the second table, "
                        "so which class a new career starts with is not fixed and the rule is not known. In the game an edit showed in the first class (class 1) and in the next year's class (class 2, loaded when the regular season starts); later classes follow the same rule but were not run. About 50 players of a class "
@@ -9247,8 +9247,8 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
         edits = DC.all_edits(plan)
         if not messagebox.askyesno("Change a draft class", f"Change {plan['players']} players of {DC.class_label(table, dfcl)} in the game files?\n\n{plan['values']} values change"
                                    f"{' in each of ' + str(len(plan['tables'])) + ' copies' if len(plan['tables']) > 1 else ''}. This writes into qkl_boot.ast of your game. The first time, the changed "
-                                   "file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it.\n\nOnly careers made after this see the change; a class that "
-                                   "is already in a save stays as it is. In the game the first class and the next year's class showed an edit; later classes were not run.", parent=self):
+                                   "file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it.\n\nA class that is already in a save stays as it is; a class a career has not loaded yet shows the change when it is loaded. "
+                                   "In the game the first class and the next year's class showed an edit; later classes were not run.", parent=self):
             return
         boot = archives[0]
 
@@ -9260,7 +9260,7 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
             self.rows = rows
             self._refs = {}
             self.lbl_result.configure(text=f"Done: {n} player row{'s' if n != 1 else ''} written. Make a new career to see the class; Put the draft classes back restores the file.")
-            messagebox.showinfo("Change a draft class", "Done. Only careers made from now on get the changed class.\n\nPut the draft classes back (this window) restores the file as it was.", parent=self)
+            messagebox.showinfo("Change a draft class", "Done. A career gets the changed class when it loads it (a new career's first class, or an existing career's next class); a class already in a save stays as it is.\n\nPut the draft classes back (this window) restores the file as it was.", parent=self)
             self._recompute()
 
         self._start_write("Changing the draft classes...", work, done, "Change a draft class")
