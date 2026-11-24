@@ -906,10 +906,19 @@ def is_shipped_play(play_id):
     return int(play_id) <= SHIPPED_PLAY_MAX
 
 
+def play_kind(play_id):
+    """'shipped' (a stock id, 7459 or below), 'added' (a play added to the game files: an id above the stock maximum, below the mounted custom ids) or 'own' (a play the person made, mounted at
+    CUSTOM_OFFSETS and above)."""
+    play_id = int(play_id)
+    if play_id <= SHIPPED_PLAY_MAX:
+        return "shipped"
+    return "added" if play_id < CUSTOM_OFFSETS["PLYL"] else "own"
+
+
 def custom_book_rename_targets(books, career_book_plays, play_id, own_play):
     """(usable, not_in_career, shipped): of the custom playbooks a play's name was asked for, the ones a name can be written for, the ones the open career does not have the play in
     (split_custom_book_targets), and, for a SHIPPED play, all of them: in the game (career playbook viewer, 2026-11-24) a name written for a shipped play in a custom playbook did not show,
-    neither for a play the base playbook names itself nor for one it does not, while a play the person made did show it (a play added to the game files was not tried). own_play: the play is not a shipped one (is_shipped_play): one the person made ("Plays I made") or one added to the game files."""
+    neither for a play the base playbook names itself nor for one it does not, while a play the person made did show it. A play ADDED to the game files and linked into a custom playbook of an existing career is not listed by the viewer at all (rig run 2026-11-24), so a name for it cannot show either. own_play: the play is one the person made (play_kind 'own'); a shipped or an added play is refused for every custom playbook."""
     books = [int(b) for b in books]
     if not own_play:
         return [], [], books
