@@ -976,10 +976,11 @@ function pickRow(records, e, picker) {
 // never a match (NaN is never equal to anything). The index of a column set is dropped when a column of it is set, so an edit that changes a matched column is seen by the later edits as before.
 function makePicker(records) {
     const indexes = new Map();                                    // 'col:kind|col:kind' -> Map(key -> [row positions in table order])
-    const keyOf = (values, kinds) => {
+    // Exactly sameValue's rules: a stored text loses its trailing spaces, the wanted text is compared as it is (so a wanted text with trailing spaces matches nothing, as before).
+    const keyOf = (values, kinds, wanted) => {
         const parts = [];
         for (let i = 0; i < values.length; i++) {
-            if (kinds[i] === 's') parts.push(String(values[i]).replace(/ +$/, ''));
+            if (kinds[i] === 's') parts.push(wanted ? String(values[i]) : String(values[i]).replace(/ +$/, ''));
             else { const n = Number(values[i]); if (Number.isNaN(n)) return null; parts.push(String(n)); }
         }
         return parts.join('\u0001');
@@ -1000,7 +1001,7 @@ function makePicker(records) {
                 });
                 indexes.set(id, index);
             }
-            const wanted = keyOf(cols.map((c) => match[c]), kinds);
+            const wanted = keyOf(cols.map((c) => match[c]), kinds, true);
             return wanted === null ? [] : (index.get(wanted) || []);
         },
         changed(column) {
