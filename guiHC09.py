@@ -9422,7 +9422,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             profile_only = split_custom_book_targets(self._custom_books, d.career_book_plays, self.plyl)[1]
             self.lbl_result.configure(
                 text="Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
-                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The name is stored under the shipped playbook the custom one is based on, so other custom playbooks of this career based on the same one show it too. Seen in the game: a play you made shows the new name; a shipped play that its base playbook already names itself keeps that name, so renaming such a play here shows nothing."
+                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The name is stored under the shipped playbook the custom one is based on, so other custom playbooks of this career based on the same one show it too. Seen in the game (career playbook viewer): the new name shows for a play you made; it did not show for either shipped play tried (one its base playbook names itself, one it does not), so renaming a shipped play in a custom playbook may show nothing."
                      + (" A book marked \"not in the open career\" cannot be renamed here: it has this play only in your profile (a career copies a custom book's plays when it is made), or the open career "
                         "was made with another playbook and does not play that book, so a name there would never be shown."
                         if profile_only else "")
@@ -9488,7 +9488,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         if stock_wanted:
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
-            details.append("Custom-book names are written only to the career save's PPPN table, under the shipped playbook each custom playbook is based on (other custom playbooks based on the same one show the name too). A .bak backup is made for that save. Seen in the game: a play you made shows the new name; a shipped play that its base playbook already names itself keeps that name, so renaming such a play here shows nothing.")
+            details.append("Custom-book names are written only to the career save's PPPN table, under the shipped playbook each custom playbook is based on (other custom playbooks based on the same one show the name too). A .bak backup is made for that save. Seen in the game (career playbook viewer): the new name shows for a play you made; it did not show for either shipped play tried (one its base playbook names itself, one it does not), so renaming a shipped play in a custom playbook may show nothing.")
         if skipped_note:
             details.append(skipped_note)
         if not messagebox.askyesno(
@@ -9569,7 +9569,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             if wrote and not failed:
                 text = "Done. " + text
             if custom_targets:
-                text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game: a play you made shows the new name; a shipped play that its base playbook already names itself keeps that name, so renaming such a play here shows nothing."
+                text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game (career playbook viewer): the new name shows for a play you made; it did not show for either shipped play tried (one its base playbook names itself, one it does not), so renaming a shipped play in a custom playbook may show nothing."
             elif stock is not None:
                 text += "\n\nStart the game and look at the play-call screen; Put the game files back restores the names."
             self.lbl_result.configure(text=text)
