@@ -959,13 +959,54 @@ function checkBackupBelongs(target, backupDir) {
 
 // The row an entry-patch edit addresses: the one row that matches; or, when the editor saw several alike (the playbooks' names table has a few (BOKL, PLYL) pairs twice), the nth of exactly `count`
 // matches in table order. Returns {row, index}. `records` is read once by the caller (the library's records getter copies the whole table).
-function pickRow(records, e) {
-    const found = [];
-    records.forEach((r, i) => { if (Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v))) found.push(i); });
+function pickRow(records, e, picker) {
+    const found = picker ? picker.find(e.match) : (() => {
+        const hits = [];
+        records.forEach((r, i) => { if (Object.entries(e.match).every(([k, v]) => sameValue(r.fields[k].value, v))) hits.push(i); });
+        return hits;
+    })();
     const want = e.count === undefined ? 1 : e.count;
     const nth = e.nth === undefined ? 0 : e.nth;
     if (found.length !== want || nth >= found.length) throw new Error(`${e.table} ${JSON.stringify(e.match)}: ${found.length} rows match (expected ${want}); nothing written`);
     return { row: records[found[nth]], index: found[nth] };
+}
+
+// Thousands of edits (a draft class is 5,600 players) cannot each scan the whole table: a picker indexes the rows of one table by the columns an edit matches on. A key is built exactly like
+// sameValue compares (a text value without the padding, any other value as a number), so the same rows are found in the same (table) order. A row whose number does not read as a number is
+// never a match (NaN is never equal to anything). The index of a column set is dropped when a column of it is set, so an edit that changes a matched column is seen by the later edits as before.
+function makePicker(records) {
+    const indexes = new Map();                                    // 'col:kind|col:kind' -> Map(key -> [row positions in table order])
+    const keyOf = (values, kinds) => {
+        const parts = [];
+        for (let i = 0; i < values.length; i++) {
+            if (kinds[i] === 's') parts.push(String(values[i]).replace(/ +$/, ''));
+            else { const n = Number(values[i]); if (Number.isNaN(n)) return null; parts.push(String(n)); }
+        }
+        return parts.join('\u0001');
+    };
+    return {
+        find(match) {
+            const cols = Object.keys(match);
+            const kinds = cols.map((c) => (typeof match[c] === 'string' ? 's' : 'n'));
+            const id = cols.map((c, i) => `${c}:${kinds[i]}`).join('|');
+            let index = indexes.get(id);
+            if (!index) {
+                index = new Map();
+                records.forEach((r, i) => {
+                    const k = keyOf(cols.map((c) => r.fields[c].value), kinds);
+                    if (k === null) return;
+                    const list = index.get(k);
+                    if (list) list.push(i); else index.set(k, [i]);
+                });
+                indexes.set(id, index);
+            }
+            const wanted = keyOf(cols.map((c) => match[c]), kinds);
+            return wanted === null ? [] : (index.get(wanted) || []);
+        },
+        changed(column) {
+            for (const id of [...indexes.keys()]) if (id.split('|').some((p) => p.slice(0, p.lastIndexOf(':')) === column)) indexes.delete(id);
+        },
+    };
 }
 
 async function patchEntry(target, mode, backupDir) {
@@ -988,15 +1029,23 @@ async function patchEntry(target, mode, backupDir) {
             throw new Error(`${path.basename(target.ast)} #${target.index}: saving the entry unchanged does not reproduce it byte for byte; nothing written`);
         }
         const done = [];
+        // The library's records getter copies the whole table each time it is read: once per table here, with the rows indexed for the edits (5,600 edits of one table took far too long otherwise).
+        const editTables = new Map();
         for (const e of target.edits) {
-            const table = helper.file[e.table];
-            if (table.records.length === 0) await table.readRecords();
-            const rec = pickRow(table.records, e).row;
+            let t = editTables.get(e.table);
+            if (!t) {
+                const table = helper.file[e.table];
+                if (table.records.length === 0) await table.readRecords();
+                const records = table.records;
+                t = { records, picker: makePicker(records) };
+                editTables.set(e.table, t);
+            }
+            const rec = pickRow(t.records, e, t.picker).row;
             for (const [k, v] of Object.entries(e.expect || {})) {
                 if (!sameValue(rec.fields[k].value, v)) throw new Error(`${e.table} ${JSON.stringify(e.match)} ${k} is ${rec.fields[k].value}, expected ${v}; nothing written`);
             }
             const change = {};
-            for (const [k, v] of Object.entries(e.set)) { change[k] = [rec.fields[k].value, v]; rec.fields[k].value = v; }
+            for (const [k, v] of Object.entries(e.set)) { change[k] = [rec.fields[k].value, v]; rec.fields[k].value = v; t.picker.changed(k); }
             done.push({ table: e.table, match: e.match, change });
         }
         await helper.save(out);
@@ -1030,8 +1079,9 @@ async function patchEntry(target, mode, backupDir) {
                 const beforeRecs = before.records, afterRecs = after.records;
                 if (beforeRecs.length !== afterRecs.length) throw new Error(`${name} has a different number of rows after the change; nothing written`);
                 const edited = new Map();
+                const beforePicker = makePicker(beforeRecs);
                 for (const e of target.edits.filter((x) => x.table === name)) {
-                    const hit = pickRow(beforeRecs, e).index;
+                    const hit = pickRow(beforeRecs, e, beforePicker).index;
                     edited.set(hit, new Set(Object.keys(e.set)));
                 }
                 for (let i = 0; i < beforeRecs.length; i++) {
@@ -1043,10 +1093,17 @@ async function patchEntry(target, mode, backupDir) {
                     }
                 }
             }
+            const readBack = new Map();                    // per table: read once, rows indexed (see the edit loop)
             for (const e of target.edits) {
-                const table = check.helper.file[e.table];
-                await table.readRecords();
-                const rec = pickRow(table.records, e).row;
+                let t = readBack.get(e.table);
+                if (!t) {
+                    const table = check.helper.file[e.table];
+                    await table.readRecords();
+                    const records = table.records;
+                    t = { records, picker: makePicker(records) };
+                    readBack.set(e.table, t);
+                }
+                const rec = pickRow(t.records, e, t.picker).row;
                 for (const [k, v] of Object.entries(e.set)) {
                     if (!sameValue(rec.fields[k].value, v)) throw new Error(`${e.table}.${k} did not read back as ${v}; nothing written`);
                 }
