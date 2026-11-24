@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, career_parent_books, custom_book_names_from_pppn, mounted_play_id_for_link, original_play_id_for_mounted, split_custom_book_targets, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, career_parent_books, custom_book_names_from_pppn, mounted_play_id_for_link, original_play_id_for_mounted, split_custom_book_targets, custom_book_rename_targets, is_shipped_play, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -9631,15 +9631,21 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 career_plyl = original_play_id_for_mounted(lib.custom, self.plyl)
                 shown = self._custom_current_names.get((b, career_plyl), lib.plays[self.plyl]["name"])
                 held = d.career_book_plays is None or self.plyl in d.career_book_plays.get(b, set())
-                self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)" + ("" if held else "   [not in the open career]"))
+                own = not is_shipped_play(self.plyl)
+                marker = "   [shipped play: not renamed here]" if not own else ("" if held else "   [not in the open career]")
+                self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)" + marker)
         for i, entry in enumerate(self._entries):
             if entry in keep:
                 self.lst.selection_set(i)
         if self._custom_books:
-            profile_only = split_custom_book_targets(self._custom_books, d.career_book_plays, self.plyl)[1]
+            own = not is_shipped_play(self.plyl)
+            profile_only = custom_book_rename_targets(self._custom_books, d.career_book_plays, self.plyl, own)[1]
             self.lbl_result.configure(
-                text="Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
-                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The name is stored under the shipped playbook the custom one is based on, so other custom playbooks of this career based on the same one show it too. Seen in the game (career playbook viewer): the new name shows for a play you made; it did not show for either shipped play tried (one its base playbook names itself, one it does not), so renaming a shipped play in a custom playbook may show nothing."
+                text=("Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
+                      "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The name is stored under the shipped playbook the custom one is based on, so other custom playbooks of this career based on the same one show it too. Seen in the game (career playbook viewer): the new name shows for a play you made (not tried for a play added to the game files)."
+                      if own else
+                      "Custom playbooks that have this play are listed, but not renamed: a name written for a SHIPPED play in a custom playbook did not show in the game in two checks (a play you made does show it), "
+                      "so nothing is written there. The shipped playbooks are renamed as usual.")
                      + (" A book marked \"not in the open career\" cannot be renamed here: it has this play only in your profile (a career copies a custom book's plays when it is made), or the open career "
                         "was made with another playbook and does not play that book, so a name there would never be shown."
                         if profile_only else "")
@@ -9665,8 +9671,13 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         picked_custom = [b for kind, b in picked if kind == "custom"]
         custom_targets = list(self._custom_books) if everywhere else picked_custom
         # A name is written to the open career's PPPN and used there only for plays the career's own links put in the book: books that have the play only in the PROFILE are left out, and said so.
-        custom_targets, not_in_career = split_custom_book_targets(custom_targets, d.career_book_plays, self.plyl)
+        own_play = not is_shipped_play(self.plyl)
+        custom_targets, not_in_career, shipped_skipped = custom_book_rename_targets(custom_targets, d.career_book_plays, self.plyl, own_play)
         skipped_note = ""
+        if shipped_skipped:
+            skipped_names = ", ".join('"' + d.custom_books.get(b, "Custom playbook %d" % b) + '"' for b in shipped_skipped)
+            skipped_note = ("Not renamed in %s: this is a shipped play, and a name written for a shipped play in a custom playbook did not show in the game in two checks (only plays you made show it), "
+                            "so nothing is written there." % skipped_names)
         if not_in_career:
             skipped_names = ", ".join('"' + d.custom_books.get(b, "Custom playbook %d" % b) + '"' for b in not_in_career)
             skipped_note = ("Not renamed in %s: the open career does not have the play there (it is in %s only in your profile, since a career copies a custom book's plays when it is made, or the career "
@@ -9705,7 +9716,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         if stock_wanted:
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
-            details.append("Custom-book names are written only to the career save's PPPN table, under the shipped playbook each custom playbook is based on (other custom playbooks based on the same one show the name too). A .bak backup is made for that save. Seen in the game (career playbook viewer): the new name shows for a play you made; it did not show for either shipped play tried (one its base playbook names itself, one it does not), so renaming a shipped play in a custom playbook may show nothing.")
+            details.append("Custom-book names are written only to the career save's PPPN table, under the shipped playbook each custom playbook is based on (other custom playbooks based on the same one show the name too). A .bak backup is made for that save. Seen in the game (career playbook viewer): the new name shows for a play you made (not tried for a play added to the game files).")
         if skipped_note:
             details.append(skipped_note)
         if not messagebox.askyesno(
@@ -9786,7 +9797,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             if wrote and not failed:
                 text = "Done. " + text
             if any(not error for *_x, error in result["custom"]):            # only when a custom book's name is really in the career now (not when every custom write failed)
-                text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game (career playbook viewer): the new name shows for a play you made; it did not show for either shipped play tried (one its base playbook names itself, one it does not), so renaming a shipped play in a custom playbook may show nothing."
+                text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game (career playbook viewer): the new name shows for a play you made (not tried for a play added to the game files)."
             elif stock is not None:
                 text += "\n\nStart the game and look at the play-call screen; Put the game files back restores the names."
             self.lbl_result.configure(text=text)
