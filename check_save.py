@@ -427,7 +427,7 @@ def main(argv):
     write_file = "--no-file" not in argv
     if "--custom-play-batch" in argv:
         lines = custom_play_batch_report()
-        text = "\\n".join(lines).rstrip() + "\\n"
+        text = "\n".join(lines).rstrip() + "\n"
         print(text)
         if write_file:
             target = os.path.join(HERE, "custom_play_batch_report.txt")
