@@ -212,6 +212,10 @@ class PlayDataHelperTests(unittest.TestCase):
         self.assertFalse(hc09_plays.is_shipped_play(7460))                                  # a play added to the game files
         self.assertFalse(hc09_plays.is_shipped_play(hc09_plays.CUSTOM_OFFSETS["PLYL"] + 1))   # a play the person made, mounted far above
 
+    def test_play_kind_tells_shipped_added_and_own_plays_apart(self):
+        offset = hc09_plays.CUSTOM_OFFSETS["PLYL"]
+        self.assertEqual([hc09_plays.play_kind(i) for i in (1, 7459, 7460, offset - 1, offset, offset + 5)], ["shipped", "shipped", "added", "added", "own", "own"])
+
 
 if __name__ == "__main__":
     unittest.main()
