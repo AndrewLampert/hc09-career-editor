@@ -3,9 +3,11 @@ Draft classes of the game files: plan a change of ratings for every player of on
 
 The game keeps a library of draft classes in the tables DPL1 to DPL4 of qkl_boot.ast (entry 46 in the PS3 game; the editor takes the entry from the archive, never a fixed number): 16 classes
 per table (5,600 players each, one row per player, 217 columns). DFCL is the class number, PGID the player (unique inside a table), PPOS the position. Class 1 is an identical copy in all four tables.
-The first class of the new careers compared (two fresh careers, Bills and Raiders, made 2026-11) is DPL2 / 19: about 300 of its 350 players carry exactly that class's ratings in the save (the
-names are replaced and about 52 players are moved to the free-agent pool when the game loads the class). That is read from saved data, not seen on a game screen. The classes after it come from the
-same tables by the rules the game's code reads (also not seen on screen). A class that is already inside a save does not change: only careers made afterwards see an edit.
+Which class a career holds changes over time: its DCIC row names it (DFCL, strength tier DCSI, place in the tier DCYR) and the code moves a career on to a later class of a chosen tier.
+Read from saves on 2026-11-24: the Bills and Raiders careers hold class 19 (DPL2), DOLPHINS2 class 3, QQETBROWNS class 5, MAINSALCAP class 48; a new career made in the in-game test (Falcons,
+starting point off-season) held class 1 (tier 1, place 0), and an edit of class 1 reached its 350 players exactly (seen in the game). Which class a new career starts with in general, and the
+classes after the first, were not worked out or tried. A class that is already inside a save does not change: only careers made afterwards see an edit, and about 50 players of a class are moved
+to the free-agent pool when the game loads it.
 
 This module only plans: it reads the exported rows (dicts of text, as the bridge writes them), works out new values and returns bridge entry-patch edits. Standard library only (no Tk).
 A rating is edited together with its maximum (PSPD with PSDX): both move by the same amount, stay inside 0 to 99, and the maximum never falls below the rating.
@@ -13,7 +15,6 @@ A rating is edited together with its maximum (PSPD with PSDX): both move by the 
 import math
 
 TIERS = ("DPL1", "DPL2", "DPL3", "DPL4")
-FIRST_CAREER_CLASS = ("DPL2", 19)              # the first class of the two fresh careers compared (read from their saves)
 RATING_MIN, RATING_MAX = 0, 99
 MAX_DELTA = 40                                 # one step of the window; the plan itself accepts any whole number
 
@@ -52,14 +53,19 @@ def clamp(value):
     return max(RATING_MIN, min(RATING_MAX, value))
 
 
-def class_label(table, dfcl):
-    """How the window names a class: its number and the table it is in; the one the compared new careers start with says so."""
-    if dfcl == 1:
-        return "Class 1 (the same copy in all four tables)"
-    text = f"Class {dfcl} ({table})"
-    if (table, dfcl) == FIRST_CAREER_CLASS:
-        text += " - the first class of new careers"
-    return text
+def class_label(table, dfcl, current=False):
+    """How the window names a class: its number and the table it is in; current: it is the class the open career holds now (its DCIC)."""
+    text = "Class 1 (the same copy in all four tables)" if dfcl == 1 else f"Class {dfcl} ({table})"
+    return text + (" - the class your open career has now" if current else "")
+
+
+def career_class_from_rows(dcic_rows):
+    """(class number DFCL, strength tier DCSI) from the rows of a career's DCIC table, or None when it has no readable row."""
+    for r in dcic_rows or ():
+        dfcl, tier = to_int(r.get("DFCL")), to_int(r.get("DCSI"))
+        if dfcl is not None and tier is not None:
+            return dfcl, tier
+    return None
 
 
 def classes_in(rows_by_table):
@@ -80,16 +86,19 @@ def tables_holding(rows_by_table, dfcl):
     return [t for t in TIERS if dfcl in held.get(t, {})]
 
 
-def class_choices(rows_by_table):
-    """The classes the window lists: [(label, table, class number)] with the first class of new careers first, then class 1 (once) and the rest in table order."""
+def class_choices(rows_by_table, current=None):
+    """The classes the window lists: [(label, table, class number)], the class the open career holds now first (current = (DFCL, DCSI) from career_class_from_rows), then the others in table order;
+    class 1 is listed once (its four copies change together)."""
     held = classes_in(rows_by_table)
+    first_one = next((t for t in TIERS if 1 in held.get(t, {})), None)
     out = []
     for table in TIERS:
         for dfcl in sorted(held.get(table, {})):
-            if dfcl == 1 and table != next((t for t in TIERS if 1 in held.get(t, {})), None):
-                continue                                   # class 1 is listed once (its four copies change together)
-            out.append((class_label(table, dfcl), table, dfcl))
-    out.sort(key=lambda c: (0 if (c[1], c[2]) == FIRST_CAREER_CLASS else 1))   # stable: the rest keep table order
+            if dfcl == 1 and table != first_one:
+                continue
+            out.append((class_label(table, dfcl, current=bool(current) and dfcl == current[0]), table, dfcl))
+    if current:
+        out.sort(key=lambda c: 0 if c[2] == current[0] else 1)             # stable: the rest keep table order
     return out
 
 

@@ -133,16 +133,28 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(dc.tables_holding(tables, 19), ["DPL2"])
         self.assertEqual(dc.tables_holding(tables, 40), [])
 
-    def test_class_label_names_the_first_class_of_new_careers(self):
-        self.assertIn("first class of new careers", dc.class_label("DPL2", 19))
-        self.assertNotIn("first class", dc.class_label("DPL3", 32))
+    def test_class_labels_do_not_claim_a_first_class_for_new_careers(self):
+        for table, dfcl in (("DPL2", 19), ("DPL1", 1), ("DPL3", 32)):
+            self.assertNotIn("new career", dc.class_label(table, dfcl))
         self.assertIn("all four tables", dc.class_label("DPL1", 1))
+        self.assertEqual(dc.class_label("DPL2", 19), "Class 19 (DPL2)")
+        self.assertIn("your open career has now", dc.class_label("DPL2", 19, current=True))
+        self.assertFalse(hasattr(dc, "FIRST_CAREER_CLASS"))
 
-    def test_class_choices_list_the_first_class_first_and_class_one_once(self):
+    def test_the_class_a_career_holds_comes_from_its_dcic(self):
+        self.assertEqual(dc.career_class_from_rows([{"DFCL": "19", "DCSI": "2", "DCYR": "3"}]), (19, 2))
+        self.assertEqual(dc.career_class_from_rows([{"DFCL": "", "DCSI": "2"}, {"DFCL": "5", "DCSI": "1"}]), (5, 1))
+        self.assertIsNone(dc.career_class_from_rows([]))
+        self.assertIsNone(dc.career_class_from_rows(None))
+
+    def test_class_choices_in_table_order_class_one_once_and_the_careers_class_first(self):
         tables = {"DPL1": [row(1, 1, 3, 1, 1), row(2, 5, 3, 1, 1)], "DPL2": [row(1, 1, 3, 1, 1), row(3, 19, 3, 1, 1), row(4, 17, 3, 1, 1)],
                   "DPL3": [row(1, 1, 3, 1, 1)], "DPL4": [row(1, 1, 3, 1, 1)]}
-        got = [(t, c) for _l, t, c in dc.class_choices(tables)]
-        self.assertEqual(got, [("DPL2", 19), ("DPL1", 1), ("DPL1", 5), ("DPL2", 17)])
+        self.assertEqual([(t, c) for _l, t, c in dc.class_choices(tables)], [("DPL1", 1), ("DPL1", 5), ("DPL2", 17), ("DPL2", 19)])
+        got = dc.class_choices(tables, current=(19, 2))
+        self.assertEqual([(t, c) for _l, t, c in got], [("DPL2", 19), ("DPL1", 1), ("DPL1", 5), ("DPL2", 17)])
+        self.assertIn("your open career has now", got[0][0])
+        self.assertEqual([c[2] for c in dc.class_choices(tables, current=(1, 1))][0], 1)
 
     def test_the_four_tables_edits_go_into_one_list_and_the_restore_target_has_none(self):
         p = dc.plan({t: [row(1, 1, 3, 70, 80)] for t in dc.TIERS}, 1, {"PSPD": 1})
