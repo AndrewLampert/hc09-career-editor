@@ -9424,7 +9424,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             profile_only = split_custom_book_targets(self._custom_books, d.career_book_plays, self.plyl)[1]
             self.lbl_result.configure(
                 text="Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
-                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The custom-book name behavior still needs an in-game check."
+                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. Not confirmed in the game: two in-game checks did not show a custom-book name in the career playbook viewer."
                      + (" A book marked \"in your profile only\" has this play in your profile but not in the open career (a career copies a custom book's plays when it is made), so it cannot be renamed here."
                         if profile_only else "")
             )
@@ -9489,7 +9489,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         if stock_wanted:
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
-            details.append("Custom-book names are written only to the career save's PPPN table. A .bak backup is made for that save. This feature still needs an in-game check.")
+            details.append("Custom-book names are written only to the career save's PPPN table. A .bak backup is made for that save. Not confirmed in the game: two in-game checks did not show the name in the career playbook viewer.")
         if skipped_note:
             details.append(skipped_note)
         if not messagebox.askyesno(
@@ -9570,7 +9570,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             if wrote and not failed:
                 text = "Done. " + text
             if custom_targets:
-                text += "\n\nThe custom-book PPPN change still needs an in-game check."
+                text += "\n\nThe custom-book name is saved in the career, but it is not confirmed in the game: two in-game checks did not show it in the career playbook viewer."
             elif stock is not None:
                 text += "\n\nStart the game and look at the play-call screen; Put the game files back restores the names."
             self.lbl_result.configure(text=text)
