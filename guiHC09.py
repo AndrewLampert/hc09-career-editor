@@ -9097,9 +9097,9 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
         ttk.Label(self, wraplength=900, justify="left", padding=(14, 0, 14, 6),
                   text="The game keeps its draft classes in its own file: 61 classes of about 350 players. Pick a class, change the ratings of all its players (a rating and its maximum move together, "
                        "nothing goes below 0 or above 99) and write it into the game's file. Only careers made AFTER the change see it: a class that is already inside a save stays as it was. "
-                       "A career moves on to a later class as it goes (read from the game's code); the class your open career holds now is marked in the list. In an in-game test a new career started with "
+                       "A career moves on to the next class of its tier when the regular season starts (seen in the game); the class your open career holds now is marked in the list. In an in-game test a new career started with "
                        "class 1 (the same copy in all four tables, all four are changed) and the change reached its 350 players exactly; the Bills and Raiders careers hold class 19 of the second table, "
-                       "so which class a new career starts with is not fixed and the rule is not known. Only class 1 was tried in the game, not the classes a career gets later. About 50 players of a class "
+                       "so which class a new career starts with is not fixed and the rule is not known. In the game an edit showed in the first class (class 1) and in the next year's class (class 2, loaded when the regular season starts); later classes follow the same rule but were not run. About 50 players of a class "
                        "become free agents when the game loads it, and the game changes ratings again over the seasons. Close RPCS3 first. The first time, the changed file entry is saved in "
                        "Documents\\hc09-game-file-backup, and Put the draft classes back restores it. The Put the game files back buttons of the play windows restore that file entry too (it also holds the "
                        "playbooks' own play names), so they undo a draft class change; and while plays added with Add a play are in the game files the draft classes cannot be changed.").pack(anchor="w")
@@ -9248,7 +9248,7 @@ class DraftClassDialog(WriteGuard, tk.Toplevel):
         if not messagebox.askyesno("Change a draft class", f"Change {plan['players']} players of {DC.class_label(table, dfcl)} in the game files?\n\n{plan['values']} values change"
                                    f"{' in each of ' + str(len(plan['tables'])) + ' copies' if len(plan['tables']) > 1 else ''}. This writes into qkl_boot.ast of your game. The first time, the changed "
                                    "file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it.\n\nOnly careers made after this see the change; a class that "
-                                   "is already in a save stays as it is. In the game only class 1 was tried.", parent=self):
+                                   "is already in a save stays as it is. In the game the first class and the next year's class showed an edit; later classes were not run.", parent=self):
             return
         boot = archives[0]
 
