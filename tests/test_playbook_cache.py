@@ -154,5 +154,35 @@ class PlaybookCacheTests(unittest.TestCase):
             self.app._extract_playbook_names(self.archive)
         self.assertFalse(os.path.exists(os.path.join(self.cache_dir, "playbook-source.json")))
 
+    def test_every_stock_table_export_requires_rows(self):
+        # An archive grown by Add a play has a second entry with PBFM, SETL and PBPL and no rows; without
+        # --require-rows the bridge can return that one, and the export is then rejected as empty.
+        calls = []
+
+        def export(args):
+            calls.append(list(args))
+            tables = args[args.index("--tables") + 1]
+            if tables == "PLAB":
+                with open(os.path.join(self.cache_dir, "plab.csv"), "w", encoding="utf-8") as f:
+                    f.write("PBGI,BNAM\n1,Example book\n")
+            elif tables == "PBFM,SETL,PBPL":
+                for name, content in (("pbfm.csv", "PBFM,name\n1,Example formation\n"),
+                                      ("setl.csv", "SETL,name\n1,Example set\n"),
+                                      ("pbpl.csv", "SETL,PLYL,name\n1,2,Example play\n")):
+                    with open(os.path.join(self.cache_dir, name), "w", encoding="utf-8") as f:
+                        f.write(content)
+            elif tables == "PPPN":
+                with open(os.path.join(self.cache_dir, guiHC09.PLAYBOOK_PLAYNAMES_FILE), "w", encoding="utf-8") as f:
+                    f.write("BOKL,PLYL,PPPM\n" + ("1,2,Example play\n" * 20))
+                return {"records": 20}
+            return {"records": 1}
+
+        self.app.model = SimpleNamespace(run_bridge=Mock(side_effect=export))
+        self.app._extract_playbook_names(self.archive)
+        exports = [c for c in calls if c[0] == "shipped-table-export"]
+        self.assertEqual([c[c.index("--tables") + 1] for c in exports], ["PLAB", "PBFM,SETL,PBPL", "PPPN"])
+        for c in exports:
+            self.assertIn("--require-rows", c, c)
+
 if __name__ == "__main__":
     unittest.main()

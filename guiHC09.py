@@ -9282,7 +9282,10 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
 
     def _restore(self):
         app = self.app
-        original_custom = {b["key"]: b["name"] for b in self.original_books if b["key"] in self.custom_keys}
+        current = {b["key"]: b["name"] for b in self.books}
+        # Only the custom books whose name here differs from the one they had when this window opened are written back: with nothing to put back the profile and career saves are not rewritten
+        # (and a profile that has lost a custom book cannot stop the game files from being put back).
+        original_custom = {b["key"]: b["name"] for b in self.original_books if b["key"] in self.custom_keys and current.get(b["key"]) != b["name"]}
 
         def work():
             restored, rows = app.rename_playbooks_restore(self.boot)
@@ -9305,7 +9308,10 @@ class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
                     b["raw"] = original_custom[b["key"]]
             self.staged = {}
             self._fill()
-            text = f"Restored stock names: {bool(restored)}; restored {custom_count} custom-book name entries to their original names."
+            text = ("Put back: the game's playbook names are as they were before the first rename." if restored
+                    else "Nothing to put back in the game files: no playbook was renamed there (there is no backup of the names).")
+            if custom_count:
+                text += f" {custom_count} custom playbook name entr{'ies' if custom_count != 1 else 'y'} (profile and career saves) put back to what they were when this window opened."
             self.lbl_result.configure(text=text)
             messagebox.showinfo("Put the names back", text, parent=self)
             try:
@@ -9452,8 +9458,13 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 return
             save_paths.append(("career", db))
 
+        # One of the person's own plays ("Plays I made") is in no shipped playbook: "Everywhere" for it means its custom books only (a shipped-book rename of it can only fail).
+        stock_wanted = bool(everywhere or picked_stock) and self.plyl not in getattr(d.lib, "custom", {})
+        if not stock_wanted and not custom_targets:
+            messagebox.showinfo("Rename in playbooks", "This play is in none of the playbooks that can be renamed here (a custom play is renamed in the custom playbooks of the open career).", parent=self)
+            return
         archives = None
-        if everywhere or picked_stock:
+        if stock_wanted:
             archives = app._personnel_archives()
             if not archives:
                 return
@@ -9463,7 +9474,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         total = stock_count + custom_count
         where = "everywhere" if everywhere else f"in {total} selected playbook{'s' if total != 1 else ''}"
         details = []
-        if everywhere or picked_stock:
+        if stock_wanted:
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
             details.append("Custom-book names are written only to the career save's PPPN table. A .bak backup is made for that save. This feature still needs an in-game check.")
@@ -9478,7 +9489,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
 
         def work():
             out = {"stock": None, "stock_error": None, "custom": []}
-            if everywhere or picked_stock:
+            if stock_wanted:
                 try:
                     out["stock"] = app.game_file_rename(
                         lib, plyl, name, None if everywhere else picked_stock, archives
@@ -9537,8 +9548,20 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 if d.detail is not None and d.plyl == plyl:
                     d._show()
             self._fill_books()
-            self.lbl_result.configure(text="\n".join(lines) + "\n\nThe custom-book PPPN change still needs an in-game check.")
-            messagebox.showinfo("Rename in playbooks", "\n".join(lines), parent=self)
+            wrote = stock is not None or any(changed for _l, _p, _b, changed, _c, _e in result["custom"])
+            failed = bool(result["stock_error"]) or any(error for *_x, error in result["custom"])
+            text = "\n".join(lines)
+            if wrote and not failed:
+                text = "Done. " + text
+            if custom_targets:
+                text += "\n\nThe custom-book PPPN change still needs an in-game check."
+            elif stock is not None:
+                text += "\n\nStart the game and look at the play-call screen; Put the game files back restores the names."
+            self.lbl_result.configure(text=text)
+            if failed and not wrote:                       # nothing was written: that is an error, not news
+                messagebox.showerror("Rename in playbooks", "\n".join(lines), parent=self)
+            else:
+                messagebox.showinfo("Rename in playbooks", "\n".join(lines), parent=self)
 
         self._start_write("Renaming the play...", work, done, "Rename in playbooks")
 
@@ -13402,8 +13425,10 @@ class App(tk.Tk):
             pass
         self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PLAB",
                                "--require-fields", "PBGI,BNAM", "--require-rows", "--out-dir", out])
+        # --require-rows: an archive the editor has grown (Add a play) holds another entry with these three tables and no rows, and without the flag the bridge can return that one first
+        # (an empty export that the check below then rejects, after the play was already written).
         self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", "PBFM,SETL,PBPL",
-                               "--out-dir", out])
+                               "--require-rows", "--out-dir", out])
         required_columns = {
             "plab.csv": {"PBGI", "BNAM"},
             "pbfm.csv": {"PBFM", "name"},

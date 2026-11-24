@@ -26,7 +26,7 @@ BRANCH = "main"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # the editor runs under pythonw: git started without this opens a black console window (0 off Windows)
 API = "https://api.github.com"
 PAGE = f"https://github.com/{REPO}"
-TRACKED_FILES = ("guiHC09.py", "hc09_update.py", "hc09-bridge/bridge.js", "hc09-bridge/package.json")
+TRACKED_FILES = ("guiHC09.py", "hc09_update.py", "hc09-bridge/bridge.js", "hc09-bridge/archive_safety.js", "hc09-bridge/package.json")      # (bridge.js requires archive_safety.js: a copy with one and not the other does not start)
 # A copy without a git folder is compared file by file: these, and every Python module beside guiHC09.py that the repository has (the editor is
 # split into modules such as hc09_plays.py, and a change in any of them is an update).
 PAGE_SIZE = 100            # commits per page of the GitHub comparison (the most it gives)
