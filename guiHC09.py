@@ -9414,7 +9414,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 career_plyl = original_play_id_for_mounted(lib.custom, self.plyl)
                 shown = self._custom_current_names.get((b, career_plyl), lib.plays[self.plyl]["name"])
                 held = d.career_book_plays is None or self.plyl in d.career_book_plays.get(b, set())
-                self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)" + ("" if held else "   [in your profile only, not in the open career]"))
+                self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)" + ("" if held else "   [not in the open career]"))
         for i, entry in enumerate(self._entries):
             if entry in keep:
                 self.lst.selection_set(i)
@@ -9422,8 +9422,9 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             profile_only = split_custom_book_targets(self._custom_books, d.career_book_plays, self.plyl)[1]
             self.lbl_result.configure(
                 text="Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
-                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The name is stored under the shipped playbook the custom one is based on, so other custom playbooks of this career based on the same one show it too. Seen in the game for a play you made; a shipped play that its base playbook already names itself may keep that name (not yet checked)."
-                     + (" A book marked \"in your profile only\" has this play in your profile but not in the open career (a career copies a custom book's plays when it is made), so it cannot be renamed here."
+                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The name is stored under the shipped playbook the custom one is based on, so other custom playbooks of this career based on the same one show it too. Seen in the game: a play you made shows the new name; a shipped play that its base playbook already names itself keeps that name, so renaming such a play here shows nothing."
+                     + (" A book marked \"not in the open career\" cannot be renamed here: it has this play only in your profile (a career copies a custom book's plays when it is made), or the open career "
+                        "was made with another playbook and does not play that book, so a name there would never be shown."
                         if profile_only else "")
             )
         elif available - set(self._books):
@@ -9451,8 +9452,8 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         skipped_note = ""
         if not_in_career:
             skipped_names = ", ".join('"' + d.custom_books.get(b, "Custom playbook %d" % b) + '"' for b in not_in_career)
-            skipped_note = ("Not renamed in %s: the play is in %s in your profile, but the open career does not have it there (a career copies a custom book's plays when it is made), "
-                            "so a name for it would not be used in this career." % (skipped_names, "that book" if len(not_in_career) == 1 else "those books"))
+            skipped_note = ("Not renamed in %s: the open career does not have the play there (it is in %s only in your profile, since a career copies a custom book's plays when it is made, or the career "
+                            "was made with another playbook and does not play %s), so a name for it would not be shown in this career." % (skipped_names, "that book" if len(not_in_career) == 1 else "those books", "it" if len(not_in_career) == 1 else "them"))
         if app._rpcs3_running():
             messagebox.showerror("Rename in playbooks", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
             return
@@ -9487,7 +9488,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         if stock_wanted:
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
-            details.append("Custom-book names are written only to the career save's PPPN table, under the shipped playbook each custom playbook is based on (other custom playbooks based on the same one show the name too). A .bak backup is made for that save. Seen in the game for a play you made; a shipped play that its base playbook already names itself may keep that name (not yet checked).")
+            details.append("Custom-book names are written only to the career save's PPPN table, under the shipped playbook each custom playbook is based on (other custom playbooks based on the same one show the name too). A .bak backup is made for that save. Seen in the game: a play you made shows the new name; a shipped play that its base playbook already names itself keeps that name, so renaming such a play here shows nothing.")
         if skipped_note:
             details.append(skipped_note)
         if not messagebox.askyesno(
@@ -9568,7 +9569,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             if wrote and not failed:
                 text = "Done. " + text
             if custom_targets:
-                text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game for a play you made; a shipped play that the base playbook already names itself may keep that name."
+                text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game: a play you made shows the new name; a shipped play that its base playbook already names itself keeps that name, so renaming such a play here shows nothing."
             elif stock is not None:
                 text += "\n\nStart the game and look at the play-call screen; Put the game files back restores the names."
             self.lbl_result.configure(text=text)
@@ -15521,6 +15522,7 @@ class App(tk.Tk):
                     profile_pgpl = self._export_tables(profile, ["PGPL"])["PGPL"][1]
                     career = self.model.db_path or ""
                     career_pgpl = []
+                    career_played = None             # the custom playbooks the open career plays: its own PLAB holds those only (a career links all ten in PGPL, and keeps the playbook of just the ones it uses)
                     if career and os.path.isfile(career):
                         try:
                             career_pgpl = self._export_tables(career, ["PGPL"])["PGPL"][1]
@@ -15530,6 +15532,7 @@ class App(tk.Tk):
                         try:
                             exported = self._export_tables(career, ["PPPN", "PLAB"])           # a name is keyed by the shipped playbook a custom one is based on (PLAB.PBPR)
                             custom_book_names = custom_book_names_from_pppn(exported["PPPN"][1], exported["PLAB"][1])
+                            career_played = set(career_parent_books(exported["PLAB"][1]))
                         except Exception:
                             pass
                     linked_rows = list(profile_pgpl) + list(career_pgpl)
@@ -15548,6 +15551,8 @@ class App(tk.Tk):
                             continue
                         if 1 <= bokl <= 10:
                             career_book_plays.setdefault(bokl, set()).add(mounted_play_id_for_link(lib.custom, setl, plyl))
+                    if career_book_plays is not None and career_played is not None:      # a name for a book the career does not play would never be shown (and the write refuses it)
+                        career_book_plays = {b: plays for b, plays in career_book_plays.items() if b in career_played}
                 except Exception:
                     # Keep the stock Play Creator usable if custom-save data cannot be read.
                     custom_books, custom_book_plays, custom_book_names = {}, {}, {}
