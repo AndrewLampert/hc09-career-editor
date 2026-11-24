@@ -65,6 +65,11 @@ except ImportError:                  # without it only renaming the default play
     PN = None
 
 try:
+    import hc09_draftclass as DC
+except ImportError:                  # without it only the Change a draft class window is missing
+    DC = None
+
+try:
     from hc09_playtypes import PlayTypes, FAMILY_NAME, FAMILY_TEXT, FAMILY_KIND
 except ImportError:                  # without it the play designer still works, only the play types are missing
     PlayTypes = None
@@ -9067,6 +9072,218 @@ class DefenseDialog(WriteGuard, tk.Toplevel):
                        "Documents\\hc09-game-file-backup.", lambda archives: self.app.game_file_restore(archives), done)
 
 
+class DraftClassDialog(WriteGuard, tk.Toplevel):
+    """Change a draft class: the game keeps its library of draft classes in four tables of its own file (DPL1 to DPL4 of qkl_boot.ast, 16 classes of about 350 players each; class 1 is the same copy in
+    all four). Pick a class, change the ratings of all its players (a rating and its maximum move together) by a number or to the average of other players, see what that does to each position, and
+    write it into the game's file. Only careers made afterwards see it. The first time, the changed file entry is backed up (Documents\\hc09-game-file-backup) and Put the draft classes back restores
+    it. All the planning is in hc09_draftclass.py."""
+
+    def __init__(self, app, boot, rows, veterans=()):
+        super().__init__(app)
+        p = getattr(app, "_ui_palette", None)
+        if p:
+            self.configure(background=p["bg"])
+        self.title("Change a draft class")
+        self.transient(app)
+        self.resizable(True, True)
+        self.geometry(f"940x{min(800, self.winfo_screenheight() - 90)}")
+        self.minsize(820, 560)
+        self.app, self.boot, self.rows, self.veterans = app, boot, rows, list(veterans)
+        self.plan = None
+        self._refs = {}
+        self.choices = DC.class_choices(rows)
+        ttk.Label(self, text="Change a draft class", font=("", 12, "bold"), padding=(14, 12, 14, 2)).pack(anchor="w")
+        ttk.Label(self, wraplength=900, justify="left", padding=(14, 0, 14, 6),
+                  text="The game keeps its draft classes in its own file: 61 classes of about 350 players. Pick a class, change the ratings of all its players (a rating and its maximum move together, "
+                       "nothing goes below 0 or above 99) and write it into the game's file. Only careers made AFTER the change see it: a class that is already inside a save stays as it was. "
+                       "The first class of the new careers compared (a Bills and a Raiders career) is class 19 of the second table; that comes from their saved data, and the classes after it follow the "
+                       "game's own rules as read from its code: neither was seen on a game screen. About 50 players of a class become free agents when the game loads it, and the game changes ratings "
+                       "again over the seasons. Close RPCS3 first. The first time, the changed file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it. "
+                       "The Put the game files back buttons of the play windows restore that file entry too (it also holds the playbooks' own play names), so they undo a draft class change; and while plays "
+                       "added with Add a play are in the game files the draft classes cannot be changed. Not tried in the game yet.").pack(anchor="w")
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=14, pady=(0, 4))
+        ttk.Label(top, text="Class:").grid(row=0, column=0, sticky="w", pady=2)
+        self.class_var = tk.StringVar(value=self.choices[0][0] if self.choices else "")
+        cmb = ttk.Combobox(top, state="readonly", width=58, textvariable=self.class_var, values=[c[0] for c in self.choices])
+        cmb.grid(row=0, column=1, sticky="w", padx=6)
+        cmb.bind("<<ComboboxSelected>>", lambda e: self._recompute())
+        self.mode_var = tk.StringVar(value="add")
+        ttk.Radiobutton(top, text="Add or subtract a number", value="add", variable=self.mode_var, command=self._mode_changed).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        mrow = ttk.Frame(top)
+        mrow.grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Radiobutton(mrow, text="Move each position to the average of", value="match", variable=self.mode_var, command=self._mode_changed).pack(side="left")
+        self._ref_texts = {}
+        if self.veterans:
+            self._ref_texts["the veterans of the open career"] = "veterans"
+        self._ref_texts["every class in the game's library"] = "library"
+        self.ref_var = tk.StringVar(value=next(iter(self._ref_texts)))
+        rc = ttk.Combobox(mrow, state="readonly", width=34, textvariable=self.ref_var, values=list(self._ref_texts))
+        rc.pack(side="left", padx=6)
+        rc.bind("<<ComboboxSelected>>", lambda e: self._recompute())
+        grid = ttk.Frame(self)
+        grid.pack(fill="x", padx=14, pady=(6, 2))
+        ttk.Label(grid, text="Rating", font=("", 9, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 18))
+        ttk.Label(grid, text="Add (+) or subtract (-)", font=("", 9, "bold")).grid(row=0, column=1, sticky="w", padx=(0, 18))
+        ttk.Label(grid, text="Use for the average", font=("", 9, "bold")).grid(row=0, column=2, sticky="w")
+        self.delta_vars, self.use_vars, self.spins, self.checks = {}, {}, {}, {}
+        for i, (code, label, _mx) in enumerate(DC.RATINGS):
+            r, c = 1 + i % 4, (i // 4) * 3
+            ttk.Label(grid, text=label).grid(row=r, column=c, sticky="w", padx=(0 if c == 0 else 30, 18), pady=1)
+            self.delta_vars[code] = tk.StringVar(value="0")
+            sp = ttk.Spinbox(grid, from_=-DC.MAX_DELTA, to=DC.MAX_DELTA, width=5, textvariable=self.delta_vars[code], command=self._recompute)
+            sp.grid(row=r, column=c + 1, sticky="w", pady=1)
+            sp.bind("<KeyRelease>", lambda e: self._recompute())
+            self.use_vars[code] = tk.BooleanVar(value=(code == "PSPD"))
+            ck = ttk.Checkbutton(grid, variable=self.use_vars[code], command=self._recompute)
+            ck.grid(row=r, column=c + 2, sticky="w", pady=1)
+            self.spins[code], self.checks[code] = sp, ck
+        self.lbl_sum = ttk.Label(self, wraplength=900, justify="left", font=("", 10, "bold"), padding=(14, 6, 14, 2))
+        self.lbl_sum.pack(anchor="w")
+        self.lbl_note = ttk.Label(self, wraplength=900, justify="left", foreground="#d98c1f", padding=(14, 0, 14, 2))
+        self.lbl_note.pack(anchor="w")
+        btn = ttk.Frame(self)
+        btn.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+        self.lbl_result = ttk.Label(self, wraplength=900, justify="left", foreground="gray", padding=(14, 2, 14, 4))
+        self.lbl_result.pack(side="bottom", anchor="w")
+        ttk.Button(btn, text="Close", command=self.destroy).pack(side="right")
+        self.btn_apply = ttk.Button(btn, text="Write into the game files", style="Accent.TButton", command=self._apply)
+        self.btn_apply.pack(side="right", padx=(0, 8))
+        ttk.Button(btn, text="Put the draft classes back...", command=self._restore).pack(side="left")
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, padx=14, pady=(4, 4))
+        cols = ("rating", "pos", "players", "now", "after", "changed", "limit")
+        self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="none", height=10)
+        for c, (text, width) in zip(cols, (("Rating", 140), ("Position", 80), ("Players", 70), ("Average now", 100), ("Average after", 100), ("Values changed", 110), ("At 0 or 99", 80))):
+            self.tree.heading(c, text=text)
+            self.tree.column(c, width=width, anchor="w" if c in ("rating", "pos") else "e", stretch=(c == "rating"))
+        ys = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=ys.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        ys.pack(side="right", fill="y")
+        self._mode_changed()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    # ---- what the choices make
+    def _class(self):
+        label = self.class_var.get()
+        return next(((t, c) for l, t, c in self.choices if l == label), (None, None))
+
+    def _mode_changed(self):
+        adding = self.mode_var.get() == "add"
+        for code in self.spins:
+            self.spins[code].configure(state="normal" if adding else "disabled")
+            self.checks[code].configure(state="disabled" if adding else "normal")
+        self._recompute()
+
+    def _reference(self):
+        kind = self._ref_texts.get(self.ref_var.get(), "library")
+        if kind not in self._refs:
+            rows = self.veterans if kind == "veterans" else DC.library_rows(self.rows)
+            self._refs[kind] = DC.reference_from_rows(rows)
+        return self._refs[kind]
+
+    def _deltas(self, dfcl, table):
+        """{rating: change} for the ratings the window asks to change (a whole number for every position, or {position: number} when the change moves each position to an average)."""
+        if self.mode_var.get() == "add":
+            out = {}
+            for code, var in self.delta_vars.items():
+                try:
+                    d = max(-DC.MAX_DELTA, min(DC.MAX_DELTA, int(str(var.get()).strip() or "0")))
+                except ValueError:
+                    d = 0
+                if d:
+                    out[code] = d
+            return out
+        use = [code for code, var in self.use_vars.items() if var.get()]
+        return DC.suggest_deltas(self.rows[table], dfcl, self._reference(), use) if use else {}
+
+    def _recompute(self):
+        self.plan = None
+        self.btn_apply.configure(state="disabled")
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        table, dfcl = self._class()
+        if table is None:
+            return
+        deltas = self._deltas(dfcl, table)
+        if not deltas:
+            self.lbl_sum.configure(text="Nothing is changed yet: choose a number for a rating, or tick the ratings to move to an average.")
+            self.lbl_note.configure(text="")
+            return
+        try:
+            plan = DC.plan(self.rows, dfcl, deltas)
+        except ValueError as e:
+            self.lbl_sum.configure(text=str(e))
+            return
+        for block in plan["ratings"]:
+            for ln in block["lines"]:
+                self.tree.insert("", "end", values=(block["label"], ln["name"], ln["players"], f"{ln['old_mean']:.1f}", f"{ln['new_mean']:.1f}", ln["changed"], ln["clamped"] or ""))
+        copies = len(plan["tables"])
+        clamped = sum(ln["clamped"] for block in plan["ratings"] for ln in block["lines"])
+        self.lbl_note.configure(text=("Some players did not move by the full amount: a value reached 0 or 99, or a maximum was lifted to its rating (column At 0 or 99)." if clamped else "")
+                                + (" Class 1 is the same copy in all four tables: all four are changed." if copies > 1 else ""))
+        if plan["values"] == 0:
+            self.lbl_sum.configure(text="Nothing is changed yet: the choices leave every value as it is.")
+            return
+        self.plan = plan
+        where = f"{copies} copies" if copies > 1 else DC.class_label(table, dfcl)
+        self.lbl_sum.configure(text=f"{plan['players']} players, {plan['values']} values change ({where}).")
+        self.btn_apply.configure(state="normal")
+
+    def _apply(self):
+        app, plan = self.app, self.plan
+        if plan is None:
+            return
+        if app._rpcs3_running():
+            messagebox.showerror("Change a draft class", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
+            return
+        archives = app._personnel_archives()
+        if not archives:
+            return
+        table, dfcl = self._class()
+        edits = DC.all_edits(plan)
+        if not messagebox.askyesno("Change a draft class", f"Change {plan['players']} players of {DC.class_label(table, dfcl)} in the game files?\n\n{plan['values']} values change"
+                                   f"{' in each of ' + str(len(plan['tables'])) + ' copies' if len(plan['tables']) > 1 else ''}. This writes into qkl_boot.ast of your game. The first time, the changed "
+                                   "file entry is saved in Documents\\hc09-game-file-backup, and Put the draft classes back restores it.\n\nOnly careers made after this see the change; a class that "
+                                   "is already in a save stays as it is. Not tried in the game yet.", parent=self):
+            return
+        boot = archives[0]
+
+        def work():
+            return app.draft_class_apply(boot, edits)
+
+        def done(result):
+            n, rows = result
+            self.rows = rows
+            self._refs = {}
+            self.lbl_result.configure(text=f"Done: {n} player row{'s' if n != 1 else ''} written. Make a new career to see the class; Put the draft classes back restores the file.")
+            messagebox.showinfo("Change a draft class", "Done. Only careers made from now on get the changed class.\n\nPut the draft classes back (this window) restores the file as it was.", parent=self)
+            self._recompute()
+
+        self._start_write("Changing the draft classes...", work, done, "Change a draft class")
+
+    def _restore(self):
+        def work(archives):
+            return self.app.draft_class_restore(archives[0])
+
+        def done(result):
+            restored, rows = result
+            self.rows = rows
+            self._refs = {}
+            if restored:
+                self.lbl_result.configure(text="Put back: the file entry is as it was before the first change.")
+                messagebox.showinfo("Put the draft classes back", "Done: the file entry that holds the draft classes is as it was before the first change.", parent=self)
+            else:
+                self.lbl_result.configure(text="Nothing to put back: no backup of this file entry exists.")
+                messagebox.showinfo("Put the draft classes back", "Nothing was put back: the editor has no backup of this file entry (it was never changed by the editor).", parent=self)
+            self._recompute()
+
+        self._put_back("Put the draft classes back", "Put the file entry that holds the draft classes back as it was before the first change the editor made to it?\n\nThat entry also holds the playbooks' "
+                       "own play names, so play names changed with Rename in playbooks in the game files are undone too. Nothing else is touched. The backup is in "
+                       "Documents\\hc09-game-file-backup.", work, done)
+
+
 class RenamePlaybooksDialog(WriteGuard, tk.Toplevel):
     """Rename playbooks: the game's default playbooks (89: 46 offense, 43 defense) listed with their names; give any of them a new name (21 characters), then write the names into the game's own file
     (qkl_boot.ast, table PLAB). The first time, the changed file entry is backed up and Put the names back restores it. The Playbooks tab shows the new names after a refresh."""
@@ -12998,6 +13215,7 @@ class App(tk.Tk):
 
         ttk.Label(top, text="Draft Picks (drpk.csv)").pack(side="left")
         ttk.Button(top, text="Refresh", command=self.refresh_picks).pack(side="left", padx=8)
+        ttk.Button(top, text="Change a draft class...", command=self.on_open_draft_class).pack(side="left", padx=(0, 8))
 
         ttk.Label(top, text="Filter by team:").pack(side="left", padx=(16, 4))
         self.pick_filter_var = tk.StringVar()
@@ -15926,6 +16144,89 @@ class App(tk.Tk):
         res = apply_personnel_targets(self.model, [PN.restore_target_for(entry)], self._personnel_backup_dir(), mode="restore")
         self._forget_playbook_names()
         return any(r.get("restored") for r in res.get("results", [])), self.playbook_rows_for_rename(boot_ast)[0]
+
+    # ---- Change a draft class (DPL1-DPL4 in qkl_boot.ast, see hc09_draftclass.py)
+    def draft_class_rows(self, boot_ast):
+        """A fresh read (nothing cached) of the game's four draft class tables and of where their entry is: ({table: [row dicts]}, {ast, index, start, size}). Bridge only (worker thread)."""
+        tmp = tempfile.mkdtemp(prefix="hc09_dpl_")
+        try:
+            ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", ",".join(DC.TIERS), "--require-fields", DC.EXPORT_FIELDS, "--require-rows", "--out-dir", tmp]
+                                       + self._entry_hint(boot_ast, DC.TIERS[1]))
+            self._entry_hint_keep(boot_ast, DC.TIERS[1], ex)
+            loc = self.model.run_bridge(["entry-locate", "--ast", boot_ast, "--index", str(ex["entryIndex"])])
+            rows = {}
+            for table in DC.TIERS:
+                path = os.path.join(tmp, table.lower() + ".csv")
+                if not os.path.isfile(path):
+                    raise RuntimeError(f"The game files have no draft class table {table}; nothing was changed.")
+                rows[table] = read_csv_dicts(path)
+            return rows, {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"]}
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def draft_class_entry(self, boot_ast):
+        """Where the entry that holds the draft classes is: {ast, index, start, size}. Found through one of its tables (a quick read; the four tables take longer). Bridge only (worker thread)."""
+        tmp = tempfile.mkdtemp(prefix="hc09_dpl_entry_")
+        try:
+            ex = self.model.run_bridge(["shipped-table-export", "--ast", boot_ast, "--tables", DC.TIERS[1], "--require-fields", DC.EXPORT_FIELDS, "--require-rows", "--out-dir", tmp]
+                                       + self._entry_hint(boot_ast, DC.TIERS[1]))
+            self._entry_hint_keep(boot_ast, DC.TIERS[1], ex)
+            loc = self.model.run_bridge(["entry-locate", "--ast", boot_ast, "--index", str(ex["entryIndex"])])
+            return {"ast": loc["ast"], "index": loc["index"], "start": loc["start"], "size": loc["size"]}
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _refuse_while_plays_added(self, boot_ast):
+        """Add a play puts relocated copies of some file entries (this one too) into the game files: a change or a put back of the original place would not reach the copy the game uses."""
+        try:
+            state = self.model.run_bridge(["add-play-state", "--ast", boot_ast, "--backup-dir", self._personnel_backup_dir()])
+        except Exception:
+            state = {}
+        if state.get("active") and state.get("plays"):
+            raise RuntimeError("Plays added with Add a play are in the game files, and they keep a copy of the file entry that holds the draft classes. The draft classes cannot be changed or put back "
+                               "until the game files are put back with Put the game files back in the Add a play window (that takes the added plays out too). Nothing was changed.")
+
+    def draft_class_apply(self, boot_ast, edits):
+        """Write the edits of hc09_draftclass.plan() into the game files (bridge entry-patch: every edit is checked against the values that were read, the entry is checked before it is written
+        and backed up the first time). Returns (players' values written, the rows read again). Raises when nothing would change, a row is not what was read, or the game is read from a disc image."""
+        self._refuse_write_to_iso_copy(boot_ast)
+        if not edits:
+            raise RuntimeError("Nothing to change.")
+        self._refuse_while_plays_added(boot_ast)
+        entry = self.draft_class_entry(boot_ast)
+        apply_personnel_targets(self.model, [DC.target_for(entry, edits)], self._personnel_backup_dir())
+        return len(edits), self.draft_class_rows(boot_ast)[0]
+
+    def draft_class_restore(self, boot_ast):
+        """Put the entry that holds the draft classes back as it was before the first change made by any of the editor's game-file tools. Returns (True when a backup was put back, the rows read again)."""
+        self._refuse_write_to_iso_copy(boot_ast)
+        self._refuse_while_plays_added(boot_ast)
+        entry = self.draft_class_entry(boot_ast)
+        res = apply_personnel_targets(self.model, [DC.restore_target_for(entry)], self._personnel_backup_dir(), mode="restore")
+        self._forget_playbook_names()                              # this entry also holds the playbooks' own play names
+        return any(r.get("restored") for r in res.get("results", [])), self.draft_class_rows(boot_ast)[0]
+
+    def on_open_draft_class(self):
+        if DC is None:
+            messagebox.showerror("Change a draft class", "hc09_draftclass.py is missing next to the editor.")
+            return
+        archives = self._personnel_archives()
+        if not archives:
+            return
+        boot = archives[0]
+
+        def work():
+            return self.draft_class_rows(boot)
+
+        def done(result):
+            rows, entry = result
+            self.ui_prefs["boot_ast_path"] = boot
+            save_ui_prefs(self.ui_prefs)
+            pool_ids = {"1009", "1013", "1015"}
+            veterans = [r for r in getattr(self.model, "players", []) if self.model.player_team_id(r) and self.model.player_team_id(r) not in pool_ids]
+            DraftClassDialog(self, boot, rows, veterans)
+
+        self.run_in_thread_with_busy("Reading the game's draft classes...", work, done, error_title="Change a draft class")
 
     def _apply_book_renames(self, renames):
         """After Rename playbooks: the new names in the Playbooks data that is loaded ({(BGID, BOFF): name}), so nothing is reloaded (a reload asks about, or drops, unsaved playbook edits)."""
