@@ -209,6 +209,48 @@ class CheckSaveReportTests(unittest.TestCase):
         self.assertTrue(any("CAREER-TEST: 208 tables; PBPL=0 custom plays, SETL=0 custom sets." in line for line in lines))
         self.assertIn("Readable career saves checked: 1 of 1.", lines)
 
+    def test_custom_play_batch_command_prints_and_saves_one_line_per_finding(self):
+        # The batch report used to be joined with a literal backslash-n, so the printed text and
+        # custom_play_batch_report.txt came out as one long line.
+        lines = ["RPCS3 save integrity scan: 1 career save(s) found.", "", "TEST: 208 tables.",
+                 "Readable career saves checked: 1 of 1."]
+        written = {}
+
+        class Handle:
+            def __init__(self, path):
+                self.path = path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def write(self, text):
+                written[self.path] = text
+
+        real_open = open
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            if str(path).endswith("custom_play_batch_report.txt") and "w" in mode:
+                return Handle(str(path))
+            return real_open(path, mode, *args, **kwargs)
+
+        with (mock.patch.object(check_save, "custom_play_batch_report", return_value=lines),
+              mock.patch("builtins.open", fake_open),
+              mock.patch("builtins.print") as printed):
+            code = check_save.main(["check_save.py", "--custom-play-batch"])
+        self.assertEqual(code, 0)
+        (path, text), = written.items()
+        self.assertEqual(text, "\n".join(lines) + "\n")
+        self.assertNotIn("\\n", text)
+        self.assertEqual(printed.call_args_list[0].args[0], text)
+
+    def test_custom_play_batch_command_exits_nonzero_when_no_save_was_checked(self):
+        with (mock.patch.object(check_save, "custom_play_batch_report", return_value=["No RPCS3 career saves were found."]),
+              mock.patch("builtins.print")):
+            self.assertEqual(check_save.main(["check_save.py", "--custom-play-batch", "--no-file"]), 1)
+
     def test_custom_play_batch_report_handles_no_rpc3_saves(self):
         with (mock.patch.object(check_save.D, "candidate_rpcs3_dirs", return_value=[]),
               mock.patch.object(check_save.D, "savedata_roots", return_value=[]),
