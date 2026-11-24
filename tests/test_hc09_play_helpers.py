@@ -118,6 +118,18 @@ class PlayDataHelperTests(unittest.TestCase):
         self.assertEqual(hc09_plays.mounted_play_id_for_link(custom, 99, 28), 28)
 
 
+    def test_split_custom_book_targets_keeps_only_books_the_career_links_the_play_into(self):
+        career = {1: {100028, 7}, 2: {7}, 3: set()}
+        # book 1 has the play, book 2 and 3 do not, book 4 is not in the career at all
+        self.assertEqual(hc09_plays.split_custom_book_targets([1, 2, 3, 4], career, 100028), ([1], [2, 3, 4]))
+        self.assertEqual(hc09_plays.split_custom_book_targets([2, 1], career, 7), ([2, 1], []))
+        self.assertEqual(hc09_plays.split_custom_book_targets([], career, 7), ([], []))
+
+    def test_split_custom_book_targets_skips_nothing_when_the_career_links_are_not_known(self):
+        self.assertEqual(hc09_plays.split_custom_book_targets([1, 5], None, 100028), ([1, 5], []))
+        # a career whose PGPL holds no custom links at all is known, not unknown: everything is skipped
+        self.assertEqual(hc09_plays.split_custom_book_targets([1, 5], {}, 100028), ([], [1, 5]))
+
     def test_original_play_id_for_mounted_returns_profile_id_for_custom_play(self):
         custom = {
             100028: {"setl": 66, "plyl": 28, "name": "HB DIRECT"},

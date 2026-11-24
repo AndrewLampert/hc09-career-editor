@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, mounted_play_id_for_link, original_play_id_for_mounted, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, mounted_play_id_for_link, original_play_id_for_mounted, split_custom_book_targets, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -6754,7 +6754,7 @@ class PlayDesignerDialog(tk.Toplevel):
     game's assignments (including the option reads the in-game editor does not offer), and make a custom play of it in copies of your profile and career saves.
     Nothing is written to the game's files or to your saves here."""
 
-    def __init__(self, app, lib, custom_books=None, custom_book_plays=None, profile_path="", custom_book_names=None):
+    def __init__(self, app, lib, custom_books=None, custom_book_plays=None, profile_path="", custom_book_names=None, career_book_plays=None):
         super().__init__(app)
         p = getattr(app, "_ui_palette", None)
         if p:
@@ -6781,6 +6781,7 @@ class PlayDesignerDialog(tk.Toplevel):
         self.custom_books = dict(custom_books or {})  # {profile PBGI 1-10: name}
         self.custom_book_plays = {int(k): set(v) for k, v in (custom_book_plays or {}).items()}  # {PBGI: mounted PLYL ids linked in profile or career}
         self.custom_book_names = {(int(b), int(p)): str(n) for (b, p), n in (custom_book_names or {}).items()}  # {(PBGI, original PLYL): career PPPN name override}
+        self.career_book_plays = None if career_book_plays is None else {int(k): set(v) for k, v in career_book_plays.items()}      # {PBGI: mounted PLYL ids the OPEN CAREER links}; None = not known
         self.overrides = {}       # poso -> (PSAL, ARTL, PLRR)
         self.books = self._read_books()
 
@@ -9414,14 +9415,18 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                 custom_name = d.custom_books.get(b, f"Custom playbook {b}")
                 career_plyl = original_play_id_for_mounted(lib.custom, self.plyl)
                 shown = self._custom_current_names.get((b, career_plyl), lib.plays[self.plyl]["name"])
-                self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)")
+                held = d.career_book_plays is None or self.plyl in d.career_book_plays.get(b, set())
+                self.lst.insert("end", f"My custom: {custom_name}   -   called \"{shown}\" (save)" + ("" if held else "   [in your profile only, not in the open career]"))
         for i, entry in enumerate(self._entries):
             if entry in keep:
                 self.lst.selection_set(i)
         if self._custom_books:
+            profile_only = split_custom_book_targets(self._custom_books, d.career_book_plays, self.plyl)[1]
             self.lbl_result.configure(
                 text="Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
                      "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The custom-book name behavior still needs an in-game check."
+                     + (" A book marked \"in your profile only\" has this play in your profile but not in the open career (a career copies a custom book's plays when it is made), so it cannot be renamed here."
+                        if profile_only else "")
             )
         elif available - set(self._books):
             self.lbl_result.configure(
@@ -9443,6 +9448,13 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         picked_stock = [b for kind, b in picked if kind == "stock"]
         picked_custom = [b for kind, b in picked if kind == "custom"]
         custom_targets = list(self._custom_books) if everywhere else picked_custom
+        # A name is written to the open career's PPPN and used there only for plays the career's own links put in the book: books that have the play only in the PROFILE are left out, and said so.
+        custom_targets, not_in_career = split_custom_book_targets(custom_targets, d.career_book_plays, self.plyl)
+        skipped_note = ""
+        if not_in_career:
+            skipped_names = ", ".join('"' + d.custom_books.get(b, "Custom playbook %d" % b) + '"' for b in not_in_career)
+            skipped_note = ("Not renamed in %s: the play is in %s in your profile, but the open career does not have it there (a career copies a custom book's plays when it is made), "
+                            "so a name for it would not be used in this career." % (skipped_names, "that book" if len(not_in_career) == 1 else "those books"))
         if app._rpcs3_running():
             messagebox.showerror("Rename in playbooks", "RPCS3, Xenia or HC09 for PC is running. Close it first, then try again.", parent=self)
             return
@@ -9461,7 +9473,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         # One of the person's own plays ("Plays I made") is in no shipped playbook: "Everywhere" for it means its custom books only (a shipped-book rename of it can only fail).
         stock_wanted = bool(everywhere or picked_stock) and self.plyl not in getattr(d.lib, "custom", {})
         if not stock_wanted and not custom_targets:
-            messagebox.showinfo("Rename in playbooks", "This play is in none of the playbooks that can be renamed here (a custom play is renamed in the custom playbooks of the open career).", parent=self)
+            messagebox.showinfo("Rename in playbooks", skipped_note or "This play is in none of the playbooks that can be renamed here (a custom play is renamed in the custom playbooks of the open career).", parent=self)
             return
         archives = None
         if stock_wanted:
@@ -9478,6 +9490,8 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
             details.append("Custom-book names are written only to the career save's PPPN table. A .bak backup is made for that save. This feature still needs an in-game check.")
+        if skipped_note:
+            details.append(skipped_note)
         if not messagebox.askyesno(
             "Rename in playbooks",
             f"Rename {d.lib.plays[self.plyl]['name']} to {name} {where}?\n\n" + "\n\n".join(details),
@@ -9528,6 +9542,8 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
                     lines.append(f"Shipped books without a name row: {len(missing)}.")
             elif result["stock_error"]:
                 lines.append(f"Shipped books: NOT changed ({result['stock_error']}).")
+            if skipped_note:
+                lines.append(skipped_note)
             for label, path, bokl, changed, created, error in result["custom"]:
                 if error:
                     lines.append(f"Custom book {bokl} ({label}): NOT changed ({error}).")
@@ -15496,6 +15512,7 @@ class App(tk.Tk):
             lib._ui_art = self.load_play_art(boot)
             profile = self.default_save_targets().get("profile") or ""
             custom_books, custom_book_plays, custom_book_names = {}, {}, {}
+            career_book_plays = None             # {book: mounted play ids} of the OPEN CAREER's own links; None = the career's links were not read
             if profile and os.path.isfile(profile):
                 try:
                     custom_books = self.profile_custom_books(profile)
@@ -15509,6 +15526,7 @@ class App(tk.Tk):
                     if career and os.path.isfile(career):
                         try:
                             career_pgpl = self._export_tables(career, ["PGPL"])["PGPL"][1]
+                            career_book_plays = {}
                         except Exception:
                             pass
                         try:
@@ -15524,6 +15542,13 @@ class App(tk.Tk):
                         if 1 <= bokl <= 10:
                             mounted = mounted_play_id_for_link(lib.custom, setl, plyl)
                             custom_book_plays.setdefault(bokl, set()).add(mounted)
+                    for row in career_pgpl:          # the same links, from the career alone: only those can carry a name in this career
+                        try:
+                            bokl, setl, plyl = int(row["BOKL"]), int(row["SETL"]), int(row["PLYL"])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if 1 <= bokl <= 10:
+                            career_book_plays.setdefault(bokl, set()).add(mounted_play_id_for_link(lib.custom, setl, plyl))
                     for row in career_pppn:
                         try:
                             key = (int(row["BOKL"]), int(row["PLYL"]))
@@ -15535,13 +15560,14 @@ class App(tk.Tk):
                 except Exception:
                     # Keep the stock Play Creator usable if custom-save data cannot be read.
                     custom_books, custom_book_plays, custom_book_names = {}, {}, {}
-            return lib, profile, custom_books, custom_book_plays, custom_book_names
+                    career_book_plays = None
+            return lib, profile, custom_books, custom_book_plays, custom_book_names, career_book_plays
 
         def done(result):
-            lib, profile, custom_books, custom_book_plays, custom_book_names = result
+            lib, profile, custom_books, custom_book_plays, custom_book_names, career_book_plays = result
             self.ui_prefs["boot_ast_path"] = boot
             save_ui_prefs(self.ui_prefs)
-            PlayDesignerDialog(self, lib, custom_books, custom_book_plays, profile, custom_book_names)
+            PlayDesignerDialog(self, lib, custom_books, custom_book_plays, profile, custom_book_names, career_book_plays=career_book_plays)
 
         self.run_in_thread_with_busy("Reading the game's plays...", work, done, error_title="Play creator")
 
