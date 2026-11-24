@@ -40,7 +40,7 @@ import tkinter as tk
 from tkinter import font as tkfont, ttk, filedialog, messagebox, simpledialog
 
 try:
-    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, mounted_play_id_for_link, original_play_id_for_mounted, split_custom_book_targets, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
+    from hc09_plays import (PlayLibrary, build_custom_play, update_custom_play, CUSTOM_TABLES, CUSTOM_OFFSETS, DEFINITION_TABLES, missing_definitions, missing_cpu_rows, rename_rows, clean_play_name, custom_book_name_rows, career_parent_books, custom_book_names_from_pppn, mounted_play_id_for_link, original_play_id_for_mounted, split_custom_book_targets, sync_play_definition, career_link_rows, decode_art, step_text, steps_in_words, step_meanings, read_csv, ALIGN_X, ALIGN_Y)
 except ImportError:                  # the play designer needs hc09_plays.py next to this file; the rest of the editor does not
     PlayLibrary = None
 
@@ -5355,25 +5355,17 @@ def rename_plays_in_save(model, db_path, renames, expect=None, backup=True):
 
 
 def custom_book_play_names_from_save(model, db_path):
-    """Read career PPPN overrides: {(BOKL, PLYL): name}, using PPNN (or legacy PPPM)."""
+    """The names the career's PPPN gives plays in its custom playbooks: {(custom playbook 1-10, play id): name}, using PPNN (or legacy PPPM). A PPPN row is keyed by the shipped playbook a custom
+    one is based on (PLAB.PBPR), so the career's PLAB is read too."""
     if not db_path or "-PROFILE-" in str(db_path).upper():
         return {}
     tmp = tempfile.mkdtemp(prefix="hc09_custom_book_names_read_")
     try:
-        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PPPN"])
-        path = os.path.join(tmp, "pppn.csv")
-        if not os.path.isfile(path):
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PPPN,PLAB"])
+        path, plab_path = os.path.join(tmp, "pppn.csv"), os.path.join(tmp, "plab.csv")
+        if not os.path.isfile(path) or not os.path.isfile(plab_path):
             return {}
-        out = {}
-        for row in read_csv_dicts(path):
-            try:
-                book, play = int(row["BOKL"]), int(row["PLYL"])
-                value = str(row.get("PPNN", row.get("PPPM", ""))).strip()
-            except (KeyError, TypeError, ValueError):
-                continue
-            if 1 <= book <= 10 and value:
-                out[(book, play)] = value
-        return out
+        return custom_book_names_from_pppn(read_csv_dicts(path), read_csv_dicts(plab_path))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -5381,6 +5373,8 @@ def custom_book_play_names_from_save(model, db_path):
 def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=True):
     """Write a custom-book-only play name to the career's PPPN table.
 
+    book_id is the custom playbook (1 to 10) as the career's PGPL links name it; the row is written under the shipped playbook it is based on (PLAB.PBPR of the career's own PLAB row),
+    the id the game's playbook viewer looks the name up with (seen in the game 2026-11-24). A career that has no PLAB row for the book does not play it: nothing is written.
     The profile holds custom playbook definitions and links, not PPPN. The
     career's PPPN schema may have additional fields beyond BOKL, PLYL and PPPM;
     preserve them when updating and initialize them to zero/blank on append.
@@ -5388,13 +5382,17 @@ def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=
     """
     tmp = tempfile.mkdtemp(prefix="hc09_custom_book_name_")
     try:
-        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PPPN,PGPL"])
+        model.run_bridge(["export", "--db", db_path, "--out", tmp, "--tables", "PPPN,PGPL,PLAB"])
         pppn_path = os.path.join(tmp, "pppn.csv")
         pgpl_path = os.path.join(tmp, "pgpl.csv")
+        plab_path = os.path.join(tmp, "plab.csv")
         if not os.path.isfile(pppn_path):
             raise RuntimeError("This career save has no PPPN table; custom-book play names cannot be written here.")
         if not os.path.isfile(pgpl_path):
             raise RuntimeError("This career save has no PGPL playbook links; the custom-book play cannot be verified.")
+        parent_id = career_parent_books(read_csv_dicts(plab_path) if os.path.isfile(plab_path) else []).get(int(book_id))
+        if parent_id is None:
+            raise RuntimeError("This career does not have custom playbook %d (it was made with another playbook), so a play name for it would never be shown here; no name was written." % int(book_id))
         with open(pppn_path, newline="", encoding="utf-8-sig") as f:
             headers = next(csv.reader(f))
         required = {"BOKL", "PLYL"}
@@ -5403,7 +5401,7 @@ def rename_custom_book_play_in_save(model, db_path, book_id, plyl, name, backup=
             raise RuntimeError("The career's PPPN table is missing a required BOKL, PLYL or name field (PPNN/PPPM); no name was written.")
         rows, changed, created = custom_book_name_rows(
             read_csv_dicts(pppn_path), read_csv_dicts(pgpl_path), book_id, plyl, name,
-            pppn_fields=headers
+            pppn_fields=headers, parent_id=parent_id
         )
         if not changed:
             return False, False
@@ -9424,7 +9422,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             profile_only = split_custom_book_targets(self._custom_books, d.career_book_plays, self.plyl)[1]
             self.lbl_result.configure(
                 text="Custom books are listed separately from shipped books. Their play names are written to the career save's PPPN table, not to the profile or qkl_boot.ast. "
-                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. Not confirmed in the game: two in-game checks did not show a custom-book name in the career playbook viewer."
+                     "A .bak copy is kept for the career save before it is changed; the Put the game files back button below does not restore save changes. The name is stored under the shipped playbook the custom one is based on, so other custom playbooks of this career based on the same one show it too. Seen in the game for a play you made; a shipped play that its base playbook already names itself may keep that name (not yet checked)."
                      + (" A book marked \"in your profile only\" has this play in your profile but not in the open career (a career copies a custom book's plays when it is made), so it cannot be renamed here."
                         if profile_only else "")
             )
@@ -9489,7 +9487,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
         if stock_wanted:
             details.append("Shipped-book names are written to qkl_boot.ast; the first change is backed up in Documents\\hc09-game-file-backup.")
         if custom_targets:
-            details.append("Custom-book names are written only to the career save's PPPN table. A .bak backup is made for that save. Not confirmed in the game: two in-game checks did not show the name in the career playbook viewer.")
+            details.append("Custom-book names are written only to the career save's PPPN table, under the shipped playbook each custom playbook is based on (other custom playbooks based on the same one show the name too). A .bak backup is made for that save. Seen in the game for a play you made; a shipped play that its base playbook already names itself may keep that name (not yet checked).")
         if skipped_note:
             details.append(skipped_note)
         if not messagebox.askyesno(
@@ -9570,7 +9568,7 @@ class RenameInBooksDialog(WriteGuard, tk.Toplevel):
             if wrote and not failed:
                 text = "Done. " + text
             if custom_targets:
-                text += "\n\nThe custom-book name is saved in the career, but it is not confirmed in the game: two in-game checks did not show it in the career playbook viewer."
+                text += "\n\nThe custom-book name is saved in the career under the shipped playbook the custom one is based on. Seen in the game for a play you made; a shipped play that the base playbook already names itself may keep that name."
             elif stock is not None:
                 text += "\n\nStart the game and look at the play-call screen; Put the game files back restores the names."
             self.lbl_result.configure(text=text)
@@ -15522,7 +15520,7 @@ class App(tk.Tk):
                     # agree about which custom books contain a play.
                     profile_pgpl = self._export_tables(profile, ["PGPL"])["PGPL"][1]
                     career = self.model.db_path or ""
-                    career_pgpl, career_pppn = [], []
+                    career_pgpl = []
                     if career and os.path.isfile(career):
                         try:
                             career_pgpl = self._export_tables(career, ["PGPL"])["PGPL"][1]
@@ -15530,7 +15528,8 @@ class App(tk.Tk):
                         except Exception:
                             pass
                         try:
-                            career_pppn = self._export_tables(career, ["PPPN"])["PPPN"][1]
+                            exported = self._export_tables(career, ["PPPN", "PLAB"])           # a name is keyed by the shipped playbook a custom one is based on (PLAB.PBPR)
+                            custom_book_names = custom_book_names_from_pppn(exported["PPPN"][1], exported["PLAB"][1])
                         except Exception:
                             pass
                     linked_rows = list(profile_pgpl) + list(career_pgpl)
@@ -15549,14 +15548,6 @@ class App(tk.Tk):
                             continue
                         if 1 <= bokl <= 10:
                             career_book_plays.setdefault(bokl, set()).add(mounted_play_id_for_link(lib.custom, setl, plyl))
-                    for row in career_pppn:
-                        try:
-                            key = (int(row["BOKL"]), int(row["PLYL"]))
-                            value = str(row.get("PPNN", row.get("PPPM", ""))).strip()
-                        except (KeyError, TypeError, ValueError):
-                            continue
-                        if 1 <= key[0] <= 10 and value:
-                            custom_book_names[key] = value
                 except Exception:
                     # Keep the stock Play Creator usable if custom-save data cannot be read.
                     custom_books, custom_book_plays, custom_book_names = {}, {}, {}
