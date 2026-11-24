@@ -898,6 +898,17 @@ def custom_book_names_from_pppn(pppn_rows, plab_rows):
     return out
 
 
+def custom_book_rename_targets(books, career_book_plays, play_id, own_play):
+    """(usable, not_in_career, shipped): of the custom playbooks a play's name was asked for, the ones a name can be written for, the ones the open career does not have the play in
+    (split_custom_book_targets), and, for a SHIPPED play, all of them: in the game (career playbook viewer, 2026-11-24) a name written for a shipped play in a custom playbook did not show,
+    neither for a play the base playbook names itself nor for one it does not, while a play the person made did show it. own_play: the play is one the person made ("Plays I made")."""
+    books = [int(b) for b in books]
+    if not own_play:
+        return [], [], books
+    usable, not_in_career = split_custom_book_targets(books, career_book_plays, play_id)
+    return usable, not_in_career, []
+
+
 def custom_book_name_rows(pppn_rows, pgpl_rows, book_id, play_id, name, pppn_fields=None, *, parent_id):
     """Set the PPPN name of one play for a custom playbook of the career.
 
