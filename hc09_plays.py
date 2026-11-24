@@ -898,10 +898,18 @@ def custom_book_names_from_pppn(pppn_rows, plab_rows):
     return out
 
 
+SHIPPED_PLAY_MAX = 7459            # the highest play id of the game itself (hc09_addplay.STOCK_MAX_PLYL: a play added to the game files gets an id above it; the person's own plays are mounted far above, CUSTOM_OFFSETS)
+
+
+def is_shipped_play(play_id):
+    """True for a play of the game itself (a stock id, 7459 or below). False for a play the person made (mounted custom id) and for one added to the game files (an id above the stock maximum)."""
+    return int(play_id) <= SHIPPED_PLAY_MAX
+
+
 def custom_book_rename_targets(books, career_book_plays, play_id, own_play):
     """(usable, not_in_career, shipped): of the custom playbooks a play's name was asked for, the ones a name can be written for, the ones the open career does not have the play in
     (split_custom_book_targets), and, for a SHIPPED play, all of them: in the game (career playbook viewer, 2026-11-24) a name written for a shipped play in a custom playbook did not show,
-    neither for a play the base playbook names itself nor for one it does not, while a play the person made did show it. own_play: the play is one the person made ("Plays I made")."""
+    neither for a play the base playbook names itself nor for one it does not, while a play the person made did show it (a play added to the game files was not tried). own_play: the play is not a shipped one (is_shipped_play): one the person made ("Plays I made") or one added to the game files."""
     books = [int(b) for b in books]
     if not own_play:
         return [], [], books

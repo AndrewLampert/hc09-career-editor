@@ -205,6 +205,13 @@ class PlayDataHelperTests(unittest.TestCase):
         self.assertEqual(hc09_plays.custom_book_rename_targets([3, 7], career, 10, own_play=True), ([3], [7], []))
         self.assertEqual(hc09_plays.custom_book_rename_targets([3, 7], None, 10, own_play=True), ([3, 7], [], []))
 
+    def test_shipped_plays_are_the_stock_ids_only(self):
+        import hc09_addplay
+        self.assertEqual(hc09_plays.SHIPPED_PLAY_MAX, hc09_addplay.STOCK_MAX_PLYL)
+        self.assertTrue(hc09_plays.is_shipped_play(1) and hc09_plays.is_shipped_play(7459))
+        self.assertFalse(hc09_plays.is_shipped_play(7460))                                  # a play added to the game files
+        self.assertFalse(hc09_plays.is_shipped_play(hc09_plays.CUSTOM_OFFSETS["PLYL"] + 1))   # a play the person made, mounted far above
+
 
 if __name__ == "__main__":
     unittest.main()
