@@ -172,6 +172,8 @@ Notes from the data: the tight end list in the community config is in a differen
 | 108 | `BNPP` | Bench Skip Practice | 2 | 0 Prefers to bench; 1 Prefers to start; 2 Balanced |
 | 109 | `IPSP` | Injury Playing Status | 1 | 0 Aggressive; 1 Moderate; 2 Conservative |
 
+**About the first row of the table above (`GmCP`) - seen in the game (rig run 2026-11-24, a saved career with edited values):** the in-game "GM Hire Control" row always shows the POSITION COACH value (`PCCP`), while the saved file keeps `GmCP` exactly as written (checked by saving after a load). An edited `GmCP` therefore cannot be seen on that screen; `PCCP` and `TRCP` show as written (3 = "Give up no control", 0 = "Give up a lot of control").
+
 The config has no name for 11 fields the editor already edits (`PLJM`, `SKTD`, `SKTM`, `SKNG`, `SKNM`, `TSIE`, `TSIM`, `TSRH`, `TSRM`, `TSFR`, `TSFM`); those come from the editor's own in-game testing.
 
 ## Value lists
