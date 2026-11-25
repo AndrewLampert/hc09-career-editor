@@ -296,6 +296,8 @@ Unnamed: `PSAX`, `PSMx`, `PLJM`, `PPEX`, `PRSx`
 ### PLAY - Contract Info
 `PFNA` Player First Name, `PLNA` Player Last Name, `TGID` Team ID, `PCON` Contract Years, `PCYL` Contract Yrs Left, `PTSA` Total Salary, `PSBO` Signing Bonus, `PCSA` Current Salary Total, `PSA0` Salary Year 1, `PSB0` Sign Bonus Year 1, `PSA1` Salary Year 2, `PSB1` Sign Bonus Year 2, `PSA2` Salary Year 3, `PSB2` Sign Bonus Year 3, `PSA3` Salary Year 4, `PSB3` Sign Bonus Year 4, `PSA4` Salary Year 5, `PSB4` Sign Bonus Year 5, `PSA5` Salary Year 6, `PSB5` Sign Bonus Year 6, `PSA6` Salary Year 7, `PSB6` Sign Bonus Year 7, `PVCO` V Contract Years, `PVTS` V Total Salary, `PVSB` V Signing Bonus, `PGID` Player ID, `PROL` Player Role ID, `PIMP` Importance, `PIMX` Importance Max, `PFHO` Holdout, `PMOR` Morale, `PMOX` Morale Max, `PCMT` Comment, `PYWT` Years with Team, `HDAp` Overall Approval.
 
+**`PSBO` is what the game shows as BON** on the Evaluate Roster screen (seen in the game 2026-11-24: a bonus written only to `PVSB` left BON at $0; with `PSBO` set too it showed the amount). `PSBO` equals the sum of the yearly bonuses `PSB0`-`PSB6` for every player of a fresh career and about 96% of players in older careers read, while `PVSB` equals that sum only in a fresh career. The contract windows write both (`contract_totals`); `PSBO` is 13 bits wide (at most 8191).
+
 ### PLAY - Player Health
 `PFNA` Player First Name, `PLNA` Player Last Name, `PGID` Player ID, `TGID` Team ID, `PHDC` Head Health, `PHDX` Head Health Max, `PLAC` Left Arm Health, `PLAX` Left Arm Health Max, `PRAC` Right Arm Health, `PRAX` Right Arm Health Max, `PTRC` Torso Health, `PTRX` Torso Health Max, `PLLC` Left Leg Health, `PRLc` Right Leg Health, `PRLx` Right Leg Health Max.
 
