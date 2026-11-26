@@ -3,11 +3,11 @@ Draft classes of the game files: plan a change of ratings for every player of on
 
 The game keeps a library of draft classes in the tables DPL1 to DPL4 of qkl_boot.ast (entry 46 in the PS3 game; the editor takes the entry from the archive, never a fixed number): 16 classes
 per table (5,600 players each, one row per player, 217 columns). DFCL is the class number, PGID the player (unique inside a table), PPOS the position. Class 1 is an identical copy in all four tables.
-Which class a career holds changes over time: its DCIC row names it (DFCL, strength tier DCSI, place in the tier DCYR) and the code moves a career on to a later class of a chosen tier.
+Which class a career holds changes over time: its DCIC row names it (DFCL, strength tier DCSI, place in the tier DCYR) and a career is moved on to the next class id of its tier when the regular season starts (seen in the game for the first step: class 1 -> class 2).
 Read from saves on 2026-11-24: the Bills and Raiders careers hold class 19 (DPL2), DOLPHINS2 class 3, QQETBROWNS class 5, MAINSALCAP class 48; a new career made in the in-game test (Falcons,
-starting point off-season) held class 1 (tier 1, place 0), and an edit of class 1 reached its 350 players exactly (seen in the game). Which class a new career starts with in general, and the
-classes after the first, were not worked out or tried. A class that is already inside a save does not change: only careers made afterwards see an edit, and about 50 players of a class are moved
-to the free-agent pool when the game loads it.
+starting point off-season) held class 1 (tier 1, place 0), and an edit of class 1 reached its 350 players exactly (seen in the game); the class loaded at the start of that career's regular season (class 2) showed an edit too (seen in the
+game). Which class a new career starts with in general was not worked out, and classes 3 and later were not run. A class that is already inside a save does not change; a class a career has not loaded yet (a new career's first class, an existing
+career's next one) is read from the game files when it is loaded and shows an edit. About 50 players of a class are moved to the free-agent pool when the game loads it.
 
 This module only plans: it reads the exported rows (dicts of text, as the bridge writes them), works out new values and returns bridge entry-patch edits. Standard library only (no Tk).
 A rating is edited together with its maximum (PSPD with PSDX): both move by the same amount, stay inside 0 to 99, and the maximum never falls below the rating.
