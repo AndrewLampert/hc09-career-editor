@@ -478,6 +478,17 @@ PLAYER_BONUS_MAX_VALUE = 8191
 PLAYER_PCSA_MAX_VALUE = 16383
 PLAYER_PTSA_MAX_VALUE = 65535
 PLAYER_PVSB_MAX_VALUE = 16383
+PLAYER_PSBO_MAX_VALUE = 8191          # PSBO is a 13-bit field, narrower than PVSB
+
+
+def contract_totals(salaries, bonuses, current_year):
+    """The contract fields the game keeps beside the yearly PSA/PSB values, from the 7 salaries and 7 bonuses and the index of the current year: PCSA the current year's salary plus bonus, PTSA the
+    whole contract, PVSB and PSBO the total of the bonuses (each clamped to its field's width). PSBO is the one the game's Evaluate Roster screen shows as BON (seen in the game 2026-11-24); it is the
+    sum of PSB0 to PSB6 for every player of a fresh career and for about 96% in older careers read, while PVSB equals that sum only in a fresh career."""
+    cur = max(0, min(len(salaries) - 1, current_year))
+    bonus = sum(bonuses)
+    return {"PCSA": min(salaries[cur] + bonuses[cur], PLAYER_PCSA_MAX_VALUE), "PTSA": min(sum(salaries) + bonus, PLAYER_PTSA_MAX_VALUE),
+            "PVSB": min(bonus, PLAYER_PVSB_MAX_VALUE), "PSBO": min(bonus, PLAYER_PSBO_MAX_VALUE)}
 
 
 def fold_bonuses_into_salary(row, headers):
@@ -485,9 +496,8 @@ def fold_bonuses_into_salary(row, headers):
     (PSAn) and zero the bonus, so every year's cap hit stays exactly the same
     while the guaranteed money (the part that turns into a cap penalty when a
     player is cut or traded) goes away. PCSA/PTSA are sums of salary+bonus per
-    year, so they're unchanged by this; PVSB and PSBO (identical in every
-    player in a real save checked, and the signing-bonus total the sign dialog
-    already derives from the PSB sum) are rewritten to match what's left.
+    year, so they're unchanged by this; PVSB and PSBO (the signing-bonus total,
+    see contract_totals) are rewritten to match what's left.
 
     Salary is a narrower field than salary+bonus can reach (at least one real
     player already has a combined year over the limit), so if a year's total
@@ -515,9 +525,9 @@ def fold_bonuses_into_salary(row, headers):
             overflowed = True
     if has_bonus_cols:
         remaining = sum(safe_int(row.get(c, "")) or 0 for c in PLAYER_BONUS_COLS if c in headers)
-        for col in ("PVSB", "PSBO"):
+        for col, limit in (("PVSB", PLAYER_PVSB_MAX_VALUE), ("PSBO", PLAYER_PSBO_MAX_VALUE)):
             if col in headers:
-                new_val = str(min(remaining, PLAYER_PVSB_MAX_VALUE))
+                new_val = str(min(remaining, limit))
                 if row.get(col, "") != new_val:
                     row[col] = new_val
                     changed = True
@@ -3073,8 +3083,8 @@ class SignFreeAgentDialog(tk.Toplevel):
             # so the current-year index is 0, which is exactly what this
             # dialog just wrote to PSA0/PSB0 - i.e. year 1's entered
             # salary/bonus.
-            total_salary = sum(int(row.get(c, "0") or "0") for c in PLAYER_CONTRACT_COLS)
-            total_bonus = sum(int(row.get(c, "0") or "0") for c in PLAYER_BONUS_COLS)
+            signed_salaries = [int(row.get(c, "0") or "0") for c in PLAYER_CONTRACT_COLS]
+            signed_bonuses = [int(row.get(c, "0") or "0") for c in PLAYER_BONUS_COLS]
             year1_cap_hit = salaries[0] + bonuses[0]
 
             team_moved = self.model.set_player_team_id(row, dest_tid)
@@ -3087,12 +3097,11 @@ class SignFreeAgentDialog(tk.Toplevel):
             for col in ("PCON", "PCYL"):
                 if col in have_cols:
                     row[col] = str(years)
-            # PCSA/PTSA/PVSB are sums of already-validated per-year values, but
+            # PCSA/PTSA/PVSB/PSBO are sums of already-validated per-year values, but
             # their own fields are narrower than what those sums can reach -
-            # clamp to each field's real max instead of letting it silently
-            # overflow/wrap on write (see PLAYER_PCSA_MAX_VALUE etc. above).
-            for col, value in (("PCSA", min(year1_cap_hit, PLAYER_PCSA_MAX_VALUE)), ("PTSA", min(total_salary + total_bonus, PLAYER_PTSA_MAX_VALUE)),
-                               ("PVSB", min(total_bonus, PLAYER_PVSB_MAX_VALUE)), ("PPTI", src_tid)):
+            # contract_totals clamps each to its field's real max instead of letting
+            # it silently overflow/wrap on write. A new contract's current year is 0.
+            for col, value in (*contract_totals(signed_salaries, signed_bonuses, 0).items(), ("PPTI", src_tid)):
                 if col in have_cols:                       # a column this save does not have is not written (the save would refuse the row)
                     row[col] = str(value)
             total_cap_hit += year1_cap_hit
@@ -3361,13 +3370,12 @@ class PlayerContractDialog(tk.Toplevel):
             old_cap = safe_int(row.get("PCSA", ""))
             for col, v in new.items():
                 row[col] = str(v)
-            # PCSA is the CURRENT year's salary + bonus (year PCON - PCYL), PTSA the whole contract, PVSB the bonus total: the derived fields the Sign dialog keeps in step
+            # PCSA is the CURRENT year's salary + bonus (year PCON - PCYL), PTSA the whole contract, PVSB and PSBO the bonus total: the derived fields the Sign dialog keeps in step
             salaries = [safe_int(row.get(c, "")) or 0 for c in PLAYER_CONTRACT_COLS]
             bonuses = [safe_int(row.get(c, "")) or 0 for c in PLAYER_BONUS_COLS]
             pcon, pcyl = safe_int(row.get("PCON", "")), safe_int(row.get("PCYL", ""))
-            cur = max(0, min(len(salaries) - 1, pcon - pcyl)) if pcon is not None and pcyl is not None else 0
-            derived = (("PCSA", min(salaries[cur] + bonuses[cur], PLAYER_PCSA_MAX_VALUE)), ("PTSA", min(sum(salaries) + sum(bonuses), PLAYER_PTSA_MAX_VALUE)), ("PVSB", min(sum(bonuses), PLAYER_PVSB_MAX_VALUE)))
-            for col, value in derived:
+            cur = pcon - pcyl if pcon is not None and pcyl is not None else 0
+            for col, value in contract_totals(salaries, bonuses, cur).items():
                 if col in headers:
                     row[col] = str(value)
             cap_note = ""
